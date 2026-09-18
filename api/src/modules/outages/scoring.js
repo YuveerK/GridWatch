@@ -34,7 +34,7 @@ export function scoreCandidate(post, outage) {
     const coef = sharedLocalities.length / Math.min(post.localityIds.size, outage.localityIds.size);
     // Same suburb but demonstrably different infrastructure is weak evidence of the same fault.
     const conflicting = post.nodeIds.size && outage.nodeIds.size && !sharedNodes.length && !intersect(post.relatedNodeIds, outage.nodeIds).length;
-    score += 0.4 * coef * (conflicting ? 0.7 : 1);
+    score += 0.4 * coef * (conflicting ? 0.4 : 1);
     reasons.push(`locality overlap ${(coef * 100).toFixed(0)}%`);
   }
   if (score === 0) return { score: 0, reasons: ['no shared thread/node/locality'] };
