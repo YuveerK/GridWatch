@@ -77,6 +77,12 @@ router.get('/v1/localities', wrap(async (req, res) => {
   res.json({ data: rows.map((l) => ({ id: l.id, name: l.canonicalName, region: l.Region?.code ?? null })) });
 }));
 
+router.get('/v1/localities/:id', wrap(async (req, res) => {
+  const l = await prisma.locality.findUnique({ where: { id: req.params.id }, include: { Region: true, nodes: { include: { node: true }, orderBy: { evidenceCount: 'desc' }, take: 20 } } });
+  if (!l) return res.status(404).json({ error: 'not_found' });
+  res.json({ id: l.id, name: l.canonicalName, region: l.Region?.code ?? null, learned: l.sourceLabel === 'learned-from-posts', infrastructure: l.nodes.map((n) => ({ ...n.node, evidenceCount: n.evidenceCount })) });
+}));
+
 router.get('/v1/localities/:id/outages', wrap(async (req, res) => {
   const outages = await prisma.outage.findMany({
     where: { localities: { some: { localityId: req.params.id } } },
@@ -126,4 +132,23 @@ router.get('/admin/review-queue', wrap(async (_req, res) => {
     select: { id: true, externalId: true, text: true, publishedAt: true, processingStatus: true, linkDecision: true, extractions: { select: { status: true, error: true } } },
   });
   res.json({ data: posts });
+}));
+
+router.get('/v1/stats', wrap(async (_req, res) => {
+  const [byStatus, sdcs, nodes, localities, posts, latest] = await Promise.all([
+    prisma.outage.groupBy({ by: ['status'], _count: true }),
+    prisma.outage.groupBy({ by: ['sdcName'], where: { status: { in: ['ACTIVE', 'PARTIALLY_RESTORED', 'PLANNED'] } }, _count: true }),
+    prisma.infraNode.count(),
+    prisma.locality.count(),
+    prisma.sourcePost.count(),
+    prisma.sourcePost.aggregate({ _max: { publishedAt: true } }),
+  ]);
+  res.json({
+    outagesByStatus: Object.fromEntries(byStatus.map((s) => [s.status, s._count])),
+    activeBySdc: sdcs.filter((s) => s.sdcName).map((s) => ({ sdc: s.sdcName, count: s._count })),
+    infrastructureNodes: nodes,
+    localities,
+    posts,
+    lastPostAt: latest._max.publishedAt,
+  });
 }));

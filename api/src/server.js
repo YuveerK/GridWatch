@@ -23,4 +23,4 @@ async function tick() {
   }
 }
 
-cron.schedule(`*/${Math.max(1, env.X_POLL_INTERVAL_MINUTES)} * * * *`, tick);
+if (process.env.SCHEDULER !== 'off') cron.schedule(`*/${Math.max(1, env.X_POLL_INTERVAL_MINUTES)} * * * *`, tick);

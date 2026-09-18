@@ -159,11 +159,13 @@ export async function learnFromExtraction(extraction, at) {
   }
 
   const children = new Set();
+  const hasParent = new Set();
   for (const { node, entity } of resolved.values()) {
     const parent = entity.parent_name ? resolved.get(infraKey(entity.parent_name)) : null;
     if (parent) {
       await bumpEdge(parent.node.id, node.id, at);
       children.add(parent.node.id);
+      hasParent.add(node.id);
     } else if (sdcNode) {
       await bumpEdge(sdcNode.id, node.id, at);
     }
@@ -191,5 +193,7 @@ export async function learnFromExtraction(extraction, at) {
     if (l.state === 'RESTORED') restoredLocalityIds.push(loc.id);
     for (const leaf of leaves) await bumpNodeLocality(leaf.id, loc.id, at);
   }
-  return { sdcNode, nodes, localityIds, restoredLocalityIds, unmatched };
+  // Independent branches: a normal substation → distributor chain is 1; a multi-fault digest image is 3+.
+  const rootCount = nodes.filter((n) => !hasParent.has(n.id)).length;
+  return { sdcNode, nodes, rootCount, localityIds, restoredLocalityIds, unmatched };
 }

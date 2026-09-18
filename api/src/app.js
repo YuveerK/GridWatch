@@ -6,6 +6,12 @@ import { router } from './modules/api/routes.js';
 export function createApp() {
   const app = express();
   app.use(pinoHttp({ logger }));
+  app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN ?? '*');
+    res.setHeader('Access-Control-Allow-Headers', 'content-type');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
   app.use(express.json());
   app.use(router);
   app.use((_req, res) => res.status(404).json({ error: 'not_found' }));

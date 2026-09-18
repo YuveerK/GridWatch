@@ -77,6 +77,7 @@ export async function resetLearnedState() {
     prisma.infraEdge.deleteMany(),
     prisma.nodeAlias.deleteMany(),
     prisma.infraNode.deleteMany(),
+    prisma.locality.deleteMany({ where: { sourceLabel: 'learned-from-posts' } }),
     prisma.sourcePost.updateMany({ data: { processingStatus: 'UNPROCESSED' } }),
   ]);
 }

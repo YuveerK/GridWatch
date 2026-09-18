@@ -7,6 +7,8 @@ import { scoreCandidate } from './scoring.js';
 const LINKABLE = new Set(['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE']);
 const HOUR = 3_600_000;
 const DIGEST_NODES = 5;
+const DIGEST_ROOTS = 3;
+const isDigest = (facts) => facts.nodes.length >= DIGEST_NODES || facts.rootCount >= DIGEST_ROOTS;
 
 const PLANNED_TEXT = /planned (maintenance|power interruption|interruption|outage)|scheduled (maintenance|interruption|outage)/i;
 
@@ -96,10 +98,17 @@ function statusFor(extraction, current) {
   return current === 'RESTORED' || current === 'PARTIALLY_RESTORED' ? current : 'ACTIVE';
 }
 
+const GENERIC_NODE = /^(pole[- ]mounted|mini[- ]?substations?|ring main units?|transformers?|cables?|lines?|feederboard.*|central|standby.*)$/i;
+const STREETY = /\b(street|st|road|rd|avenue|ave|drive|dr|lane|between|to)\b|^\d/i;
+const short = (s) => (s.length > 32 ? `${s.slice(0, 30).trim()}…` : s);
+
 function titleFor(facts, extraction) {
-  const primary = facts.nodes.at(-1);
-  const areas = extraction.result.localities.slice(0, 3).map((l) => l.name).join(', ');
-  return [primary?.name ?? facts.sdcNode?.name ?? 'Unknown location', areas && `(${areas})`].filter(Boolean).join(' ');
+  const specific = [...facts.nodes].reverse().find((n) => !GENERIC_NODE.test(n.name));
+  const areas = extraction.result.localities.filter((l) => !STREETY.test(l.name)).slice(0, 2).map((l) => short(l.name));
+  const useAreas = areas.length && (!specific || facts.nodes.length >= 5);
+  const head = useAreas ? areas.join(', ') : specific?.name;
+  const tail = !useAreas && specific && areas.length ? ` (${areas.join(', ')})` : '';
+  return `${head ?? facts.sdcNode?.name ?? 'Unknown location'}${tail}`;
 }
 
 async function applyPost({ post, extraction, facts, outageId, score, reasons, isNew, retroactive }) {
@@ -122,7 +131,7 @@ async function applyPost({ post, extraction, facts, outageId, score, reasons, is
           restorationPercent: r.restoration_percent,
           primaryNodeId: facts.nodes.at(-1)?.id ?? null,
           retroactive: Boolean(retroactive),
-          digest: facts.nodes.length >= DIGEST_NODES,
+          digest: isDigest(facts),
           startedAt: post.postedAt,
           lastUpdateAt: post.postedAt,
           restoredAt: status === 'RESTORED' ? post.postedAt : null,
@@ -144,7 +153,7 @@ async function applyPost({ post, extraction, facts, outageId, score, reasons, is
       });
     }
     // A digest post (many nodes) must not smear its nodes across an existing single-fault outage.
-    for (const n of isNew || facts.nodes.length < DIGEST_NODES ? facts.nodes : []) {
+    for (const n of isNew || !isDigest(facts) ? facts.nodes : []) {
       await tx.outageNode.upsert({ where: { outageId_nodeId: { outageId: id, nodeId: n.id } }, create: { outageId: id, nodeId: n.id }, update: {} });
     }
     for (const localityId of facts.localityIds) {
