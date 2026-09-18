@@ -6,6 +6,17 @@ import { scoreCandidate } from './scoring.js';
 
 const LINKABLE = new Set(['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE']);
 const HOUR = 3_600_000;
+const DIGEST_NODES = 5;
+
+const PLANNED_TEXT = /planned (maintenance|power interruption|interruption|outage)|scheduled (maintenance|interruption|outage)/i;
+
+/** Planned work also shows up as "restored" posts, so relevance alone is not enough. */
+export function isPlanned(extraction, text) {
+  const r = extraction.result;
+  if (extraction.relevance === 'PLANNED_OUTAGE' || r.status === 'PLANNED') return true;
+  // Only the post's own text counts: image digests mix planned and unplanned items.
+  return extraction.relevance !== 'OUTAGE' && PLANNED_TEXT.test(text ?? '');
+}
 
 const tieBreakSchema = {
   type: 'object',
@@ -16,7 +27,7 @@ const tieBreakSchema = {
 async function loadCandidates(post) {
   const since = new Date(post.postedAt.getTime() - env.OUTAGE_WINDOW_HOURS * HOUR);
   const outages = await prisma.outage.findMany({
-    where: { lastUpdateAt: { gte: since }, status: { notIn: ['CLOSED', 'CANCELLED'] } },
+    where: { lastUpdateAt: { gte: since }, status: { not: 'CLOSED' } },
     include: { nodes: true, localities: true, posts: { include: { post: { select: { conversationId: true, externalId: true } } } } },
   });
   return outages.map((o) => ({
@@ -26,6 +37,7 @@ async function loadCandidates(post) {
     status: o.status,
     sdcName: o.sdcName,
     nodeIds: new Set(o.nodes.map((n) => n.nodeId)),
+    digest: o.digest,
     localityIds: new Set(o.localities.map((l) => l.localityId)),
     conversationIds: new Set(o.posts.flatMap((p) => [p.post.conversationId, p.post.externalId]).filter(Boolean)),
     lastUpdateAt: o.lastUpdateAt,
@@ -94,7 +106,7 @@ async function applyPost({ post, extraction, facts, outageId, score, reasons, is
   const r = extraction.result;
   const current = isNew ? null : (await prisma.outage.findUnique({ where: { id: outageId }, select: { status: true } })).status;
   const status = statusFor(extraction, current);
-  const kind = extraction.relevance === 'PLANNED_OUTAGE' || r.status === 'PLANNED' ? 'PLANNED' : 'UNPLANNED';
+  const kind = post.kind;
 
   return prisma.$transaction(async (tx) => {
     let id = outageId;
@@ -110,6 +122,7 @@ async function applyPost({ post, extraction, facts, outageId, score, reasons, is
           restorationPercent: r.restoration_percent,
           primaryNodeId: facts.nodes.at(-1)?.id ?? null,
           retroactive: Boolean(retroactive),
+          digest: facts.nodes.length >= DIGEST_NODES,
           startedAt: post.postedAt,
           lastUpdateAt: post.postedAt,
           restoredAt: status === 'RESTORED' ? post.postedAt : null,
@@ -130,7 +143,8 @@ async function applyPost({ post, extraction, facts, outageId, score, reasons, is
         },
       });
     }
-    for (const n of facts.nodes) {
+    // A digest post (many nodes) must not smear its nodes across an existing single-fault outage.
+    for (const n of isNew || facts.nodes.length < DIGEST_NODES ? facts.nodes : []) {
       await tx.outageNode.upsert({ where: { outageId_nodeId: { outageId: id, nodeId: n.id } }, create: { outageId: id, nodeId: n.id }, update: {} });
     }
     for (const localityId of facts.localityIds) {
@@ -160,7 +174,7 @@ export async function linkPost({ postRow, extraction, facts }) {
     conversationId: postRow.conversationId,
     relevance: extraction.relevance,
     status: extraction.result.status,
-    kind: extraction.relevance === 'PLANNED_OUTAGE' || extraction.result.status === 'PLANNED' ? 'PLANNED' : 'UNPLANNED',
+    kind: isPlanned(extraction, postRow.noteTweetText || postRow.text) ? 'PLANNED' : 'UNPLANNED',
     sdcName: facts.sdcNode?.name ?? null,
     nodeIds: new Set(facts.nodes.map((n) => n.id)),
     localityIds: new Set(facts.localityIds),

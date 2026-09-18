@@ -16,10 +16,15 @@ export function scoreCandidate(post, outage) {
     score += 0.6;
     reasons.push('same thread');
   }
+  // Planned and unplanned events are never the same outage.
+  if (post.kind !== outage.kind) return { score: 0, reasons: ['planned/unplanned mismatch'] };
+
   const sharedNodes = intersect(post.nodeIds, outage.nodeIds);
   if (sharedNodes.length) {
-    score += 0.5;
-    reasons.push(`shared node x${sharedNodes.length}`);
+    // A post naming one node should not glue itself to a sprawling multi-node outage.
+    const jaccard = sharedNodes.length / new Set([...post.nodeIds, ...outage.nodeIds]).size;
+    score += 0.5 * (0.4 + 0.6 * jaccard);
+    reasons.push(`shared node x${sharedNodes.length} (jaccard ${jaccard.toFixed(2)})`);
   } else if (intersect(post.relatedNodeIds, outage.nodeIds).length) {
     score += 0.3;
     reasons.push('adjacent node in graph');
@@ -27,13 +32,21 @@ export function scoreCandidate(post, outage) {
   const sharedLocalities = intersect(post.localityIds, outage.localityIds);
   if (sharedLocalities.length) {
     const coef = sharedLocalities.length / Math.min(post.localityIds.size, outage.localityIds.size);
-    score += 0.4 * coef;
+    // Same suburb but demonstrably different infrastructure is weak evidence of the same fault.
+    const conflicting = post.nodeIds.size && outage.nodeIds.size && !sharedNodes.length && !intersect(post.relatedNodeIds, outage.nodeIds).length;
+    score += 0.4 * coef * (conflicting ? 0.7 : 1);
     reasons.push(`locality overlap ${(coef * 100).toFixed(0)}%`);
   }
   if (score === 0) return { score: 0, reasons: ['no shared thread/node/locality'] };
 
+  // Multi-node digest outages (5+ nodes) must not absorb unrelated single-fault posts.
+  if (outage.digest && !reasons.includes('same thread')) {
+    reasons.push('digest outage');
+    score = Math.min(score, 0.3);
+  }
+
   if (post.sdcName && outage.sdcName && squash(post.sdcName) === squash(outage.sdcName)) score += 0.05;
-  else if (post.sdcName && outage.sdcName) {
+  else if (post.sdcName && outage.sdcName && !sharedNodes.length) {
     score -= 0.3;
     reasons.push('different SDC');
   }
@@ -41,9 +54,9 @@ export function scoreCandidate(post, outage) {
   const ageH = Math.max(0, (post.postedAt - outage.lastUpdateAt) / HOUR);
   score += 0.1 * Math.exp(-ageH / 24);
 
-  if (post.kind !== outage.kind) {
-    score -= 0.4;
-    reasons.push('planned/unplanned mismatch');
+  if (outage.status === 'CANCELLED' && post.status !== 'CANCELLED') {
+    score -= 0.5;
+    reasons.push('outage was cancelled');
   }
   if (outage.status === 'RESTORED') {
     const sinceRestore = (post.postedAt - (outage.restoredAt ?? outage.lastUpdateAt)) / HOUR;

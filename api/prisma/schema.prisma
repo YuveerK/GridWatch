@@ -331,6 +331,7 @@ model Outage {
   restorationPercent Int?
   primaryNodeId      String?
   retroactive        Boolean      @default(false)
+  digest             Boolean      @default(false)
   startedAt          DateTime
   lastUpdateAt       DateTime
   restoredAt         DateTime?

@@ -82,7 +82,10 @@ async function learnLocality(name) {
 }
 
 /** Find or create a node; bumps evidence and promotes to CONFIRMED. */
+const JUNK_NAME = /^(affected|unknown|customers?|areas?|surrounding( areas)?|n\/a|none|the|a|an|feeder|line|cable|mini[- ]?substation|substation|distributor)$/i;
+
 export async function resolveNode({ type, name, at }) {
+  if (!name || JUNK_NAME.test(name.trim())) return null;
   const key = type === 'SDC' ? infraKey(name).replace(/\s+/g, '') : infraKey(name);
   if (!key) return null;
   let node = await prisma.infraNode.findUnique({ where: { type_normalizedKey: { type, normalizedKey: key } } });

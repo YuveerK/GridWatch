@@ -1,0 +1,1 @@
+ALTER TABLE "Outage" ADD COLUMN "digest" BOOLEAN NOT NULL DEFAULT false;

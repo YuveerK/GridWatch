@@ -51,9 +51,25 @@ describe('scoreCandidate', () => {
     expect(r.score).toBeGreaterThanOrEqual(0.7);
   });
 
-  it('penalises planned vs unplanned mismatch and different SDC', () => {
-    const r = scoreCandidate(post({ kind: 'PLANNED', sdcName: 'Midrand' }), outage());
-    expect(r.score).toBeLessThan(0.5);
+  it('never links planned with unplanned', () => {
+    expect(scoreCandidate(post({ kind: 'PLANNED' }), outage()).score).toBe(0);
+  });
+
+  it('penalises a different SDC', () => {
+    const r = scoreCandidate(post({ sdcName: 'Midrand' }), outage());
+    expect(r.score).toBeLessThan(scoreCandidate(post(), outage()).score);
+  });
+
+  it('does not glue a single-node post to a sprawling multi-node outage', () => {
+    const big = outage({ nodeIds: new Set(['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8']), localityIds: new Set() });
+    const r = scoreCandidate(post({ localityIds: new Set() }), big);
+    expect(r.score).toBeLessThan(0.7);
+  });
+
+  it('attaches a repeated cancellation to the cancelled outage but not other posts', () => {
+    const cancelled = outage({ status: 'CANCELLED' });
+    expect(scoreCandidate(post({ status: 'CANCELLED', relevance: 'PLANNED_OUTAGE' }), cancelled).score).toBeGreaterThanOrEqual(0.7);
+    expect(scoreCandidate(post(), cancelled).score).toBeLessThan(0.7);
   });
 
   it('uses the thread as a strong signal', () => {
