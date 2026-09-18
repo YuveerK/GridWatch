@@ -1,0 +1,396 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────── Source / ingestion ─────────────
+
+enum SourcePlatform {
+  X
+}
+
+enum SourcePostProcessingStatus {
+  UNPROCESSED
+  PROCESSING
+  RELEVANT
+  IRRELEVANT
+  GENERAL_NOTICE
+  NEEDS_REVIEW
+  PROCESSING_ERROR
+}
+
+enum IngestionRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  RATE_LIMITED
+}
+
+model SourceAccount {
+  id           String         @id
+  platform     SourcePlatform
+  externalId   String         @unique
+  displayName  String
+  active       Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime
+  IngestionRun IngestionRun[]
+}
+
+model SourcePost {
+  id                  String                     @id
+  platform            SourcePlatform             @default(X)
+  sourceAccount       String
+  externalId          String
+  authorId            String?
+  conversationId      String?
+  text                String
+  language            String?
+  publishedAt         DateTime
+  publicMetrics       Json?
+  attachments         Json?
+  rawPayload          Json?
+  processingStatus    SourcePostProcessingStatus @default(UNPROCESSED)
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime
+  processingStartedAt DateTime?
+  noteTweetText       String?
+
+  IngestionRunPost IngestionRunPost[]
+  PostMedia        PostMedia[]
+  extractions      PostExtraction[]
+  outagePost       OutagePost?
+  linkDecision     LinkDecision?
+
+  @@unique([platform, externalId])
+  @@index([processingStatus, publishedAt])
+  @@index([sourceAccount, publishedAt(sort: Desc)])
+}
+
+model PostMedia {
+  id         String     @id
+  postId     String
+  mediaKey   String
+  mediaType  String
+  url        String
+  width      Int?
+  height     Int?
+  durationMs Int?
+  metadata   Json?
+  createdAt  DateTime   @default(now())
+  SourcePost SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, mediaKey])
+  @@index([postId])
+}
+
+model IngestionLease {
+  id        String   @id
+  owner     String
+  expiresAt DateTime
+}
+
+model IngestionRun {
+  id                String             @id
+  sourceAccountId   String
+  status            IngestionRunStatus @default(RUNNING)
+  checkpointBefore  String?
+  checkpointAfter   String?
+  pagesFetched      Int                @default(0)
+  postsFetched      Int                @default(0)
+  postsInserted     Int                @default(0)
+  postsDeduplicated Int                @default(0)
+  errorCategory     String?
+  errorMessage      String?
+  diagnostics       Json?
+  startedAt         DateTime           @default(now())
+  completedAt       DateTime?
+  SourceAccount     SourceAccount      @relation(fields: [sourceAccountId], references: [id])
+  IngestionRunPost  IngestionRunPost[]
+
+  @@index([sourceAccountId, startedAt(sort: Desc)])
+}
+
+model IngestionRunPost {
+  ingestionRunId String
+  postId         String
+  createdAt      DateTime     @default(now())
+  IngestionRun   IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Cascade)
+  SourcePost     SourcePost   @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([ingestionRunId, postId])
+}
+
+// ───────────── Geography (seeded, kept) ─────────────
+
+enum KnowledgeLifecycle {
+  CANDIDATE
+  CONFIRMED
+  DISPUTED
+  REJECTED
+  RETIRED
+}
+
+model Region {
+  id        String     @id
+  code      String     @unique
+  name      String
+  createdAt DateTime   @default(now())
+  Locality  Locality[]
+}
+
+model Locality {
+  id             String           @id
+  canonicalName  String
+  normalizedName String
+  regionId       String?
+  sourceLabel    String?
+  sourceLine     Int?
+  active         Boolean          @default(true)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime
+  Region         Region?          @relation(fields: [regionId], references: [id])
+  LocalityAlias  LocalityAlias[]
+  nodes          NodeLocality[]
+  outages        OutageLocality[]
+
+  @@unique([regionId, normalizedName])
+  @@index([normalizedName])
+}
+
+model LocalityAlias {
+  id              String             @id
+  localityId      String
+  alias           String
+  normalizedAlias String
+  source          String
+  confidence      Float?
+  status          KnowledgeLifecycle @default(CANDIDATE)
+  createdAt       DateTime           @default(now())
+  Locality        Locality           @relation(fields: [localityId], references: [id], onDelete: Cascade)
+
+  @@unique([localityId, normalizedAlias])
+  @@index([normalizedAlias])
+}
+
+// ───────────── Extraction (one Gemini call per post) ─────────────
+
+enum Relevance {
+  OUTAGE
+  PLANNED_OUTAGE
+  RESTORATION
+  UPDATE
+  SDC_SUMMARY
+  GENERAL_NOTICE
+  IRRELEVANT
+}
+
+enum ExtractionStatus {
+  SUCCEEDED
+  FAILED
+  NEEDS_REVIEW
+}
+
+model PostExtraction {
+  id            String           @id @default(cuid())
+  postId        String
+  promptVersion String
+  model         String
+  status        ExtractionStatus
+  relevance     Relevance?
+  result        Json?
+  imageText     String?
+  imageCount    Int              @default(0)
+  inputTokens   Int?
+  outputTokens  Int?
+  durationMs    Int?
+  error         String?
+  createdAt     DateTime         @default(now())
+  post          SourcePost       @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, promptVersion])
+  @@index([status])
+}
+
+// ───────────── Learned infrastructure graph ─────────────
+
+enum InfrastructureType {
+  SDC
+  SUBSTATION
+  FEEDER
+  DISTRIBUTOR
+  TRANSFORMER
+  MINI_SUBSTATION
+  CABLE
+  SWITCHING_STATION
+  KIOSK
+  LINE
+  CIRCUIT
+  OTHER
+}
+
+model InfraNode {
+  id            String             @id @default(cuid())
+  type          InfrastructureType
+  name          String
+  normalizedKey String
+  lifecycle     KnowledgeLifecycle @default(CANDIDATE)
+  evidenceCount Int                @default(1)
+  firstSeenAt   DateTime
+  lastSeenAt    DateTime
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  aliases    NodeAlias[]
+  parents    InfraEdge[]    @relation("EdgeChild")
+  children   InfraEdge[]    @relation("EdgeParent")
+  localities NodeLocality[]
+  outages    OutageNode[]
+  primaryFor Outage[]
+
+  @@unique([type, normalizedKey])
+  @@index([normalizedKey])
+}
+
+model NodeAlias {
+  id            String    @id @default(cuid())
+  nodeId        String
+  alias         String
+  normalizedKey String
+  node          InfraNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@unique([nodeId, normalizedKey])
+  @@index([normalizedKey])
+}
+
+// parent supplies/contains child (SDC → substation → distributor → mini-sub …)
+model InfraEdge {
+  parentId      String
+  childId       String
+  evidenceCount Int       @default(1)
+  lastSeenAt    DateTime
+  parent        InfraNode @relation("EdgeParent", fields: [parentId], references: [id], onDelete: Cascade)
+  child         InfraNode @relation("EdgeChild", fields: [childId], references: [id], onDelete: Cascade)
+
+  @@id([parentId, childId])
+  @@index([childId])
+}
+
+model NodeLocality {
+  nodeId        String
+  localityId    String
+  evidenceCount Int       @default(1)
+  lastSeenAt    DateTime
+  node          InfraNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  locality      Locality  @relation(fields: [localityId], references: [id], onDelete: Cascade)
+
+  @@id([nodeId, localityId])
+  @@index([localityId])
+}
+
+// ───────────── Outages + linking ─────────────
+
+enum OutageStatus {
+  ACTIVE
+  PARTIALLY_RESTORED
+  RESTORED
+  CLOSED
+  PLANNED
+  CANCELLED
+}
+
+enum OutageKind {
+  UNPLANNED
+  PLANNED
+}
+
+enum OutagePostRole {
+  OPENED
+  UPDATE
+  RESTORATION
+}
+
+enum LinkOutcome {
+  LINKED
+  NEW
+  NEEDS_REVIEW
+}
+
+model Outage {
+  id                 String       @id @default(cuid())
+  kind               OutageKind   @default(UNPLANNED)
+  status             OutageStatus @default(ACTIVE)
+  title              String
+  sdcName            String?
+  cause              String?
+  etaText            String?
+  restorationPercent Int?
+  primaryNodeId      String?
+  retroactive        Boolean      @default(false)
+  startedAt          DateTime
+  lastUpdateAt       DateTime
+  restoredAt         DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  primaryNode InfraNode?       @relation(fields: [primaryNodeId], references: [id])
+  nodes       OutageNode[]
+  localities  OutageLocality[]
+  posts       OutagePost[]
+  decisions   LinkDecision[]
+
+  @@index([status, lastUpdateAt(sort: Desc)])
+}
+
+model OutageNode {
+  outageId String
+  nodeId   String
+  outage   Outage    @relation(fields: [outageId], references: [id], onDelete: Cascade)
+  node     InfraNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@id([outageId, nodeId])
+  @@index([nodeId])
+}
+
+model OutageLocality {
+  outageId   String
+  localityId String
+  restored   Boolean  @default(false)
+  outage     Outage   @relation(fields: [outageId], references: [id], onDelete: Cascade)
+  locality   Locality @relation(fields: [localityId], references: [id], onDelete: Cascade)
+
+  @@id([outageId, localityId])
+  @@index([localityId])
+}
+
+model OutagePost {
+  outageId String
+  postId   String         @unique
+  role     OutagePostRole
+  score    Float?
+  reasons  Json?
+  postedAt DateTime
+  outage   Outage         @relation(fields: [outageId], references: [id], onDelete: Cascade)
+  post     SourcePost     @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([outageId, postId])
+  @@index([outageId, postedAt])
+}
+
+model LinkDecision {
+  id         String      @id @default(cuid())
+  postId     String      @unique
+  outcome    LinkOutcome
+  outageId   String?
+  topScore   Float?
+  usedLlm    Boolean     @default(false)
+  reason     String?
+  candidates Json?
+  createdAt  DateTime    @default(now())
+  post       SourcePost  @relation(fields: [postId], references: [id], onDelete: Cascade)
+  outage     Outage?     @relation(fields: [outageId], references: [id], onDelete: SetNull)
+}
