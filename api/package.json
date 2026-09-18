@@ -1,0 +1,39 @@
+{
+  "name": "api",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "vitest run",
+    "smoke": "node tests/integration/api.smoke.js",
+    "prisma:generate": "prisma generate",
+    "prisma:validate": "prisma validate",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "node prisma/seed.js",
+    "import:historical": "node scripts/import-historical-posts.js",
+    "seed:geography": "node scripts/seed-geography.js",
+    "backfill:test:media": "node scripts/backfill-one-media-post.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@google/genai": "^2.23.0",
+    "@prisma/client": "^6.19.0",
+    "dotenv": "^18.0.0",
+    "express": "^5.2.1",
+    "node-cron": "^4.6.0",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
+    "sharp": "^0.35.4",
+    "tesseract.js": "^7.0.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.0",
+    "vitest": "^4.1.1"
+  }
+}

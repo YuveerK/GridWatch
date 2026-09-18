@@ -1,0 +1,696 @@
+Region A Subrubs
+Airdlin,
+
+Barbeque, Barbeque Downs, Barbeque Downs Extensions, Beverley, Beverley Ext.1 & 2, Beverley Extensions, Bloubosrand Extension, Blue Hills, Blue Hills Extension, Bothasfontein 408-Jr Ext.408 , Brendavere, Broadacres, Broadacres Ext.1 & 2, Broadacres Extensions, Broadacres Park Ext.1 & 10, Buccleuch,
+
+Carlswald, Carlswald Estate, Chartwell, Country View, Country View Extensions, Craigavon, Craigavon Ext.1, Crowthorne ,
+
+Dainfern, Dainfern Extensions, Dainfern Ridge, Diepsloot 388-Jr Ext.388, Diepsloot, Diepsloot Wes, Diepsloot Wes Extensions,
+
+Ebony Park, Ebony Park Extensions, Erand, Erand Ext.1 & 2, Erand Gardens Extensions,
+
+Farmall, Farmall Ext.1, Fourways Extensions,
+
+Glen Austin, Glen Austin Ext.1, Glen Nerine, Glenferness, Glenferness Ext.1 & 2, Grand Central Ext.21,
+
+Halfway Gardens Extensions, Halfway House, Halfway House Estate, Halfway House Ext.13 Halfway House Ext.2, Headway Hill,
+
+Inandan, Ivory Park Extensions,
+
+Jukskei View Extensions,
+
+Kaalfontein Extensions, Kengies, Kengies Extensions, Kildrummy, Kleve, Kya Sand, Kya Sand Extensions, Kyalami, Kyalami Extensions, Kyalami, Kyalami Ext.1, Kyalami Estate, Kyalami Estate Extensions, Kyalami Gardens Extensions, Kyalami Heights, Kyalami Hills. Kyalami Hills Extensions, Kyalami Park,
+
+Lanseria Airport, Lone Hill Extensions,
+
+Marise, Maroeladal Extensions, Midridge Park, Midridge Park Extensions, Milgate Farm,
+
+Needwood Needwood Extensions, Nietgedacht, Noordwyk, Noordwyk Extensions, North Champayne Estates,
+
+Palmlands, Paulshof, Paulshof Extensions , Plooysville,
+
+Rabie Ridge, Rabie Ridge Extensions, Randjesfontein, Randjespark Extensions, Riverbend, Riverglen,
+
+Sagewood Extensions, Salfred, Stratford, Summerset, Summerset Extensions, Sunninghill, Sunninghill Extensions, Sunninghill Park, Sunrella,
+
+Tanganani, Treesbank, Trevallyn, Trevallyn Ext.1,
+
+Vorna Valley, Vorna Valley Extensions,
+
+Waterval, Waterval Ext.2 & 4, Willaway, Willaway Extensions, Witkoppen, Witkoppen Extensions.​
+
+
+Region B
+ALBERTSKROON
+ALBERTVILLE
+ALBERTVILLE EXT.1
+ALBERTVILLE EXT.10
+ALBERTVILLE EXT.11
+ALBERTVILLE EXT.12
+ALBERTVILLE EXT.2
+ALBERTVILLE EXT.4
+ALBERTVILLE EXT.5
+ALBERTVILLE EXT.6
+ALBERTVILLE EXT.7
+ALBERTVILLE EXT.8
+ALBERTVILLE EXT.9
+ALDARAPARK
+AUCKLAND PARK
+AUCKLAND PARK EXT.2
+AUCKLAND PARK EXT.3
+BERARIO
+BERGBRON
+BERGBRON EXT.1
+BERGBRON EXT.10
+BERGBRON EXT.11
+BERGBRON EXT.12
+BERGBRON EXT.14
+BERGBRON EXT.2
+BERGBRON EXT.3
+BERGBRON EXT.4
+BERGBRON EXT.6
+BERGBRON EXT.8
+BERGBRON EXT.9
+BEVERLEY GARDENS
+BLACKHEATH
+BLACKHEATH EXT.1
+BLACKHEATH EXT.2
+BLACKHEATH EXT.3
+BLACKHEATH EXT.5
+BLACKHEATH EXT.6
+BLACKHEATH EXT.7
+BLAIRGOWRIE
+BORDEAUX
+BORDEAUX EXT.2
+BOSMONT
+BRIXTON
+BROMHOF EXT.2
+BRYANBRINK
+BRYANSTON EXT.1
+BRYANSTON EXT.18
+BRYANSTON EXT.19
+BRYANSTON EXT.20
+BRYANSTON EXT.25
+BRYANSTON EXT.27
+BRYANSTON EXT.28
+BRYANSTON EXT.29
+BRYANSTON EXT.3
+BRYANSTON EXT.30
+BRYANSTON EXT.31
+BRYANSTON EXT.35
+BRYANSTON EXT.36
+BRYANSTON EXT.37
+BRYANSTON EXT.38
+BRYANSTON EXT.39
+BRYANSTON EXT.40
+BRYANSTON EXT.43
+BRYANSTON EXT.44
+BRYANSTON EXT.45
+BRYANSTON EXT.48
+BRYANSTON EXT.5
+BRYANSTON EXT.50
+BRYANSTON EXT.52
+BRYANSTON EXT.54
+BRYANSTON EXT.58
+BRYANSTON EXT.63
+BRYANSTON EXT.66
+BRYANSTON EXT.69
+BRYANSTON EXT.70
+BRYANSTON EXT.71
+BRYANSTON EXT.72
+BRYANSTON EXT.75
+BRYANSTON EXT.79
+BRYANSTON EXT.8
+BRYANSTON EXT.80
+BRYANSTON EXT.81
+BRYANSTON EXT.83
+BRYANSTON EXT.84
+BRYANSTON EXT.85
+BRYANSTON EXT.89
+BRYANSTON EXT.90
+BRYANSTON EXT.91
+BRYANSTON EXT.92
+BRYANSTON EXT.94
+BRYANSTON EXT.95
+BRYANSTON EXT.98
+BRYANSTON WEST
+BRYANSTON WEST EXT.1
+BRYANSTON WEST EXT.2
+CLAREMONT
+CLYNTON
+CORONATIONVILLE
+COUNTRY-LIFE PARK
+COWDRAY PARK EXT.1
+CRAIGHALL
+CRAIGHALL EXT.2
+CRAIGHALL PARK
+CRAMERVIEW
+CRESTA
+CRESTA EXT.1
+CRESTA EXT.2
+CRESTA EXT.3
+CRESTA EXT.4
+CRESTA EXT.5
+CRESTA EXT.6
+CRESTA EXT.7
+CROESUS
+CROWN
+CROWN EXT.10
+CROWN EXT.11
+CROWN EXT.12
+CROWN EXT.17
+CROWN EXT.18
+CROWN EXT.19
+CROWN EXT.21
+CROWN EXT.22
+CROWN EXT.3
+CROWN EXT.4
+CROWN EXT.5
+CROWN EXT.6
+CROWN EXT.7
+CROWN EXT.8
+CROWN EXT.9
+DANIEL BRINKPARK
+DARRENWOOD
+DARRENWOOD EXT.2
+DARRENWOOD EXT.5
+DARRENWOOD EXT.6
+DARRENWOOD EXT.7
+DARRENWOOD EXT.8
+DARRENWOOD EXT.9
+DELAREY
+DELAREY EXT.1
+DELAREY EXT.2
+DELAREY EXT.3
+DOUGLASDALE EXT.9
+DUNKELD
+DUNKELD WEST
+DUNKELD WEST EXT.1
+DUNKELD WEST EXT.2
+DUNKELD WEST EXT.3
+DUNKELD WEST EXT.4
+DUNKELD WEST EXT.5
+DUNKELD WEST EXT.6
+DUNKELD WEST EXT.7
+DUNKELD WEST EXT.8
+EAST TOWN
+EMMARENTIA
+EMMARENTIA EXT.1
+FAIRLAND
+FERNDALE
+FERNDALE EXT.11
+FERNDALE EXT.13
+FERNDALE EXT.15
+FERNDALE EXT.17
+FERNDALE EXT.19
+FERNDALE EXT.20
+FERNDALE EXT.21
+FERNDALE EXT.24
+FERNDALE EXT.25
+FERNDALE EXT.26
+FERNDALE EXT.28
+FERNDALE EXT.29
+FERNDALE EXT.3
+FERNDALE EXT.32
+FERNDALE EXT.4
+FERNDALE EXT.6
+FERNDALE EXT.8
+FERNDALE EXT.9
+FLORIDA GLEN
+FLORIDA GLEN EXT.1
+FLORIDA GLEN EXT.10
+FLORIDA GLEN EXT.4
+FLORIDA GLEN EXT.5
+FLORIDA GLEN EXT.6
+FLORIDA GLEN EXT.7
+FLORIDA GLEN EXT.8
+FLORIDA GLEN EXT.9
+FONTAINEBLEAU
+FONTAINEBLEAU EXT.1
+FOREST TOWN
+FOREST TOWN EXT.1
+FRANKLIN ROOSEVELT PARK
+FRANKLIN ROOSEVELT PARK EXT.1
+GLENADRIENNE
+GLENIFFER
+GREENSIDE
+GREENSIDE EAST
+GREENSIDE EAST EXT.1
+GREENSIDE EXT
+GREENSIDE EXT.2
+GREENSIDE EXT.4
+GREENSIDE EXT.5
+GREENSIDE EXT.6
+GREENSIDE EXT.7
+GREYMONT
+GREYMONT EXT.1
+HURLINGHAM
+HURLINGHAM EXT.1
+HURLINGHAM EXT.11
+HURLINGHAM EXT.2
+HURLINGHAM EXT.5
+HURLINGHAM EXT.6
+HURLINGHAM EXT.7
+HURLINGHAM EXT.9
+HURLINGHAM GARDENS
+HURST HILL
+HYDE PARK
+HYDE PARK A. SETTLEMENT
+HYDE PARK EXT.1
+HYDE PARK EXT.100
+HYDE PARK EXT.103
+HYDE PARK EXT.106
+HYDE PARK EXT.11
+HYDE PARK EXT.110
+HYDE PARK EXT.112
+HYDE PARK EXT.116
+HYDE PARK EXT.118
+HYDE PARK EXT.12
+HYDE PARK EXT.120
+HYDE PARK EXT.121
+HYDE PARK EXT.122
+HYDE PARK EXT.123
+HYDE PARK EXT.124
+HYDE PARK EXT.125
+HYDE PARK EXT.127
+HYDE PARK EXT.128
+HYDE PARK EXT.129
+HYDE PARK EXT.130
+HYDE PARK EXT.131
+HYDE PARK EXT.133
+HYDE PARK EXT.135
+HYDE PARK EXT.14
+HYDE PARK EXT.15
+HYDE PARK EXT.16
+HYDE PARK EXT.17
+HYDE PARK EXT.18
+HYDE PARK EXT.19
+HYDE PARK EXT.2
+HYDE PARK EXT.21
+HYDE PARK EXT.22
+HYDE PARK EXT.23
+HYDE PARK EXT.24
+HYDE PARK EXT.25
+HYDE PARK EXT.27
+HYDE PARK EXT.28
+HYDE PARK EXT.29
+HYDE PARK EXT.30
+HYDE PARK EXT.31
+HYDE PARK EXT.32
+HYDE PARK EXT.34
+HYDE PARK EXT.36
+HYDE PARK EXT.37
+HYDE PARK EXT.38
+HYDE PARK EXT.39
+HYDE PARK EXT.4
+HYDE PARK EXT.40
+HYDE PARK EXT.42
+HYDE PARK EXT.43
+HYDE PARK EXT.44
+HYDE PARK EXT.45
+HYDE PARK EXT.46
+HYDE PARK EXT.47
+HYDE PARK EXT.48
+HYDE PARK EXT.49
+HYDE PARK EXT.5
+HYDE PARK EXT.51
+HYDE PARK EXT.52
+HYDE PARK EXT.53
+HYDE PARK EXT.55
+HYDE PARK EXT.56
+HYDE PARK EXT.57
+HYDE PARK EXT.58
+HYDE PARK EXT.59
+HYDE PARK EXT.6
+HYDE PARK EXT.62
+HYDE PARK EXT.63
+HYDE PARK EXT.64
+HYDE PARK EXT.65
+HYDE PARK EXT.66
+HYDE PARK EXT.7
+HYDE PARK EXT.72
+HYDE PARK EXT.73
+HYDE PARK EXT.74
+HYDE PARK EXT.77
+HYDE PARK EXT.78
+HYDE PARK EXT.8
+HYDE PARK EXT.80
+HYDE PARK EXT.81
+HYDE PARK EXT.82
+HYDE PARK EXT.83
+HYDE PARK EXT.85
+HYDE PARK EXT.86
+HYDE PARK EXT.87
+HYDE PARK EXT.89
+HYDE PARK EXT.9
+HYDE PARK EXT.90
+HYDE PARK EXT.94
+HYDE PARK EXT.96
+HYDE PARK EXT.97
+HYDE PARK EXT.99
+ILLOVO
+INDUSTRIA
+INDUSTRIA EXT.1
+INDUSTRIA EXT.2
+INDUSTRIA EXT.3
+INDUSTRIA NORTH
+INDUSTRIA NORTH EXT.1
+INDUSTRIA WEST
+JACANLEE
+KELLAND
+KELLAND EXT.1
+KENSINGTON B
+LINDEN
+LINDEN EXT
+LINDEN EXT.3
+LONGDALE
+LONGDALE EXT.2
+LONGDALE EXT.4
+LONGDALE EXT.5
+LONGDALE EXT.6
+LYME PARK
+LYME PARK EXT.2
+LYME PARK EXT.3
+LYME PARK EXT.4
+MALANSHOF
+MALANSHOF EXT.1
+MALANSHOF EXT.16
+MALANSHOF EXT.17
+MALANSHOF EXT.2
+MALANSHOF EXT.21
+MALANSHOF EXT.3
+MALANSHOF EXT.4
+MALANSHOF EXT.5
+MALANSHOF EXT.6
+MALANSHOF EXT.8
+MALANSHOF EXT.9
+MARAISBURG
+MARAISBURG EXT
+MARAISBURG EXT.1
+MARAISBURG EXT.2
+MARAISBURG EXT.3
+MARTINDALE
+MELVILLE
+MELVILLE EXT.1
+MELVILLE EXT.2
+MELVILLE EXT.3
+MILL HILL EXT.2
+MONTCLARE
+MONTCLARE EXT.1
+MONTGOMERY PARK
+MONTGOMERY PARK EXT.3
+MONTROUX
+MORET
+MORET EXT.1
+MORET EXT.2
+MORET EXT.3
+MORET EXT.4
+MORET EXT.5
+MORET EXT.6
+NEW BRIGHTON
+NEWCLARE
+NEWLANDS
+NORTHCLIFF
+NORTHCLIFF EXT.1
+NORTHCLIFF EXT.12
+NORTHCLIFF EXT.13
+NORTHCLIFF EXT.14
+NORTHCLIFF EXT.15
+NORTHCLIFF EXT.16
+NORTHCLIFF EXT.18
+NORTHCLIFF EXT.19
+NORTHCLIFF EXT.2
+NORTHCLIFF EXT.20
+NORTHCLIFF EXT.21
+NORTHCLIFF EXT.25
+NORTHCLIFF EXT.26
+NORTHCLIFF EXT.3
+NORTHCLIFF EXT.30
+NORTHCLIFF EXT.31
+NORTHCLIFF EXT.32
+NORTHCLIFF EXT.33
+NORTHCLIFF EXT.4
+NORTHCLIFF EXT.5
+NORTHCLIFF EXT.6
+NORTHCLIFF EXT.7
+NORTHCLIFF EXT.8
+OERDER PARK
+OSUMMIT
+PARKHURST
+PARKMORE
+PARKTOWN EXT
+PARKTOWN EXT.3
+PARKTOWN NORTH
+PARKVIEW
+PARKVIEW EXT.1
+PARKWOOD
+PARKWOOD EXT.1
+PARKWOOD EXT.3
+PARKWOOD EXT.4
+PENNYVILLE
+PENNYVILLE EXT.1
+PIERNEEF PARK
+PIERNEEF PARK EXT.1
+PINE PARK
+PINE PARK EXT.1
+PINE PARK EXT.2
+PRAEGVILLE
+PRESIDENT RIDGE
+PRESIDENT RIDGE EXT.1
+PRESIDENT RIDGE EXT.6
+PRESIDENT RIDGE EXT.7
+PUTCOTON
+QUELLERINA
+QUELLERINA EXT.1
+RANDPARK
+RANDPARK EXT.2
+RANDPARK EXT.3
+RANDPARK EXT.4
+RANDPARK EXT.5
+RANDPARK EXT.6
+RANDPARKRIF
+RANDPARKRIF EXT.16
+RANDPARKRIF EXT.3
+RANDPARKRIF EXT.41
+RICHMOND
+RICHMOND EXT.1
+RIEPENPARK
+RISIDALE
+RIVERLEA
+RIVERLEA EXT.1
+RIVERLEA EXT.10
+RIVERLEA EXT.11
+RIVERLEA EXT.2
+RIVERLEA EXT.3
+RIVERLEA EXT.5
+RIVERLEA EXT.9
+ROBIN ACRES
+ROBIN HILLS
+ROBINDALE
+ROBINDALE EXT.1
+ROBINDALE EXT.10
+ROBINDALE EXT.2
+ROBINDALE EXT.4
+ROBINDALE EXT.5
+ROBINDALE EXT.9
+ROSEBANK
+ROSSMORE
+RUITERHOF
+RUITERHOF EXT.1
+RUITERHOF EXT.10
+RUITERHOF EXT.11
+RUITERHOF EXT.12
+RUITERHOF EXT.2
+RUITERHOF EXT.3
+RUITERHOF EXT.4
+RUITERHOF EXT.5
+RUITERHOF EXT.6
+RUITERHOF EXT.8
+RUITERHOF EXT.9
+SANDHURST
+SANDHURST EXT.1
+SANDHURST EXT.5
+SANDHURST EXT.6
+SAXONWOLD
+SAXONWOLD EXT.1
+SAXONWOLD EXT.2
+SAXONWOLD EXT.3
+SAXONWOLD EXT.4
+SAXONWOLD EXT.5
+SAXONWOLD EXT.6
+SAXONWOLD EXT.9
+SOLRIDGE
+SOPHIATOWN
+STRIJDOMPARK
+STRIJDOMPARK EXT.10
+STRIJDOMPARK EXT.11
+STRIJDOMPARK EXT.12
+STRIJDOMPARK EXT.13
+STRIJDOMPARK EXT.14
+STRIJDOMPARK EXT.15
+STRIJDOMPARK EXT.16
+STRIJDOMPARK EXT.17
+STRIJDOMPARK EXT.18
+STRIJDOMPARK EXT.19
+STRIJDOMPARK EXT.2
+STRIJDOMPARK EXT.20
+STRIJDOMPARK EXT.21
+STRIJDOMPARK EXT.22
+STRIJDOMPARK EXT.23
+STRIJDOMPARK EXT.25
+STRIJDOMPARK EXT.26
+STRIJDOMPARK EXT.27
+STRIJDOMPARK EXT.28
+STRIJDOMPARK EXT.29
+STRIJDOMPARK EXT.7
+STRIJDOMPARK EXT.9
+UITSAAISENTRUM
+VALERIEDENE
+VANDIA GROVE
+VANDIA GROVE EXT.1
+VANDIA GROVE EXT.2
+VICTORY PARK ESTATE S.H.
+VICTORY PARK EXT.1
+VICTORY PARK EXT.10
+VICTORY PARK EXT.11
+VICTORY PARK EXT.12
+VICTORY PARK EXT.13
+VICTORY PARK EXT.14
+VICTORY PARK EXT.15
+VICTORY PARK EXT.18
+VICTORY PARK EXT.20
+VICTORY PARK EXT.21
+VICTORY PARK EXT.22
+VICTORY PARK EXT.23
+VICTORY PARK EXT.24
+VICTORY PARK EXT.25
+VICTORY PARK EXT.26
+VICTORY PARK EXT.29
+VICTORY PARK EXT.30
+VICTORY PARK EXT.32
+VICTORY PARK EXT.34
+VICTORY PARK EXT.4
+VICTORY PARK EXT.5
+VICTORY PARK EXT.6
+VICTORY PARK EXT.8
+WATERVAL ESTATE
+WATERVAL ESTATE EXT.5
+WEST CLIFF
+WEST CLIFF EXT
+WEST CLIFF EXT.3
+WESTBURY
+WESTBURY EXT.2
+WESTBURY EXT.3
+WESTDENE
+WHITERIDGE
+WHITERIDGE EXT.1
+WHITERIDGE EXT.10
+WHITERIDGE EXT.11
+WHITERIDGE EXT.2
+WHITERIDGE EXT.3
+WHITERIDGE EXT.4
+WHITERIDGE EXT.6
+WHITERIDGE EXT.7
+WHITERIDGE EXT.8
+WHITERIDGE EXT.9
+WIBSEY DIP
+WILLOWILD
+WILLOWILD EXT.1
+WILLOWILD EXT.2
+WINDSOR
+WINDSOR GLEN
+
+Region C
+Aanwins, Allen's Nek, Allen's Nek Extensions, Alsef, Alsef Ext.1, Ambot, Amorosa, Amorosa Extensions, Arena, Ballindean, Batavia, Batavia Ext.1, Bellairspark, Bellairspark Extensions, Bloubosrand Ext.13, Boskruin, Boskruin Extensions, Boundary Park, Boundary Park Extensions, Bram Fischerville, Bram Fischerville Extensions, Breaunanda Ext.2, Bromhof, Bromhof Extensions, Brushwood Haugh, Bush Hill Estate Ext.1, Carenvale, Constantia Kloof, Constantia Kloof Extensions, Cosmo City, Cosmo City Extensions, Creswell Park, Culembeeck, Culembeeck Ext.1, Davidsonville, Davidsonville Ext.1 & 2, Discovery, Discovery Extensions, Dobsonville Ext.8, Doornkop Ext.2 & 3, Douglasdale, Douglasdale Extensions, Fairland, Fairland Extensions, Fleurhof, Floracliffe, Floracliffe Ext.1, Florida, Florida Extensions, Florida Hills, Florida Hills Ext. 2 & 4, Florida Lake, Florida North, Florida North Extensions, Florida Park, Florida Park Extensions, Florida View, Georginia, Glen Dayson, Golden Harvest, Goudrand, Goudrand Ext. 1 & 2, Grobler Park Extensions, Hamberg, Harveston, Haylon Hill, Helderkruin, Helderkruin Extensions, Honey Hill, Honey Park Ext.6, Honeydew, Honeydew Extensions, Honeydew Grove, Honeydew Grove Extensions, Honeydew Manor, Honeydew Manor Extensions, Honeydew Ridge Extensions, Hoogland, Hoogland Extensions, Horison, Horison Ext.1, Horison Park, Horizon View, Horizon View Extensions, Hunters Hill, Johannesburg-North, Jukskei Park, Jukskei Park Ext.1, Jukskei Park Ext.5, Kelly Ridge, Kevin Ridge Ext.3, Kevin Ridge Proper, Kimbult, Kloofendal, Kloofendal Extensions, Kya Sand Extensions, Laser Park, Laser Park Extensions, Lea Glen, Leratong Village, Lindhaven, Lindhaven Extensions, Little Falls Extensions, Manufacta, Manufacta Extensions, Matholesville, Matholesville Ext.2, Meadowhurst, Meadowlands Extensions, Mmesi Park, Mostyn Park, Noordekrans Ext.2, Noordhang, Noordhang Extensions, North Riding, North Riding Estates Ext.1, North Riding Estates Proper, North Riding Extensions, Northcliff Extensions, Northgate, Northgate Extensions, Northwold Ext.11 & 16, Northwold Extensions, Olivedale Extensions, Ontdekkerspark, Ontdekkerspark Ext.1, Paarderand Ext.1, Panorama, Panorama Ext.1, Pennyville, Poortview, Poortview Extensions, Princess, Princess Extensions, Putcoton, Quellerina Ext.4, Radiokop, Radiokop Extensions, Rand Leases Extensions, Randparkrif Extensions, Reefhaven, Robertville, Robertville Extensions, Roodekrans, Roodekrans Extensions, Roodepoort, Roodepoort Ext.2, Roodepoort North, Roodepoort West, Roodepoort West Extensions, Ruimsig, Ruimsig Extensions, Sandpark, Selwyn, Sharonlea, Sharonlea Extensions, Sonnedal, Sonneglans Extensions, Stormill, Stormill Extensions, Strijdompark Ext.1 & 3, Strubens Ridge, Strubensvallei, Strubensvallei Extensions, Sundowner, Sundowner Extensions, Technikon, Thulani, Thulani Ext.1 & 2, Tres Jolie, Tres Jolie Extensions, Tshepisong, Weltevredenpark Extensions, Westgate Park Ext.1 & 2, Wibsey Dip, Wilfordon, Wilfordon Ext.1, Wilgeheuwel, Wilgeheuwel Extensions, Willowbrook Extensions, Wilropark, W​ilropark Extensions, Witpoortjie, Witpoortjie Extensions, Zandspruit, Zandspruit Extensions, Zonnehoewe.
+
+Region D
+Armadale, Chiawelo, Chiawelo Extensions, Comptonville, Devland, Devland Extensions, Dhlamini, Dhlamini Ext.1 & 2, Diepkloof Extensions, Diepkloof Zone 1 – 6, Dobsonville, Dobsonville Extensions, Dobsonville Gardens, Doornkop, Doornkop Ext.1, Dube, Dube Ext.2, Emdeni, Emdeni Ext.1 & 2, Jabavu, Jabavu Central Western, Jabavu Central Western Ext.1, Jabavu Extensions, Jabulani, Klipspruit, Klipspruit Extensions, Klipspruit West, Klipspruit West Ext.1 & 2, Lenaron, Lougherin, Mapetla, Meadowlands, Meredale Extensions, Mofolo Central, Mofolo North, Mofolo South, Mofolo South Ext.1, Molapo, Moletsane, Moroka, Moroka North, Naledi, Naledi Ext.1& .2, Naturena, Naturena Extensions, Noordgesig, Noordgesig Ext.1, Orlando, Orlando East, Orlando East Ext.1, Orlando West, Orlando West Extensions, Phiri, Pimville Zone 1 – 9, Pimville Zone 1 Ext, Power Park, Power Park Ext.2 & 3, Protea City, Protea Glen, Protea Glen Extensions, Protea North, Protea North Extensions, Rivasdale, Senaoane, Slovoville, Slovoville Ext.1, Stesa, Tladi, Zola, Zondi.
+
+Region E
+WARD LOCATION
+32 Linbro Park, Portion of Frankenwald, Greenstone, Buccleuch, Modderfontein X
+2,Founders Hill ,Sebenza X6 , Linbro Park AH ,Linbro Park EXT 1, Greenstone,
+Klipfontein View & Ext, Long Meadow, Waterval, Westlake, Westfiled, Longlake
+72 Dunhill, Fairmount ,Fairmount Ridge EXT 1,2 Fairvale, Fairvale EXT 1, Glenkay,
+Glensan, Linksfield EXTs 1, 2, 3, 4, 5, Linksfield North, Linksfield Ridge EXT 1,
+Sandringham, Silvamonte EXT1,Talbolton, Sunningdale,
+Sunningdale Ext 1,2,3,4,5, 7,8,11,12,Sunningdale
+Percelia, Percelia Estate, Percelia Ext, Sydenham, Glenhazel, and Orange
+Grove North of 14th Street,Viewcrest
+73 Bellevue, Fellside, Houghton Estate, Mountain View, Norwood, Oaklands,
+Orchards, Riviera, Victoria EXT2,The Gardens , Orange Groove, Killarney
+74 Wanderers, Waverley, Bagleyston, Birdhaven, Birnam, Bramley Gardens,
+Cheltondale, Chetondale EXT1, 2, 3, Elton Hill EXTs 1, 2, 3, 4,Gresswold,
+Hawkins Estate, Hawkins Estate EXT1, Highlands North EXT2, 3, 4, 5, 6, 9,
+Highlands North Extension, 1,Kentview,Kew,Maryvale, Melrose, Melrose Estate,
+Melrose Ext 1,2, Melrose North Ext 1,2,3,4,57,8,Orchards From Hamlen to
+African Street(Highroad border), 1,2,Raedene Estate, Raedene Estate Ext
+1,Raumarais Park ,Rouxville, Savoy Estate, Winston Ridge, Ext1,2,The
+Gardens, Abbotsford.
+75 Between 4th Avenue and 8th Avenue and Vincent Tshabalala and Rev. Sam Buti.
+76 Between 8th Avenue and to 22nd Avenue Between Vincent Tshabalala and
+Alfred Nzo ,Alexandra ext.1, Alexandra ext.3, Alexandra ext.4, Alexandra ext.6,
+Alexandra ext.8, Alexandra ext.9, Alexandra ext.10, Alexandra ext.12, Alexandra
+ext.13, Alexandra ext.14, Alexandra ext.15, Alexandra ext.16, Alexandra ext.17,
+Alexandra ext.18, Alexandra ext.19, Alexandra ext.21, Alexandra ext.22,
+Alexandra ext.29, Alexandra ext.36, Alexandra ext.37, Alexandra ext.38
+81 Dowerglen EXTs 7, 10, Bramley Manor, X1, Bramley View Extensions 1,2, 4, 5,
+6, 9, Casey Park, Corlett Gardens X1, 2, 3, Crystal Gardens AH, Crystal
+Gardens X1, Dorelan, Dunsevern X4, Formain, Kew, Kew X1. Lombardy East, 
+WARD LOCATION
+Lombardy West, Lyndhurst, Lyndhurst X1, Rembrandt Park X6, 9, Rembrandt
+Ridge
+91 Athol Ext 13,19,20,21,Athol,Bramely Park,1st Avenue Alexandra, Chislehurston,
+Chislehurston Ext 1,Elton Hill Ext 5,Glen Athol, Glen Athol Ext 1,Illovo,Illovo Ext
+2,Inanda,Inanda Ext 1,Raumarais Park, Sandown, Sandown Ext
+44,54,Strathaven,Simba,Wierda Valley, Wierda Valley Ext 1,Wynberg,Wynberg
+Ext 5,Atholhurst Ext 1,Athol, Balfour Park, Athol Ext 1,3,4,5,6,7,9,11.
+103 Bryanston , Benmore, Dalecross, Moodie Hill, Morningside Parkmore, Riverclub,
+Sandown Ext 24, Sandton CBD, Parts of Strathavon, Duxberry, Litte Fillian,
+Strathaven, Wierda Valley.
+105 N3 highway to the East of Vincent Tshabalala, Jukskei river to the West to
+Buccleuch border at the North.
+106 Bryanston, Bryanston East, Bryanston East Extension , Gallo Manor, Gallo
+Manor Ext 1,4, Khyber Rock ,Khyber Rock Ext5,6,7,Klevehill Park,Klevehall Park
+Ext 2, Petervale Ext 4,5,Rivionia, Rivionia Ext 3,4,6,7,9,13, 16, 17,19,20,21,
+194IQ,Woodlands,Woodlands Ext 1,Woodmead,Woodmead Extension ,Norscot,
+Douglasdale, Parts of Olivedale
+107 Alfred Nzo and Richard Baloyi from 4th avenue to 16th avenue.
+108 From 3rd Avenue to 12th Avenue between Florence Moposho and Joe Nhlanhla,
+Alexandra .1st avenue to 4th avenue between first street and 5th street in Malboro.
+109 Kramerville, Kelvin, Eastgate & Ext, Gallo Manor & Ext, Kelvin View, Marlboro
+Gardens & Ext, Morningside Manor & Ext, Wendywood & Ext, Kelvin View,
+Wynberg Ext 4, Setswetla.
+115 Noordhang, Jukskei Park, Fourways, Johannesburg North, Bloubos Rand
+,Craighaven , Broadacres, Kya Sands informal settlement, Maroeladal 
+WARD LOCATION
+116 From 12th Avenue to 19th avenue(Jukskei River) between Florence Maphosho
+to Richard Baloyi, Sam Buti and Joe Nhlanhla.
+
+Region F
+Aeroton,	Aspen Hills,	​Bassonia,
+​Bellevue East,	​Bellevue,	Benrose,
+Berea,	Bertrams,	​Braamfontein,
+City and Suburban,	​City and Suburban Industrial,	​City Deep,
+City West,	Crown Gardens,	​Denver,
+Doornfontein,	Droste Park,	​Elandspark,
+​Elcedes,	Fairview,	​Ferreirasdorp,
+Fordsburg,	​ Glenanda,	​Glenvista,
+​Heriotdale,	​Highlands,	Hillbrow,
+Jeppestown South,	Jeppestown,	​Johannesburg Inner City,
+Judith's Paarl,	Kenilworth,	​Kensington,
+​Kibler Park,	​La Rochelle,	Liefde-en-Vrede,
+Linmeyer,	​Lorentzville,	​Malvern,
+​Marshalls Town,	​Marshalls,	​Meredale,
+​Moffatview,	Mondeor,	Mulbarton,
+Nasrec,	New Doornfontein,	​Newtown,
+​North Doornfontein,	​Oakdene,	​Ormonde,
+​Pageview,	​Randview,	​Regentspark,
+​Robertsham,	​Rosettenville,	​Salisbury Claims,
+​Selby,	​South Hills,	​Spes Bona,
+​Suideroord,	​The Hill,	​Troyeville,
+​Tulisapark,	​Turffontein,	​Village Main Ext 3,
+​Vrededorp,	​Winchester Hills,	​Yeoville.
+
+Region G
+Althea, Anchorville, Anchorville​ Ext.3, Drieziek Extensions, Drieziek Proper, Eldorado Estate, Eldorado Park, Eldorado Park Extensions, Ennerdale, Ennerdale Extensions, Ennerdale South, Finetown, Grasmere, Hiltonia, Hopefield, Kanana Park, Kanana Park Ext.1, Klipriviersoog, Klipriviersoog Estate, Klipriviersoog Ext.1, Lakeside Ext.1 – 5, Lawley Ext 1 & 2, Lawley Estate, Lenasia, Lenasia Extensions, Lenasia South, Lenasia South Extensions, Mid-Ennerdale, Nancefield, Nancefield Ext.1, Oakmere, Orange Farm, Orange Farm Extensions, Poortje, Protea, Protea G​​ardens, Protea Glen Ext. 7 & 8, Protea Industrial Park, Racecourse, Stretford Extensions, Unaville, Vlakfontein, Vlakfontein Ext.1 & 3, Zakariyya Park, Zakariyya Park Extensions.​​​

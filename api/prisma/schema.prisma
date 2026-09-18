@@ -1,0 +1,583 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SourcePlatform {
+  X
+}
+
+enum SourcePostProcessingStatus {
+  UNPROCESSED
+  PROCESSING
+  RELEVANT
+  IRRELEVANT
+  NEEDS_REVIEW
+  PROCESSING_ERROR
+}
+
+enum IngestionRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  RATE_LIMITED
+}
+
+enum ProcessingRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  RETRYABLE
+  NEEDS_REVIEW
+}
+
+enum Relevance {
+  OUTAGE
+  PLANNED_OUTAGE
+  RESTORATION
+  UPDATE
+  GENERAL_NOTICE
+  IRRELEVANT
+}
+
+enum InfrastructureType {
+  SDC
+  SUBSTATION
+  FEEDER
+  DISTRIBUTOR
+  TRANSFORMER
+  MINI_SUBSTATION
+  CABLE
+  SWITCHING_STATION
+  LINE
+  CIRCUIT
+  OTHER
+}
+
+enum KnowledgeLifecycle {
+  CANDIDATE
+  CONFIRMED
+  DISPUTED
+  REJECTED
+  RETIRED
+}
+
+enum RelationshipType {
+  SUPPLIES
+  SERVES
+  CONTAINS
+  BELONGS_TO
+  UPSTREAM_OF
+  DOWNSTREAM_OF
+  CONNECTED_TO
+  LOCATED_IN
+  AFFECTS
+  OTHER
+}
+
+enum EntityMentionType {
+  LOCALITY
+  INFRASTRUCTURE
+  ALIAS
+  RELATIONSHIP
+}
+
+enum ResolutionStatus {
+  UNRESOLVED
+  CANDIDATE
+  RESOLVED
+  REJECTED
+  NEEDS_REVIEW
+}
+
+enum OutageStatus {
+  ACTIVE
+  INVESTIGATING
+  REPAIRING
+  RESTORING
+  RESTORED
+  PARTIALLY_RESTORED
+  PLANNED
+  CANCELLED
+  UNKNOWN
+}
+
+enum ReviewState {
+  NONE
+  NEEDS_REVIEW
+  REVIEWED
+}
+
+model SourceAccount {
+  id           String   @id @default(cuid())
+  platform     SourcePlatform
+  externalId   String   @unique
+  displayName  String
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  ingestionRuns IngestionRun[]
+}
+
+model SourcePost {
+  id                   String                    @id
+  platform             SourcePlatform            @default(X)
+  sourceAccount        String
+  externalId           String
+  authorId              String?
+  conversationId       String?
+  text                 String
+  language             String?
+  publishedAt          DateTime
+  publicMetrics        Json?
+  attachments          Json?
+  rawPayload            Json?
+  processingStatus      SourcePostProcessingStatus @default(UNPROCESSED)
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+  processingStartedAt   DateTime?
+  noteTweetText         String?
+  media                 PostMedia[]
+  processingRuns        PostProcessingRun[]
+  entityMentions       EntityMention[]
+  infrastructureObservations InfrastructureObservation[]
+  unresolvedMentions    UnresolvedEntityMention[]
+  outageEvents          OutageEvent[]
+  ingestionRunPosts     IngestionRunPost[]
+
+  @@unique([platform, externalId])
+  @@index([sourceAccount, publishedAt(sort: Desc)])
+  @@index([processingStatus, publishedAt])
+  @@map("SourcePost")
+}
+
+model IngestionRun {
+  id                 String           @id @default(cuid())
+  sourceAccountId    String
+  status             IngestionRunStatus @default(RUNNING)
+  checkpointBefore   String?
+  checkpointAfter    String?
+  pagesFetched       Int              @default(0)
+  postsFetched       Int              @default(0)
+  postsInserted      Int              @default(0)
+  postsDeduplicated  Int              @default(0)
+  errorCategory      String?
+  errorMessage       String?
+  diagnostics        Json?
+  startedAt          DateTime         @default(now())
+  completedAt        DateTime?
+  sourceAccount      SourceAccount    @relation(fields: [sourceAccountId], references: [id])
+  posts              IngestionRunPost[]
+
+  @@index([sourceAccountId, startedAt(sort: Desc)])
+}
+
+model IngestionRunPost {
+  ingestionRunId String
+  postId         String
+  createdAt      DateTime @default(now())
+  ingestionRun   IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Cascade)
+  post           SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([ingestionRunId, postId])
+}
+
+model PostMedia {
+  id          String   @id @default(cuid())
+  postId      String
+  mediaKey    String
+  mediaType   String
+  url         String
+  width       Int?
+  height      Int?
+  durationMs  Int?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  post        SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  ocrResults  OcrResult[]
+
+  @@unique([postId, mediaKey])
+  @@index([postId])
+}
+
+model OcrResult {
+  id               String   @id @default(cuid())
+  mediaId          String
+  engine            String   @default("tesseract")
+  engineVersion    String?
+  preprocessVariant String
+  text             String?
+  normalizedText   String?
+  confidence       Float?
+  status           ProcessingRunStatus
+  errorMessage     String?
+  diagnostics      Json?
+  processedAt      DateTime @default(now())
+  media            PostMedia @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([mediaId, engine, engineVersion, preprocessVariant])
+  @@index([mediaId, status])
+}
+
+model PostProcessingRun {
+  id              String             @id @default(cuid())
+  postId          String
+  attempt          Int                @default(1)
+  status           ProcessingRunStatus @default(RUNNING)
+  modelName        String?
+  promptVersion    String?
+  schemaVersion    String?
+  errorCategory    String?
+  errorMessage     String?
+  rawModelOutput   Json?
+  diagnostics      Json?
+  startedAt        DateTime           @default(now())
+  completedAt      DateTime?
+  durationMs       Int?
+  post             SourcePost         @relation(fields: [postId], references: [id], onDelete: Cascade)
+  extraction       PostExtraction?
+  entityMentions   EntityMention[]
+  observations     InfrastructureObservation[]
+  outageEvents     OutageEvent[]
+
+  @@unique([postId, attempt])
+  @@index([status, startedAt])
+}
+
+model PostExtraction {
+  id                String          @id @default(cuid())
+  processingRunId   String          @unique
+  relevance         Relevance
+  summary           String?
+  eventType         String?
+  reportedStatus    String?
+  cause             Json?
+  eta               Json?
+  restoration       Json?
+  referenceNumbers  Json?
+  affectedAreas     Json?
+  infrastructure    Json?
+  relationships     Json?
+  aliasObservations Json?
+  recommendedAssociation Json?
+  parsedResult      Json
+  createdAt         DateTime        @default(now())
+  processingRun     PostProcessingRun @relation(fields: [processingRunId], references: [id], onDelete: Cascade)
+  entityMentions    EntityMention[]
+  observations      InfrastructureObservation[]
+}
+
+model Region {
+  id          String     @id @default(cuid())
+  code        String     @unique
+  name        String
+  localities  Locality[]
+  createdAt   DateTime   @default(now())
+}
+
+model Locality {
+  id                 String   @id @default(cuid())
+  canonicalName      String
+  normalizedName     String
+  regionId           String?
+  sourceLabel        String?
+  sourceLine         Int?
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  region             Region?  @relation(fields: [regionId], references: [id])
+  aliases            LocalityAlias[]
+  outageLinks        OutageLocality[]
+  assetLinks         AssetLocalityRelationship[]
+  assetEvidence      AssetLocalityEvidence[]
+
+  @@unique([regionId, normalizedName])
+  @@index([normalizedName])
+}
+
+model LocalityAlias {
+  id              String   @id @default(cuid())
+  localityId      String
+  alias           String
+  normalizedAlias String
+  source          String
+  confidence      Float?
+  status          KnowledgeLifecycle @default(CANDIDATE)
+  createdAt       DateTime @default(now())
+  locality        Locality @relation(fields: [localityId], references: [id], onDelete: Cascade)
+
+  @@unique([localityId, normalizedAlias])
+  @@index([normalizedAlias])
+}
+
+model InfrastructureAsset {
+  id              String             @id @default(cuid())
+  type            InfrastructureType
+  canonicalName   String
+  normalizedName  String
+  lifecycleStatus KnowledgeLifecycle  @default(CANDIDATE)
+  reviewState     ReviewState         @default(NONE)
+  createdFromPostId String?
+  firstObservedAt DateTime?
+  lastObservedAt  DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  aliases         AssetAlias[]
+  observations    InfrastructureObservation[]
+  fromRelationships InfrastructureRelationship[] @relation("RelationshipFrom")
+  toRelationships   InfrastructureRelationship[] @relation("RelationshipTo")
+  localityLinks     AssetLocalityRelationship[]
+  localityEvidence  AssetLocalityEvidence[]
+  outageLinks        OutageAsset[]
+
+  @@unique([type, normalizedName])
+  @@index([normalizedName, lifecycleStatus])
+}
+
+model AssetAlias {
+  id              String             @id @default(cuid())
+  assetId         String
+  alias           String
+  normalizedAlias String
+  source          String
+  confidence      Float?
+  status          KnowledgeLifecycle @default(CANDIDATE)
+  createdAt       DateTime           @default(now())
+  asset           InfrastructureAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, normalizedAlias])
+  @@index([normalizedAlias, status])
+}
+
+model InfrastructureObservation {
+  id              String   @id @default(cuid())
+  postId          String
+  processingRunId String?
+  extractionId    String?
+  assetId         String?
+  observedName    String
+  entityType      InfrastructureType?
+  evidenceSource  String
+  evidenceText    String?
+  confidence      Float?
+  observationType String
+  payload         Json?
+  createdAt       DateTime @default(now())
+  post            SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  processingRun   PostProcessingRun? @relation(fields: [processingRunId], references: [id])
+  extraction      PostExtraction? @relation(fields: [extractionId], references: [id])
+  asset           InfrastructureAsset? @relation(fields: [assetId], references: [id])
+  relationshipEvidence InfrastructureRelationshipEvidence[]
+  localityEvidence AssetLocalityEvidence[]
+
+  @@index([postId, createdAt])
+  @@index([observedName])
+}
+
+model EntityMention {
+  id              String          @id @default(cuid())
+  postId          String
+  processingRunId String?
+  extractionId    String?
+  mentionType     EntityMentionType
+  observedName    String
+  normalizedName  String
+  resolutionStatus ResolutionStatus @default(UNRESOLVED)
+  resolvedAssetId String?
+  resolvedLocalityId String?
+  confidence      Float?
+  evidenceText    String?
+  createdAt       DateTime        @default(now())
+  post            SourcePost      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  processingRun   PostProcessingRun? @relation(fields: [processingRunId], references: [id])
+  extraction      PostExtraction? @relation(fields: [extractionId], references: [id])
+
+  @@index([normalizedName, resolutionStatus])
+}
+
+model UnresolvedEntityMention {
+  id             String          @id @default(cuid())
+  postId         String
+  observedName   String
+  normalizedName String
+  mentionType    EntityMentionType
+  status         ResolutionStatus @default(UNRESOLVED)
+  context        Json?
+  resolvedAt     DateTime?
+  createdAt      DateTime        @default(now())
+  post           SourcePost      @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([normalizedName, status])
+}
+
+model InfrastructureRelationship {
+  id             String             @id @default(cuid())
+  fromAssetId    String
+  relationshipType RelationshipType
+  toAssetId      String
+  status         KnowledgeLifecycle @default(CANDIDATE)
+  confidence     Float              @default(0)
+  evidenceCount  Int                @default(0)
+  firstObservedAt DateTime?
+  lastObservedAt DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  fromAsset      InfrastructureAsset @relation("RelationshipFrom", fields: [fromAssetId], references: [id])
+  toAsset        InfrastructureAsset @relation("RelationshipTo", fields: [toAssetId], references: [id])
+  evidence       InfrastructureRelationshipEvidence[]
+
+  @@unique([fromAssetId, relationshipType, toAssetId])
+  @@index([status, confidence(sort: Desc)])
+  @@index([toAssetId])
+}
+
+model InfrastructureRelationshipEvidence {
+  id             String   @id @default(cuid())
+  relationshipId String
+  observationId  String?
+  postId         String
+  processingRunId String?
+  evidenceText   String?
+  polarity       String   @default("SUPPORTING")
+  confidence     Float?
+  createdAt      DateTime @default(now())
+  relationship   InfrastructureRelationship @relation(fields: [relationshipId], references: [id], onDelete: Cascade)
+  observation    InfrastructureObservation? @relation(fields: [observationId], references: [id])
+
+  @@index([relationshipId, createdAt])
+}
+
+model AssetLocalityRelationship {
+  id             String             @id @default(cuid())
+  assetId        String
+  relationshipType RelationshipType
+  localityId     String
+  status         KnowledgeLifecycle @default(CANDIDATE)
+  confidence     Float              @default(0)
+  evidenceCount  Int                @default(0)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  asset          InfrastructureAsset @relation(fields: [assetId], references: [id])
+  locality       Locality           @relation(fields: [localityId], references: [id])
+  evidence       AssetLocalityEvidence[]
+
+  @@unique([assetId, relationshipType, localityId])
+  @@index([localityId, status])
+}
+
+model AssetLocalityEvidence {
+  id             String   @id @default(cuid())
+  relationshipId String
+  observationId  String?
+  assetId        String
+  localityId     String
+  postId         String
+  evidenceText   String?
+  polarity       String   @default("SUPPORTING")
+  confidence     Float?
+  createdAt      DateTime @default(now())
+  relationship   AssetLocalityRelationship @relation(fields: [relationshipId], references: [id], onDelete: Cascade)
+  observation    InfrastructureObservation? @relation(fields: [observationId], references: [id])
+  asset          InfrastructureAsset @relation(fields: [assetId], references: [id])
+  locality       Locality @relation(fields: [localityId], references: [id])
+
+  @@index([relationshipId, createdAt])
+}
+
+model KnowledgeChangeAudit {
+  id              String   @id @default(cuid())
+  entityType      String
+  entityId        String
+  action          String
+  actor           String   @default("system")
+  ruleVersion     String?
+  beforeState     Json?
+  afterState      Json?
+  sourcePostId    String?
+  observationId   String?
+  createdAt       DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+}
+
+model OutageIncident {
+  id              String       @id @default(cuid())
+  title           String
+  status          OutageStatus @default(UNKNOWN)
+  startedAt       DateTime?
+  reportedAt      DateTime?
+  restoredAt      DateTime?
+  causeText       String?
+  causeConfidence Float?
+  etaText         String?
+  etaAt           DateTime?
+  confidence      Float        @default(0)
+  reviewState     ReviewState  @default(NONE)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  events          OutageEvent[]
+  localities      OutageLocality[]
+  assets          OutageAsset[]
+
+  @@index([status, updatedAt(sort: Desc)])
+}
+
+model OutageEvent {
+  id              String   @id @default(cuid())
+  incidentId      String
+  postId          String
+  processingRunId String?
+  eventAt         DateTime
+  eventType       String
+  status          OutageStatus?
+  summary         String?
+  payload         Json?
+  createdAt       DateTime @default(now())
+  incident        OutageIncident @relation(fields: [incidentId], references: [id])
+  post            SourcePost @relation(fields: [postId], references: [id])
+  processingRun   PostProcessingRun? @relation(fields: [processingRunId], references: [id])
+
+  @@unique([incidentId, postId])
+  @@index([incidentId, eventAt])
+}
+
+model OutageLocality {
+  incidentId String
+  localityId String
+  evidenceType String @default("CURRENTLY_CONFIRMED")
+  confidence Float?
+  incident   OutageIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  locality   Locality @relation(fields: [localityId], references: [id])
+
+  @@id([incidentId, localityId])
+}
+
+model OutageAsset {
+  incidentId String
+  assetId    String
+  evidenceType String @default("CURRENTLY_CONFIRMED")
+  confidence Float?
+  incident   OutageIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  asset      InfrastructureAsset @relation(fields: [assetId], references: [id])
+
+  @@id([incidentId, assetId])
+}
+
+model ProcessingQueueItem {
+  id          String   @id @default(cuid())
+  postId      String
+  kind        String
+  status      String   @default("PENDING")
+  attempts    Int      @default(0)
+  availableAt DateTime @default(now())
+  claimedAt   DateTime?
+  lastError   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, availableAt])
+}
