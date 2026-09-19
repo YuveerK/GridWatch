@@ -54,6 +54,7 @@ export function createCycle({ ingest, process, sweep, counts, now = () => Date.n
           newOutages: Math.max(0, after.outages - before.outages),
           updates: Math.max(0, after.outagePosts - before.outagePosts),
           capped: (proc?.total ?? 0) >= maxPosts,
+          failed: proc?.tally?.ERROR ?? 0, // posts that could not be processed; they are retried on the next fetch
         },
       };
     } catch (err) {

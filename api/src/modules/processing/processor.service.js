@@ -126,7 +126,12 @@ export async function processPending({ limit, onPost, onStart, from, to } = {}) 
   onStart?.(posts.length);
   const tally = {};
   for (const [i, p] of posts.entries()) {
-    const res = await processPost(p.id);
+    let res = await processPost(p.id);
+    if (res.outcome === 'ERROR') {
+      // a one-off hiccup (database busy, network blip) should not lose an update: try once more, otherwise the next fetch picks it up
+      await new Promise((r) => setTimeout(r, 1500));
+      res = await processPost(p.id);
+    }
     onPost?.(res, i + 1, posts.length);
     tally[res.outcome] = (tally[res.outcome] ?? 0) + 1;
     if ((i + 1) % 10 === 0) logger.info({ done: i + 1, total: posts.length, tally }, 'progress');

@@ -43,8 +43,15 @@ describe('refresh cycle', () => {
     await cycle.whenIdle();
     const s = cycle.status();
     expect(s.state).toBe('done');
-    expect(s.result).toMatchObject({ newPosts: 9, processed: 9, newOutages: 2, updates: 7 });
+    expect(s.result).toMatchObject({ newPosts: 9, processed: 9, newOutages: 2, updates: 7, failed: 0 });
     expect(calls).toEqual({ ingest: 1, process: 1, sweep: 1 });
+  });
+
+  it('reports posts that could not be processed so they are not silently lost', async () => {
+    const { cycle } = make({ process: async ({ onPost }) => (onPost({}, 1, 2), { total: 2, tally: { LINKED: 1, ERROR: 1 } }) });
+    cycle.start('manual');
+    await cycle.whenIdle();
+    expect(cycle.status().result).toMatchObject({ processed: 2, failed: 1 });
   });
 
   it('never runs two cycles at once', async () => {

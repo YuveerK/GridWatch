@@ -85,5 +85,6 @@ export function describeResult(r) {
   const bits = [`${r.newPosts} new post${r.newPosts === 1 ? '' : 's'}`];
   if (r.newOutages) bits.push(`${r.newOutages} new outage${r.newOutages === 1 ? '' : 's'}`);
   if (r.updates) bits.push(`${r.updates} update${r.updates === 1 ? '' : 's'}`);
-  return `${bits.join(' · ')}.${r.capped ? ' More are waiting: fetch again.' : ''}`;
+  const failed = r.failed ? ` ${r.failed} could not be read this time and will be retried on the next fetch.` : '';
+  return `${bits.join(' · ')}.${failed}${r.capped ? ' More are waiting: fetch again.' : ''}`;
 }
