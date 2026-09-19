@@ -18,14 +18,14 @@ function friendly(err) {
  * every run spends money at X and at the AI provider. Dependencies are injected so it can be tested without either.
  */
 export function createCycle({ ingest, process, sweep, counts, now = () => Date.now(), cooldownMs = 90_000, maxPosts = 200 }) {
-  let state = { state: 'idle', trigger: null, step: null, startedAt: null, finishedAt: null, progress: null, result: null, error: null };
+  let state = { state: 'idle', trigger: null, step: null, startedAt: null, finishedAt: null, progress: null, found: null, result: null, error: null };
   let lastManualAt = 0;
   let current = Promise.resolve();
 
   const snapshot = () => ({ ...state, cooldownUntil: lastManualAt ? lastManualAt + cooldownMs : null, now: now() });
 
   async function run(trigger) {
-    state = { state: 'running', trigger, step: 'fetching', startedAt: now(), finishedAt: null, progress: null, result: null, error: null };
+    state = { state: 'running', trigger, step: 'fetching', startedAt: now(), finishedAt: null, progress: null, found: null, result: null, error: null };
     try {
       const before = await counts();
       const ing = await ingest();
@@ -33,7 +33,12 @@ export function createCycle({ ingest, process, sweep, counts, now = () => Date.n
       if (ing?.status === 'RATE_LIMITED') throw new Error('X is limiting requests right now. Try again in a few minutes.');
       if (ing?.status === 'FAILED') throw new Error(ing.error || 'Fetching from X failed. Try again shortly.');
       state.step = 'reading';
-      const proc = await process({ limit: maxPosts, onPost: (_res, done, total) => { state.progress = { done, total }; } });
+      state.found = ing?.postsInserted ?? 0;
+      const proc = await process({
+        limit: maxPosts,
+        onStart: (total) => { state.progress = { done: 0, total }; },
+        onPost: (_res, done, total) => { state.progress = { done, total }; },
+      });
       state.step = 'tidying';
       await sweep();
       const after = await counts();

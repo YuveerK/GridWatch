@@ -22,7 +22,7 @@ function publish(next) {
 function apply(server, extra = {}) {
   const wasRunning = snap.state === 'running';
   publish({ ...server, ...extra, notice: extra.notice ?? null });
-  if (server.state === 'running' && !timer) timer = setInterval(poll, 1500);
+  if (server.state === 'running' && !timer) timer = setInterval(poll, 600); // short runs finish in a few seconds: poll fast enough to be seen
   if (server.state !== 'running' && timer) {
     clearInterval(timer);
     timer = null;

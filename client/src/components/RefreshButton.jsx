@@ -5,6 +5,45 @@ import { cooldownSeconds, describeResult, startRefresh, useRefresh } from '../li
 import Icon from './Icon.jsx';
 import WhatChanged from './WhatChanged.jsx';
 
+const STEPS = [
+  ['fetching', 'Fetch from X'],
+  ['reading', 'Read posts'],
+  ['tidying', 'Update outages'],
+];
+
+/** Where the run is right now: three steps, a bar that fills as posts are read, and how long it has taken. */
+function RunProgress({ s }) {
+  const at = Math.max(0, STEPS.findIndex(([k]) => k === s.step));
+  const total = s.progress?.total ?? null;
+  const done = s.progress?.done ?? 0;
+  const determinate = s.step === 'reading' && total > 0;
+  const elapsed = Math.max(0, Math.round(((s.now ?? Date.now()) - (s.startedAt ?? Date.now()) + (Date.now() - s.receivedAt)) / 1000));
+  const detail = (k) => {
+    if (k === 'fetching') return s.found != null ? `${s.found} new post${s.found === 1 ? '' : 's'}` : null;
+    if (k === 'reading') return determinate ? `${Math.min(done, total)} of ${total}` : s.found === 0 ? 'nothing new' : null;
+    return null;
+  };
+  return (
+    <div className="run" aria-label="Progress">
+      <ol className="run-steps">
+        {STEPS.map(([k, name], i) => {
+          const state = i < at ? 'done' : i === at ? 'now' : 'todo';
+          return (
+            <li key={k} className={`run-step ${state}`}>
+              <span className="run-ico">{state === 'done' ? <Icon name="check" /> : state === 'now' ? <Icon name="refresh" className="spin" /> : <i />}</span>
+              <span>{name}{detail(k) && state !== 'todo' ? <b> · {detail(k)}</b> : null}</span>
+            </li>
+          );
+        })}
+      </ol>
+      <div className={`meter run-bar${determinate ? '' : ' indeterminate'}`}>
+        <i style={determinate ? { width: `${Math.max(6, (Math.min(done, total) / total) * 100)}%`, background: 'var(--brand)' } : undefined} />
+      </div>
+      <div className="faint" style={{ marginTop: 4 }}>{elapsed}s</div>
+    </div>
+  );
+}
+
 const STEP = { fetching: 'Fetching from X…', reading: 'Reading posts…', tidying: 'Updating outages…' };
 
 function label(s, wait) {
@@ -55,9 +94,7 @@ export default function RefreshButton({ compact }) {
         {text}
       </button>
       <div className="small" aria-live="polite" role="status" style={{ minHeight: 20 }}>
-        {running && s.progress?.total > 0 && (
-          <div className="meter" style={{ width: 160, marginTop: 8 }}><i style={{ width: `${(s.progress.done / s.progress.total) * 100}%`, background: 'var(--brand)' }} /></div>
-        )}
+        {running && <RunProgress s={s} />}
         {!running && outcome && (
           <span className="row" style={{ gap: 6, color: outcome.tone === 'live' ? 'var(--live)' : 'var(--ink-2)' }}>
             <Icon name={outcome.icon} /> {outcome.msg}

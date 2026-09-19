@@ -114,4 +114,17 @@ describe('refresh cycle', () => {
     await cycle.whenIdle();
     expect(cycle.start('manual')).toMatchObject({ started: false, reason: 'cooldown' });
   });
+
+  it('reports how many posts will be read before the first one is finished, so the UI can show progress', async () => {
+    const gate = deferred();
+    const { cycle } = make({
+      ingest: async () => ({ status: 'SUCCEEDED', postsFetched: 3, postsInserted: 3 }),
+      process: async ({ onStart, onPost }) => { onStart(3); await gate.promise; onPost({}, 1, 3); return { total: 3 }; },
+    });
+    cycle.start('manual');
+    await new Promise((r) => setTimeout(r, 5));
+    expect(cycle.status()).toMatchObject({ state: 'running', step: 'reading', found: 3, progress: { done: 0, total: 3 } });
+    gate.resolve();
+    await cycle.whenIdle();
+  });
 });

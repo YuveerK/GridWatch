@@ -461,3 +461,27 @@ details.orig .body { padding: 2px 14px 14px; }
 .chg-updates li { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; }
 .chg-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--tone, var(--brand)); margin-top: 7px; flex: none; }
 .new-pill { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: #fff; background: var(--brand); }
+
+/* ---------- run progress ---------- */
+.run { margin-top: 10px; min-width: 260px; max-width: 360px; }
+.run-steps { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.run-step { display: flex; align-items: center; gap: 10px; color: var(--ink-3); font-size: 13.5px; }
+.run-step.now { color: var(--ink); font-weight: 600; }
+.run-step.done { color: var(--ink-2); }
+.run-step b { font-weight: 500; color: var(--ink-2); }
+.run-ico { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; font-size: 14px; flex: none; }
+.run-step.done .run-ico { color: var(--good); }
+.run-step.now .run-ico { color: var(--brand); }
+.run-step.todo .run-ico i { width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--axis); display: block; }
+.run-bar { background: var(--brand-tint); }
+.run-bar > i { transition: width 0.3s ease; }
+.meter.indeterminate > i { width: 38%; background: var(--brand); animation: slide 1.1s ease-in-out infinite; }
+@keyframes slide { 0% { margin-left: -38%; } 100% { margin-left: 100%; } }
+
+/* Header: on tablets and small laptop windows show the buttons as icons only, so the row never overflows */
+@media (max-width: 1040px) {
+  .icon-btn .label, .icon-btn .kbd { display: none; }
+  .header-row { gap: 14px; }
+  .nav { margin-left: 0; gap: 2px; }
+  .nav a { padding: 8px 11px; }
+}
