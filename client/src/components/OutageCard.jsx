@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { firstSentence, fmtDay, nice, plural, prettySdc, statusMeta, timeAgo } from '../lib/api.js';
 import { isNewSince } from '../lib/newness.js';
@@ -12,12 +13,34 @@ export function scheduleLabel(s) {
   return s.from ? `${day} · ${s.from}–${s.to}` : day;
 }
 
+/** Two lines of the latest update; "Read more" appears only when there is more to read. */
+function Latest({ text }) {
+  const ref = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [clipped, setClipped] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && !open) setClipped(el.scrollHeight > el.clientHeight + 1);
+  }, [text, open]);
+  return (
+    <div>
+      <p ref={ref} className={`latest${open ? ' open' : ''}`}>{text}</p>
+      {(clipped || open) && (
+        <button type="button" className="more-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+          {open ? 'Show less' : 'Read more'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function OutageCard({ outage: o, compact }) {
   const m = statusMeta(o.status);
   const { lastBatch } = useRefresh();
   const fresh = isNewSince(o.latest?.ingestedAt, lastBatch);
   const areas = o.localities ?? [];
-  const shown = areas.slice(0, compact ? 2 : 3);
+  const cap = compact ? 4 : 8;
+  const shown = areas.slice(0, cap);
   const likely = areas.length === 0 ? o.likelyAreas ?? [] : [];
   const headline = o.latest?.summary || firstSentence(o.cause ? `Cause: ${o.cause}.` : '');
   const planned = o.kind === 'PLANNED' && o.scheduled;
@@ -34,12 +57,12 @@ export default function OutageCard({ outage: o, compact }) {
           <Icon name="calendar" /> {scheduleLabel(o.scheduled)}
         </div>
       )}
-      {headline && <p className="latest">{headline}</p>}
+      {headline && <Latest text={headline} />}
       {o.status !== 'RESTORED' && o.restorationPercent != null && o.status !== 'PLANNED' && <Meter value={o.restorationPercent} />}
       {(shown.length > 0 || likely.length > 0) && (
-        <div className="chips">
+        <div className="chips scroll">
           {shown.map((l) => <Chip key={l.id} to={`/suburb/${l.id}`} restored={l.restored}>{nice(l.canonicalName)}</Chip>)}
-          {areas.length > shown.length && <span className="small faint" style={{ alignSelf: 'center' }}>+{areas.length - shown.length} more</span>}
+          {areas.length > shown.length && <span className="small faint more-count">+{areas.length - shown.length} more</span>}
           {likely.slice(0, 3).map((l) => <Chip key={l.id} to={`/suburb/${l.id}`} soft title="Likely area, based on the equipment involved">{nice(l.canonicalName)}</Chip>)}
         </div>
       )}

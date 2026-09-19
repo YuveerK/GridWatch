@@ -6,12 +6,24 @@ import Icon from './Icon.jsx';
 import SearchBox from './SearchBox.jsx';
 import { Skeleton } from './ui.jsx';
 
-/** The home page's answer to "is MY power out?" — remembers the suburb in this browser. */
-export default function MyArea() {
+/**
+ * The home page's answer to "is MY power out?", remembered in this browser.
+ * `banner` renders it as one slim full-width strip instead of a tall card.
+ */
+export default function MyArea({ banner }) {
   const { area, setArea, clear } = useMyArea();
   const { data, loading } = useApi(area ? `/v1/localities/${area.id}/outages` : null, { refreshMs: 60_000 });
 
   if (!area) {
+    if (banner) {
+      return (
+        <div className="area-banner">
+          <span className="row" style={{ gap: 10, fontWeight: 650 }}><Icon name="star" /> Save your area</span>
+          <span className="muted small area-hint">Pick your suburb once and this strip will tell you straight away if your power is out.</span>
+          <div className="area-pick"><SearchBox compact suburbsOnly inline placeholder="Find your suburb…" onPickSuburb={setArea} /></div>
+        </div>
+      );
+    }
     return (
       <div className="card card-pad stack" style={{ gap: 14 }}>
         <div className="row" style={{ gap: 12 }}>
@@ -30,15 +42,29 @@ export default function MyArea() {
 
   if (loading || !data) {
     return (
-      <div className="card card-pad stack" aria-busy="true">
-        <Skeleton h={14} w="30%" />
-        <Skeleton h={26} w="80%" />
-        <Skeleton h={14} />
+      <div className={banner ? 'card' : 'card card-pad stack'} aria-busy="true" style={banner ? { padding: 16 } : undefined}>
+        <Skeleton h={banner ? 22 : 14} w={banner ? '60%' : '30%'} />
+        {!banner && <Skeleton h={26} w="80%" />}
+        {!banner && <Skeleton h={14} />}
       </div>
     );
   }
 
   const answer = computeAnswer(nice(area.name), data.data, data.possible);
+  if (banner) {
+    return (
+      <AnswerCard
+        slim
+        answer={answer}
+        action={
+          <>
+            <Link to={`/suburb/${area.id}`} className="btn small">All about {nice(area.name)}</Link>
+            <button className="btn ghost small" onClick={clear} title="Pick a different suburb">Change</button>
+          </>
+        }
+      />
+    );
+  }
   return (
     <div className="stack" style={{ gap: 10 }}>
       <AnswerCard

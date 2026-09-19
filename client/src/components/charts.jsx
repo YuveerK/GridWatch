@@ -32,7 +32,7 @@ export function Sparkline({ values, w = 84, h = 30 }) {
   );
 }
 
-/** Horizontal bars: compare a magnitude across named things. Single hue, value at the tip. */
+/** Horizontal bars: compare a magnitude across named things, on a track that shows the scale. An item may carry `segments` ([{value, tone}]) to split its bar by status colour. */
 export function BarList({ items, unit = '', empty = 'Nothing to show yet.' }) {
   const [table, setTable] = useState(false);
   if (!items.length) return <p className="muted">{empty}</p>;
@@ -50,7 +50,11 @@ export function BarList({ items, unit = '', empty = 'Nothing to show yet.' }) {
             const row = (
               <>
                 <span className="bl-label" title={i.label}>{i.label}</span>
-                <span className="bl-track"><span className="bl-bar" style={{ width: `${(i.value / max) * 100}%` }} /></span>
+                <span className="bl-track">
+                  <span className="bl-bar" style={{ width: `${(i.value / max) * 100}%` }}>
+                    {(i.segments ?? [{ value: i.value, tone: i.tone }]).filter((g) => g.value > 0).map((g) => <i key={g.tone ?? 'x'} className={g.tone ? `seg tone-${g.tone}` : 'seg'} style={{ flex: g.value }} />)}
+                  </span>
+                </span>
                 <span className="bl-val num">{i.value}</span>
               </>
             );
