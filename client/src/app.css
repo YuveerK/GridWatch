@@ -584,7 +584,7 @@ a.fname:hover { text-decoration: underline; }
   .kpis .tile .v { font-size: 30px; }
 }
 @media (prefers-reduced-motion: reduce) { .feed-panel { transition: none; } }
-.hero-meta .refresh { flex-direction: row; align-items: center; gap: 12px; } .hero-meta .refresh > .small { min-height: 0 !important; }
+.hero-meta .refresh > .small { min-height: 0 !important; }
 
 /* ───────────── refinement: depth from surface, not outlines ───────────── */
 .ocard h3 { letter-spacing: -0.015em; }
@@ -606,3 +606,7 @@ select.field { appearance: none; -webkit-appearance: none; padding-right: 34px; 
 .dhero { background: radial-gradient(90% 120% at 0% 0%, color-mix(in srgb, var(--tone, var(--card)) 8%, var(--card)), var(--card) 60%); }
 .dhero { border: 0; }
 .chg { border: 0; background: var(--sunken); }
+/* the "what changed" panel must drop to its own line under the button, not sit beside it */
+.hero-meta .refresh { display: contents; }
+.hero-meta .refresh > .small { flex: 1 1 240px; }
+.hero-meta .refresh > .card { flex: 1 1 100%; max-width: 560px; order: 5; margin-top: 4px !important; }
