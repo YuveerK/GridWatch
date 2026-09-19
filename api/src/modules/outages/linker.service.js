@@ -18,6 +18,9 @@ const isDigest = (facts) => !facts.fromDigest && facts.rootCount >= 3 || (facts.
 export const linkedToPost = (candidate, postId) => candidate.raw.posts.some((p) => p.postId === postId);
 
 // \b so that "unplanned power interruption" / "unscheduled maintenance" are not mistaken for planned work
+// only added for posts that say they are amended, so nothing else about the tie-break changes
+const AMENDED_NOTE = ' This post is marked amended or corrected: it replaces an earlier post about the same fault, so its equipment names may differ from those already recorded. Judge it by the area and the timing.';
+const AMENDED = /\b(amended|corrected|correction|revised)\b/i;
 const PLANNED_TEXT = /\bplanned (maintenance|power interruption|interruption|outage)|\bscheduled (maintenance|interruption|outage)/i;
 
 /** Planned work also shows up as "restored" posts, so relevance alone is not enough. */
@@ -114,7 +117,7 @@ async function askLlm(post, extraction, ranked, { fromDigest = false } = {}) {
     text: fromDigest ? clip(r.update_summary) : clip(post.text),
   };
   const shortlist = ranked.slice(0, 3);
-  const key = `v4|${post.id}|${post.faultIndex ?? 0}|${shortlist.map((c) => c.stableId).sort().join(',')}`;
+  const key = `${post.amended ? 'v5' : 'v4'}|${post.id}|${post.faultIndex ?? 0}|${shortlist.map((c) => c.stableId).sort().join(',')}`;
   const hit = cachedVerdict(key);
   if (hit !== undefined) {
     const chosen = hit.stableId ? shortlist.find((c) => c.stableId === hit.stableId) : null;
@@ -122,7 +125,7 @@ async function askLlm(post, extraction, ranked, { fromDigest = false } = {}) {
   }
   const out = await generateJson({
     systemInstruction:
-      'Decide whether a new City Power post is about the SAME fault as one of the candidate outages (same equipment failing, continued repairs, or its restoration) or a DIFFERENT fault. Sharing a suburb alone is not enough when BOTH sides name different equipment: two faults at different equipment are different outages, even nearby. But if a candidate outage names no equipment (it was first reported only by suburb) and the new post is about the same suburbs within a few hours, treat it as the same fault. Planned maintenance and unplanned faults are never the same. A restoration post belongs to the outage it restores. Answer outage_id = null for a different fault.',
+      'Decide whether a new City Power post is about the SAME fault as one of the candidate outages (same equipment failing, continued repairs, or its restoration) or a DIFFERENT fault. Sharing a suburb alone is not enough when BOTH sides name different equipment: two faults at different equipment are different outages, even nearby. But if a candidate outage names no equipment (it was first reported only by suburb) and the new post is about the same suburbs within a few hours, treat it as the same fault. Planned maintenance and unplanned faults are never the same. A restoration post belongs to the outage it restores. Answer outage_id = null for a different fault.' + (post.amended ? AMENDED_NOTE : ''),
     parts: [{ text: JSON.stringify({ new_post: newPost, candidate_outages: summaries }) }],
     jsonSchema: tieBreakSchema,
   });
@@ -260,6 +263,8 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0 }) {
     sdcName: facts.sdcNode?.name ?? null,
     nodeIds: new Set(facts.nodes.map((n) => n.id)),
     localityIds: new Set(facts.localityIds),
+    // "[AMENDED UPDATE]" / "*Amended*" in the opening words: a correction of an earlier post (not judged for one fault inside a graphic)
+    amended: !facts.fromDigest && AMENDED.test((postRow.noteTweetText || postRow.text || '').slice(0, 90)),
   };
   post.relatedNodeIds = await relatedNodeIds(post.nodeIds);
 

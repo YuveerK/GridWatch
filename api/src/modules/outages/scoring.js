@@ -42,6 +42,13 @@ export function scoreCandidate(post, outage) {
   }
   if (score === 0) return { score: 0, reasons: ['no shared thread/node/locality'] };
 
+  // An "amended" post corrects an earlier one about the same fault, often with different equipment names, so a shared
+  // suburb is much stronger evidence than usual. This only lifts it into the tie-break: the final call still gets made there.
+  if (post.amended && sharedLocalities.length && (post.postedAt - outage.lastUpdateAt) / HOUR <= 12) {
+    score += 0.3;
+    reasons.push('amended post: corrects an earlier one');
+  }
+
   // Multi-node digest outages (5+ nodes) must not absorb unrelated single-fault posts.
   if (outage.digest && !reasons.includes('same thread')) {
     reasons.push('digest outage');

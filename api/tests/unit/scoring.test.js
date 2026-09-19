@@ -29,6 +29,21 @@ const post = (over = {}) => ({
   ...over,
 });
 
+describe('amended posts', () => {
+  const other = { nodeIds: new Set(['other']), relatedNodeIds: new Set(), localityIds: new Set(['l1']) };
+  it('lifts a same-suburb post with different equipment into the tie-break band, but only when it says it is amended', () => {
+    const plain = scoreCandidate(post(other), outage()).score;
+    const amended = scoreCandidate(post({ ...other, amended: true }), outage()).score;
+    expect(plain).toBeLessThan(0.35); // different equipment, one shared suburb: a new outage
+    expect(amended).toBeGreaterThanOrEqual(0.35);
+    expect(amended).toBeLessThan(0.7); // still not decided here
+  });
+  it('does nothing when it shares no suburb or equipment, or the outage is old', () => {
+    expect(scoreCandidate(post({ nodeIds: new Set(['x']), localityIds: new Set(['y']), amended: true }), outage()).score).toBe(0);
+    expect(scoreCandidate(post({ ...other, amended: true, postedAt: hoursLater(30) }), outage()).score).toBeLessThan(0.35);
+  });
+});
+
 describe('scoreCandidate', () => {
   it('links an update sharing node and locality with an active outage', () => {
     expect(scoreCandidate(post(), outage()).score).toBeGreaterThanOrEqual(0.7);
