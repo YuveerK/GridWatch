@@ -105,7 +105,7 @@ export async function processPost(postId) {
       },
     };
   } catch (err) {
-    logger.error({ postId, err: err.message }, 'processing failed');
+    logger.error({ postId, err }, 'processing failed'); // the full error, with where it happened
     await setStatus(postId, 'PROCESSING_ERROR');
     return { postId, outcome: 'ERROR', error: err.message };
   }

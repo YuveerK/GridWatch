@@ -5,7 +5,15 @@ import { router } from './modules/api/routes.js';
 
 export function createApp() {
   const app = express();
-  app.use(pinoHttp({ logger }));
+  // One short line per problem request; normal traffic (page loads, the 60-second refresh polling) is only logged at LOG_LEVEL=debug.
+  // Headers and cookies are never logged.
+  app.use(pinoHttp({
+    logger,
+    serializers: { req: (r) => ({ method: r.method, url: r.url }), res: (r) => ({ statusCode: r.statusCode }) },
+    customLogLevel: (_req, res, err) => (err || res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'debug'),
+    customSuccessMessage: (req, res) => `${req.method} ${req.url} ${res.statusCode}`,
+    customErrorMessage: (req, res) => `${req.method} ${req.url} ${res.statusCode}`,
+  }));
   app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN ?? '*');
     res.setHeader('Access-Control-Allow-Headers', 'content-type');
