@@ -40,7 +40,8 @@
 
   --radius: 16px;
   --radius-sm: 10px;
-  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* One place to change the typeface. Roboto is bundled (no third-party request). */
+  --font: 'Roboto Variable', Roboto, system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
