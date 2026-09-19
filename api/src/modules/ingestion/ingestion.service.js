@@ -118,5 +118,5 @@ export async function ingestNewPosts() {
     });
     await releaseLease();
   }
-  return { status, ...stats, checkpointBefore };
+  return { status, ...stats, checkpointBefore, error: error?.message ?? null };
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import Icon from './components/Icon.jsx';
+import RefreshButton from './components/RefreshButton.jsx';
 import SearchBox from './components/SearchBox.jsx';
 import { EmptyState } from './components/ui.jsx';
 import { useTheme } from './lib/hooks.js';
@@ -79,6 +80,7 @@ export default function Root() {
             {NAV.map(([to, label, , end]) => <NavLink key={to} to={to} end={end}>{label}</NavLink>)}
           </nav>
           <div className="header-actions">
+            <RefreshButton compact />
             <button className="icon-btn" onClick={() => setSearching(true)} aria-label="Search">
               <Icon name="search" /><span className="label">Search</span><span className="kbd">/</span>
             </button>

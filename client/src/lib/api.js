@@ -32,9 +32,12 @@ export function useApi(path, { refreshMs } = {}) {
     };
     load(true);
     const timer = refreshMs ? setInterval(() => load(false), refreshMs) : null;
+    const onRefreshed = () => load(false);
+    window.addEventListener('gridwatch:refreshed', onRefreshed);
     return () => {
       cancelled = true;
       if (timer) clearInterval(timer);
+      window.removeEventListener('gridwatch:refreshed', onRefreshed);
     };
   }, [path, refreshMs]);
   return state;

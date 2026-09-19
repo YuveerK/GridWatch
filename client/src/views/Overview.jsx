@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import MyArea from '../components/MyArea.jsx';
+import RefreshButton from '../components/RefreshButton.jsx';
 import OutageCard from '../components/OutageCard.jsx';
 import SearchBox from '../components/SearchBox.jsx';
 import { BarList, ColumnChart, StatTile } from '../components/charts.jsx';
@@ -47,7 +48,10 @@ export default function Overview() {
             <h1>Is your power out?</h1>
             <p className="lede">City Power posts a lot. GridWatch reads every post and image, then turns them into one clear picture for each outage.</p>
             <div className="search-wrap"><SearchBox placeholder="Search your suburb, e.g. Fourways" /></div>
-            <div style={{ marginTop: 16 }}><Freshness lastPostAt={data?.lastPostAt} /></div>
+            <div className="row" style={{ marginTop: 16, gap: 18, alignItems: 'flex-start' }}>
+              <Freshness lastPostAt={data?.lastPostAt} />
+            </div>
+            <div style={{ marginTop: 12 }}><RefreshButton /></div>
           </div>
           <MyArea />
         </div>

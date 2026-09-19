@@ -442,3 +442,9 @@ details.orig .body { padding: 2px 14px 14px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* ---------- refresh button ---------- */
+.refresh { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.btn:disabled, .icon-btn:disabled { opacity: 0.6; cursor: progress; }
+.icon.spin { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }

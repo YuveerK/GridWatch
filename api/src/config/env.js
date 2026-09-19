@@ -14,6 +14,11 @@ const schema = z.object({
   X_POLL_INTERVAL_MINUTES: z.coerce.number().default(5),
   GEMINI_THINKING: z.enum(['default', 'minimal']).default('default'),
   KNOWLEDGE_CONTEXT: z.enum(['on', 'off']).default('on'),
+  // Manual "fetch latest posts" button (an operator tool until the scheduler is switched on)
+  REFRESH_BUTTON: z.enum(['on', 'off']).default('on'),
+  REFRESH_COOLDOWN_SECONDS: z.coerce.number().default(60),
+  REFRESH_MAX_POSTS: z.coerce.number().default(200),
+  REFRESH_TOKEN: z.string().optional(),
   PROCESSING_CONCURRENCY: z.coerce.number().default(3),
   MEDIA_MAX_BYTES: z.coerce.number().default(10 * 1024 * 1024),
   LINK_HIGH_SCORE: z.coerce.number().default(0.7),

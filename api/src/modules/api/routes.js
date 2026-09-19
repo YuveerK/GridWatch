@@ -4,6 +4,8 @@ import { prisma } from '../../db/prisma.js';
 import { localityKey } from '../../lib/normalize.js';
 import { parseSchedule } from '../../lib/schedule.js';
 import { ingestNewPosts } from '../ingestion/ingestion.service.js';
+import { env } from '../../config/env.js';
+import { cycle } from '../processing/cycle.js';
 import { processPending, processPost } from '../processing/processor.service.js';
 
 export const router = Router();
@@ -351,6 +353,21 @@ router.get('/v1/infrastructure', wrap(async (req, res) => {
   const liveRows = nodes.length ? await prisma.outageNode.findMany({ where: { nodeId: { in: nodes.map((n) => n.id) }, outage: { status: { in: LIVE } } }, select: { nodeId: true } }) : [];
   const liveIds = new Set(liveRows.map((r) => r.nodeId));
   res.json({ data: nodes.map((n) => ({ ...n, live: liveIds.has(n.id) })) });
+}));
+
+// ───────────── manual refresh (fetch latest posts, read them, update outages) ─────────────
+
+const refreshEnabled = () => env.REFRESH_BUTTON === 'on';
+
+router.get('/v1/refresh', wrap(async (_req, res) => {
+  res.json({ enabled: refreshEnabled(), ...cycle.status() });
+}));
+
+router.post('/v1/refresh', wrap(async (req, res) => {
+  if (!refreshEnabled()) return res.status(403).json({ enabled: false, error: 'Manual refresh is switched off.' });
+  if (env.REFRESH_TOKEN && req.get('x-refresh-token') !== env.REFRESH_TOKEN) return res.status(401).json({ error: 'Not allowed.' });
+  const r = cycle.start('manual');
+  res.status(r.started ? 202 : r.reason === 'cooldown' ? 429 : 409).json({ enabled: true, ...r });
 }));
 
 // ───────────── admin ─────────────
