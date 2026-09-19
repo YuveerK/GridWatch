@@ -1,38 +1,41 @@
-import { lazy, Suspense, useMemo } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { nice, plural, useApi } from '../lib/api.js';
 import { Legend, MapFallback } from '../views/MapPage.jsx';
+import Icon from './Icon.jsx';
 import { SectionHead } from './ui.jsx';
 
 const MapView = lazy(() => import('./MapView.jsx'));
+const LAYERS = { regions: false, outages: true, equipment: false };
 
-/** Approximate reach of a piece of equipment: the suburbs City Power's posts have tied to it (or to anything downstream of it). */
+/** Where a piece of equipment reaches: its suburbs, with the power flowing out to them. */
 export default function NodeReach({ id }) {
   const { data } = useApi(`/v1/map/node/${id}`);
-  const points = useMemo(() => {
-    const max = Math.max(1, ...(data?.places ?? []).map((p) => p.evidence));
-    return (data?.places ?? []).map((p) => ({
-      id: p.id,
-      name: nice(p.name),
-      lat: p.lat,
-      lon: p.lon,
-      tone: p.live ? 'live' : 'plan',
-      r: 5 + Math.round((p.evidence / max) * 7),
-      note: `${p.live ? 'Power out now · ' : ''}named in ${plural(p.evidence, 'post')} about this equipment`,
-    }));
-  }, [data]);
+  const [replay, setReplay] = useState(0);
+  const points = useMemo(
+    () => (data?.places ?? []).map((p) => ({ id: p.id, name: nice(p.name), lat: p.lat, lon: p.lon, tone: p.live ? 'live' : 'plan', groups: [], note: `${p.live ? 'Power out now · ' : ''}named in ${plural(p.evidence, 'post')} about this equipment` })),
+    [data],
+  );
+  const flow = useMemo(() => (data?.origin && data.edges?.length ? { key: `${id}:${replay}`, origin: data.origin, edges: data.edges } : null), [data, id, replay]);
 
   if (!data || points.length === 0) return null;
   return (
     <section className="section" aria-labelledby="reach-h">
-      <SectionHead id="reach-h" title="Where it reaches" sub="Suburbs named in posts about this equipment. Bigger dots were named more often. Positions are suburb centres, not cable routes." />
+      <SectionHead
+        id="reach-h"
+        title="Where it reaches"
+        sub="Suburbs named in posts about this equipment. The lines show how power reaches them; positions are approximate."
+        action={<Link to={`/map?hub=${id}`} className="link">Explore on the map <Icon name="arrow" /></Link>}
+      />
       <div className="card map-card">
-        <Suspense fallback={<MapFallback height={360} />}>
-          <MapView points={points} height={360} cooperative label={`Map of suburbs served by ${data.node.name}`} />
+        <Suspense fallback={<MapFallback height={380} />}>
+          <MapView points={points} flow={flow} layers={LAYERS} height={380} cooperative label={`Map of suburbs served by ${data.node.name}`} />
         </Suspense>
         <div className="map-foot">
           <Legend items={[['plan', 'Named in past outages'], ['live', 'Power out now']]} />
-          <span className="small faint">
-            {data.unplaced > 0 ? `${plural(data.unplaced, 'suburb')} could not be placed · ` : ''}Map data © OpenStreetMap contributors
+          <span className="row" style={{ gap: 12 }}>
+            <button type="button" className="btn small ghost" onClick={() => setReplay((n) => n + 1)}><Icon name="refresh" /> Replay</button>
+            <span className="small faint">{data.unplaced > 0 ? `${plural(data.unplaced, 'suburb')} could not be placed · ` : ''}Map © OpenStreetMap contributors</span>
           </span>
         </div>
       </div>

@@ -6,9 +6,10 @@ import Icon from './Icon.jsx';
 /**
  * One search for suburbs, outages and equipment.
  *  - onPickSuburb: override what happens when a suburb is chosen (e.g. "save as my area")
+ *  - onPickItem:   take over every choice ({ kind: 'suburb' | 'outage' | 'equipment', id, title }), e.g. the map page
  *  - suburbsOnly:  hide outages and equipment
  */
-export default function SearchBox({ autoFocus, placeholder = 'Search your suburb, e.g. Fourways', onPickSuburb, suburbsOnly, compact, inline, onDone }) {
+export default function SearchBox({ autoFocus, placeholder = 'Search your suburb, e.g. Fourways', onPickSuburb, onPickItem, suburbsOnly, compact, inline, onDone }) {
   const [q, setQ] = useState('');
   const [res, setRes] = useState({ suburbs: [], equipment: [], outages: [] });
   const [busy, setBusy] = useState(false);
@@ -45,7 +46,7 @@ export default function SearchBox({ autoFocus, placeholder = 'Search your suburb
   // flat list drives keyboard navigation
   const items = useMemo(() => {
     const out = [];
-    res.suburbs.forEach((s) => out.push({ kind: 'suburb', id: s.id, title: nice(s.name), sub: s.region ? `Suburb · Region ${s.region}` : 'Suburb', icon: 'pin' }));
+    res.suburbs.forEach((s) => out.push({ kind: 'suburb', id: s.id, lat: s.lat, lon: s.lon, title: nice(s.name), sub: s.region ? `Suburb · Region ${s.region}` : 'Suburb', icon: 'pin' }));
     if (!suburbsOnly) {
       res.outages.forEach((o) => out.push({ kind: 'outage', id: o.id, title: nice(o.title), sub: `${statusMeta(o.status).label}${o.sdc ? ` · ${prettySdc(o.sdc)}` : ''}`, icon: statusMeta(o.status).icon }));
       res.equipment.forEach((n) => out.push({ kind: 'equipment', id: n.id, title: n.name, sub: `Equipment · ${typeLabel(n.type)}`, icon: 'plug' }));
@@ -56,7 +57,9 @@ export default function SearchBox({ autoFocus, placeholder = 'Search your suburb
   const pick = (it) => {
     setOpen(false);
     setQ('');
-    if (it.kind === 'suburb') {
+    if (onPickItem) {
+      onPickItem(it);
+    } else if (it.kind === 'suburb') {
       if (onPickSuburb) onPickSuburb({ id: it.id, name: it.title });
       else navigate(`/suburb/${it.id}`);
     } else if (it.kind === 'outage') navigate(`/outages/${it.id}`);

@@ -7,6 +7,8 @@ import { ingestNewPosts } from '../ingestion/ingestion.service.js';
 import { env } from '../../config/env.js';
 import { cycle } from '../processing/cycle.js';
 import { processPending, processPost } from '../processing/processor.service.js';
+import { equipmentFlow, equipmentHubs } from '../geo/equipment-map.service.js';
+import { regionsGeoJson } from '../geo/regions.service.js';
 
 export const router = Router();
 
@@ -244,7 +246,7 @@ router.get('/v1/search', wrap(async (req, res) => {
   const rank = (l) => (l.normalizedName === k ? 0 : l.normalizedName.startsWith(k) ? 1 : 2);
   suburbs.sort((a, b) => rank(a) - rank(b) || a.canonicalName.length - b.canonicalName.length);
   res.json({
-    suburbs: suburbs.slice(0, 7).map((l) => ({ id: l.id, name: l.canonicalName, region: l.Region?.code ?? null })),
+    suburbs: suburbs.slice(0, 7).map((l) => ({ id: l.id, name: l.canonicalName, region: l.Region?.code ?? null, lat: l.lat ?? null, lon: l.lon ?? null })),
     equipment: equipment.map((n) => ({ id: n.id, name: n.name, type: n.type })),
     outages: outages.map((o) => ({ id: o.id, title: o.title, status: o.status, sdc: o.sdcName })),
   });
@@ -319,11 +321,23 @@ router.get('/v1/map', wrap(async (_req, res) => {
       const all = named.length ? named : o.likelyAreas.map((l) => place({ ...l, canonicalName: l.canonicalName }, { restored: false, inferred: true }));
       return {
         id: o.id, title: o.title, status: o.status, restorationPercent: o.restorationPercent, sdc: o.sdc, lastUpdateAt: o.lastUpdateAt, latest: o.latest?.summary ?? null,
+        equipment: (o.infrastructure ?? []).filter((n) => ['SUBSTATION', 'SWITCHING_STATION', 'DISTRIBUTOR'].includes(n.type)).map((n) => ({ id: n.id, name: n.name, type: n.type })),
         places: all.filter((p) => p.lat != null && p.lon != null),
         unplaced: all.filter((p) => p.lat == null || p.lon == null).length,
       };
     }),
   });
+}));
+
+/** Suburb outlines (Stats SA Census 2011 sub-places) for every suburb in use, as GeoJSON. Coloured by the page from the live outages. */
+router.get('/v1/map/regions', wrap(async (_req, res) => {
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json(await regionsGeoJson());
+}));
+
+/** Every substation, switching station and distributor with a known area, at its inferred position. */
+router.get('/v1/map/infrastructure', wrap(async (_req, res) => {
+  res.json({ data: await equipmentHubs() });
 }));
 
 /** The suburbs a piece of equipment is known to reach, including everything downstream of it. Approximate: it is what posts have named. */
@@ -347,9 +361,14 @@ router.get('/v1/map/node/:id', wrap(async (req, res) => {
   const all = [...byLoc.values()].sort((a, b) => b.evidence - a.evidence);
   const liveRows = await prisma.outageNode.findMany({ where: { nodeId: { in: [...ids] }, outage: { status: { in: LIVE } } }, select: { outage: { select: { localities: { select: { localityId: true } } } } } });
   const affected = new Set(liveRows.flatMap((r) => r.outage.localities.map((l) => l.localityId)));
+  const placed = all.filter((l) => l.lat != null).slice(0, 120).map((l) => place(l, { evidence: l.evidence, live: affected.has(l.id) }));
+  const flow = await equipmentFlow(root.id, placed);
   res.json({
     node: root,
-    places: all.filter((l) => l.lat != null).slice(0, 120).map((l) => place(l, { evidence: l.evidence, live: affected.has(l.id) })),
+    places: placed,
+    origin: flow.origin,
+    children: flow.children.map((c) => ({ id: c.id, name: c.name, type: c.type, lon: c.lon, lat: c.lat, live: c.live, served: c.served, near: c.near })),
+    edges: flow.edges,
     unplaced: all.filter((l) => l.lat == null).length,
     total: all.length,
   });

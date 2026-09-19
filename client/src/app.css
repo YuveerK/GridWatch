@@ -505,7 +505,7 @@ details.orig .body { padding: 2px 14px 14px; }
 .legend li { display: inline-flex; align-items: center; gap: 7px; }
 .key-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--tone); box-shadow: 0 0 0 3px var(--tint); flex: none; }
 .key-dot.hollow { background: transparent; border: 2.5px solid var(--tone); box-shadow: none; }
-.map-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 22px; align-items: start; }
+.map-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 22px; align-items: start; }
 .map-list { max-height: 640px; overflow: auto; }
 .map-item { all: unset; box-sizing: border-box; display: flex; flex-direction: column; gap: 5px; width: 100%; padding: 14px 16px; cursor: pointer; }
 .map-item:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; border-radius: 10px; }
@@ -629,3 +629,23 @@ h1, h2, h3 { font-weight: 600; }
 .tile .v, .tile.hero-tile .v { font-weight: 600; }
 .hero h1, .page-head h1, .dhero h1 { font-weight: 600; letter-spacing: -0.028em; }
 .hero.tight h1 { font-weight: 600; }
+
+/* ───────────── interactive map ───────────── */
+.map-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 12px 14px; }
+.map-search { flex: 1 1 260px; min-width: 200px; max-width: 380px; }
+.map-search .results { z-index: 40; }
+.map-stage { position: relative; }
+.map-stage .map { border-radius: 0; }
+.map-toast { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); padding: 7px 14px; border-radius: 999px; background: var(--card); box-shadow: var(--shadow-2); font-size: 13px; }
+.map-panel { max-height: 700px; overflow: auto; }
+.panel-title { font-size: 22px; line-height: 1.2; letter-spacing: -0.02em; margin: 8px 0 2px; }
+.panel-h { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+.back { background: none; border: 0; cursor: pointer; padding: 0; align-self: flex-start; font-size: 13.5px; }
+.flip { transform: rotate(180deg); }
+.clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+button.chip { border: 0; cursor: pointer; font: inherit; font-size: 13px; }
+button.chip:hover { background: color-mix(in srgb, var(--ink) 11%, transparent); }
+.chip.equip { background: color-mix(in srgb, var(--plan) 12%, transparent); }
+.key-dot.diamond { border-radius: 2px; transform: rotate(45deg) scale(0.85); box-shadow: none; }
+.eyebrow .key-dot { width: 9px; height: 9px; }
+.legend .key-dot.diamond { width: 10px; height: 10px; }
