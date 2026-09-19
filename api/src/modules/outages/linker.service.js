@@ -139,7 +139,7 @@ function statusFor(extraction, current) {
   return current === 'RESTORED' || current === 'PARTIALLY_RESTORED' ? current : 'ACTIVE';
 }
 
-const GENERIC_NODE = /^(pole[- ]mounted|mini[- ]?substations?|ring main units?|transformers?|cables?|lines?|feederboard.*|central|standby.*)$/i;
+const GENERIC_NODE = /^(pole[- ]mounted|mini[- ]?substations?|ring main units?|transformers?|cables?|lines?|feederboard.*|standby.*)$/i;
 const STREETY = /\b(street|st|road|rd|avenue|ave|drive|dr|lane|between|to)\b|^\d/i;
 const short = (s) => (s.length > 32 ? `${s.slice(0, 30).trim()}…` : s);
 
