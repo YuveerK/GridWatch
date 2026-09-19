@@ -53,7 +53,7 @@ export default function OutageCard({ outage: o, compact }) {
       </div>
       <h3><Link to={`/outages/${o.id}`} className="stretch">{nice(o.title)}</Link></h3>
       {planned && (
-        <div className="row small" style={{ gap: 6, fontWeight: 600 }}>
+        <div className="row small" style={{ gap: 6, fontWeight: 500 }}>
           <Icon name="calendar" /> {scheduleLabel(o.scheduled)}
         </div>
       )}

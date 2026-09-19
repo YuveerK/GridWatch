@@ -48,7 +48,7 @@ export function AnswerCard({ answer, big, slim, action }) {
         {o && (
           <div className="row small muted" style={{ marginTop: 12, gap: 14 }}>
             {o.status === 'PLANNED' && o.scheduled ? (
-              <span className="row" style={{ gap: 6, fontWeight: 600 }}><Icon name="calendar" /> {scheduleLabel(o.scheduled)}</span>
+              <span className="row" style={{ gap: 6, fontWeight: 500 }}><Icon name="calendar" /> {scheduleLabel(o.scheduled)}</span>
             ) : o.status === 'RESTORED' ? (
               <span>Restored {timeAgo(o.restoredAt)}</span>
             ) : (

@@ -118,7 +118,7 @@ export function ColumnChart({ data, unit = 'outages', height = 170 }) {
               return (
                 <g key={d.date}>
                   {h > 0 && <path className={`bar${hover != null && hover !== i ? ' dim' : ''}`} d={`M${x} ${pad.t + ih} V${y + 4} a4 4 0 0 1 4 -4 h${bw - 8} a4 4 0 0 1 4 4 V${pad.t + ih} Z`} />}
-                  {isPeak && <text x={x + bw / 2} y={y - 5} textAnchor="middle" style={{ fill: 'var(--ink)', fontWeight: 700 }}>{d.count}</text>}
+                  {isPeak && <text x={x + bw / 2} y={y - 5} textAnchor="middle" style={{ fill: 'var(--ink)', fontWeight: 600 }}>{d.count}</text>}
                   {(i % 2 === data.length % 2 || i === data.length - 1) && <text x={x + bw / 2} y={height - 6} textAnchor="middle">{fmtShort(d.date)}</text>}
                   <rect className="hit" x={pad.l + i * slot} y={pad.t} width={slot} height={ih + 8} tabIndex={0} role="img" aria-label={`${fmtLong(d.date)}: ${d.count} ${unit}`} onMouseEnter={() => setHover(i)} onFocus={() => setHover(i)} onBlur={() => setHover(null)} />
                 </g>

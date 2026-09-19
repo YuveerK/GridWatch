@@ -88,7 +88,7 @@ export default function OutageDetail() {
           <div className="lab"><Icon name="bolt" /> {ended ? 'How it ended' : 'What is happening now'}</div>
           <p>{headline}</p>
           <div className="when">
-            {isPlanned && o.scheduled && <span className="row" style={{ gap: 6, fontWeight: 650 }}><Icon name="calendar" /> {scheduleLabel(o.scheduled)}</span>}
+            {isPlanned && o.scheduled && <span className="row" style={{ gap: 6, fontWeight: 500 }}><Icon name="calendar" /> {scheduleLabel(o.scheduled)}</span>}
             {o.eta && <span className="row" style={{ gap: 6 }}><Icon name="clock" /> Estimated: {o.eta}</span>}
             {o.latest?.url && <a className="link" href={o.latest.url} target="_blank" rel="noreferrer">City Power's post <Icon name="external" /></a>}
           </div>

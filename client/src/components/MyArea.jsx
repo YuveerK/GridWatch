@@ -18,7 +18,7 @@ export default function MyArea({ banner }) {
     if (banner) {
       return (
         <div className="area-banner">
-          <span className="row" style={{ gap: 10, fontWeight: 650 }}><Icon name="star" /> Save your area</span>
+          <span className="row" style={{ gap: 10, fontWeight: 500 }}><Icon name="star" /> Save your area</span>
           <span className="muted small area-hint">Pick your suburb once and this strip will tell you straight away if your power is out.</span>
           <div className="area-pick"><SearchBox compact suburbsOnly inline placeholder="Find your suburb…" onPickSuburb={setArea} /></div>
         </div>
@@ -31,7 +31,7 @@ export default function MyArea({ banner }) {
             <div className="ico" style={{ background: 'var(--brand-tint)', color: 'var(--brand)' }}><Icon name="star" /></div>
           </div>
           <div>
-            <h2 style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.015em' }}>Save your area</h2>
+            <h2 style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-0.015em' }}>Save your area</h2>
             <p className="muted small">Pick your suburb once and this page will tell you straight away if your power is out.</p>
           </div>
         </div>
