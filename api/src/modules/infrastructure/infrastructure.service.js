@@ -168,7 +168,7 @@ export async function learnFromExtraction(extraction, at) {
   const entities = result.entities
     .filter((e) => e.type !== 'SDC')
     .map((e) => {
-      if (!/^[A-Za-z0-9]{1,2}$/.test(e.name.trim())) return e;
+      if (!/^([A-Za-z0-9]{1,2}|(no\.?\s*)?\d+[a-z]?)$/i.test(e.name.trim())) return e;
       const station = e.parent_name ?? (stationNames.length === 1 ? stationNames[0] : null);
       return station ? { ...e, name: `${station} ${e.name.trim()}`, parent_name: e.parent_name ?? station } : e;
     });

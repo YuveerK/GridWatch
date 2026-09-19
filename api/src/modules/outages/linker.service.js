@@ -13,6 +13,9 @@ const PLANNED_WINDOW_HOURS = 240;
 const DIGEST_ROOTS = 2;
 const isDigest = (facts) => !facts.fromDigest && facts.rootCount >= 3 || (facts.rootCount >= DIGEST_ROOTS && facts.nodes.length >= 4);
 
+/** Separate faults reported in one graphic are different outages by definition. */
+export const linkedToPost = (candidate, postId) => candidate.raw.posts.some((p) => p.postId === postId);
+
 const PLANNED_TEXT = /planned (maintenance|power interruption|interruption|outage)|scheduled (maintenance|interruption|outage)/i;
 
 /** Planned work also shows up as "restored" posts, so relevance alone is not enough. */
@@ -54,7 +57,8 @@ async function loadCandidates(post) {
     nodeIds: new Set(o.nodes.map((n) => n.nodeId)),
     digest: o.digest,
     localityIds: new Set(o.localities.map((l) => l.localityId)),
-    conversationIds: new Set(o.posts.flatMap((p) => [p.post.conversationId, p.post.externalId]).filter(Boolean)),
+    // links made by the post being placed (an earlier fault of the same graphic) are not thread evidence for it
+    conversationIds: new Set(o.posts.filter((p) => p.postId !== post.id).flatMap((p) => [p.post.conversationId, p.post.externalId]).filter(Boolean)),
     lastUpdateAt: o.lastUpdateAt,
     restoredAt: o.restoredAt,
   }));
@@ -131,7 +135,9 @@ function roleFor(extraction, isFirst) {
 }
 
 export function statusFor(extraction, current) {
-  const { status: s, localities = [] } = extraction.result;
+  const { status: s, localities = [], restoration_percent: pct } = extraction.result;
+  // "restored to 48 percent" is partial no matter how the suburbs were tagged
+  if (pct != null && pct < 100 && !['RESTORED', 'PLANNED', 'CANCELLED'].includes(s)) return pct > 0 ? 'PARTIALLY_RESTORED' : 'ACTIVE';
   // The suburbs are the ground truth for customers: "restored to Willowbrook, but a further fault must be located"
   // is still a restoration, even if the headline status reads INVESTIGATING.
   const restoredAll = localities.length > 0 && localities.every((l) => l.state === 'RESTORED');
@@ -205,8 +211,10 @@ async function applyPost({ post, extraction, facts, outageId, score, reasons, is
     for (const n of mayExpand ? facts.nodes : []) {
       await tx.outageNode.upsert({ where: { outageId_nodeId: { outageId: id, nodeId: n.id } }, create: { outageId: id, nodeId: n.id }, update: {} });
     }
+    // "restored to 48 percent" does not make every named suburb fully restored, whatever the extractor tagged
+    const partial = r.restoration_percent != null && r.restoration_percent < 100 && status !== 'RESTORED';
     for (const localityId of facts.localityIds) {
-      const restored = status === 'RESTORED' || facts.restoredLocalityIds.includes(localityId);
+      const restored = status === 'RESTORED' || (!partial && facts.restoredLocalityIds.includes(localityId));
       if (!mayExpand) {
         if (restored) await tx.outageLocality.updateMany({ where: { outageId: id, localityId }, data: { restored } });
         continue;
@@ -236,7 +244,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0 }) {
   const post = {
     id: postRow.id,
     postedAt: postRow.publishedAt,
-    conversationId: postRow.conversationId,
+    conversationId: facts.fromDigest ? null : postRow.conversationId,
     text: postRow.noteTweetText || postRow.text,
     faultIndex,
     relevance: extraction.relevance,
@@ -253,6 +261,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0 }) {
   if (!LINKABLE.has(extraction.relevance)) return decide({ outcome: 'NEW', reason: `not linkable (${extraction.relevance})` });
 
   const candidates = (await loadCandidates(post))
+    .filter((c) => !facts.fromDigest || !linkedToPost(c, post.id))
     .map((c) => ({ ...c, ...scoreCandidate(post, c) }))
     .sort((a, b) => b.score - a.score || String(a.stableId).localeCompare(String(b.stableId)));
   const top = candidates[0];
