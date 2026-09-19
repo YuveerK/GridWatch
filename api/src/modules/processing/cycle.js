@@ -8,6 +8,7 @@ import { processPending } from './processor.service.js';
 
 function friendly(err) {
   const m = String(err?.message ?? err);
+  if (/^Couldn't reach X/.test(m)) return m; // already written for the operator
   if (/BEARER_TOKEN/i.test(m)) return "The server isn't connected to X yet (X_API_BEARER_TOKEN is missing).";
   if (/GEMINI|API key/i.test(m)) return "The server couldn't reach the AI service. Check the Gemini key and credit.";
   return `Something went wrong: ${m.slice(0, 160)}`;

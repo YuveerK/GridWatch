@@ -67,6 +67,14 @@ describe('refresh cycle', () => {
     expect(broken.calls.sweep).toBe(1);
   });
 
+  it('shows the clear message when the internet drops', async () => {
+    const msg = "Couldn't reach X. Check your internet connection and try again.";
+    const { cycle } = make({ ingest: async () => ({ status: 'FAILED', error: msg }) });
+    cycle.start('manual');
+    await cycle.whenIdle();
+    expect(cycle.status()).toMatchObject({ state: 'error', error: msg });
+  });
+
   it('never runs two cycles at once', async () => {
     const gate = deferred();
     const { cycle, calls } = make({ ingest: async () => (await gate.promise, { status: 'SUCCEEDED' }) });
