@@ -27,6 +27,7 @@ export async function processPost(postId) {
       await setStatus(postId, 'IRRELEVANT');
       return { postId, outcome: 'SKIPPED_REPLY' };
     }
+    const cached = await prisma.postExtraction.findFirst({ where: { postId, status: 'SUCCEEDED' }, select: { id: true } });
     const extraction = await extractPost(postId);
     if (extraction.status !== 'SUCCEEDED') {
       await setStatus(postId, extraction.status === 'FAILED' ? 'PROCESSING_ERROR' : 'NEEDS_REVIEW');
@@ -40,7 +41,29 @@ export async function processPost(postId) {
     const facts = await learnFromExtraction(extraction, postRow.publishedAt);
     const decision = await linkPost({ postRow, extraction, facts });
     await setStatus(postId, decision.outcome === 'NEEDS_REVIEW' ? 'NEEDS_REVIEW' : STATUS_BY_RELEVANCE[extraction.relevance]);
-    return { postId, outcome: decision.outcome, outageId: decision.outageId, unmatchedLocalities: facts.unmatched };
+    const outage = decision.outageId ? await prisma.outage.findUnique({ where: { id: decision.outageId }, select: { title: true, status: true, _count: { select: { posts: true } } } }) : null;
+    return {
+      postId,
+      outcome: decision.outcome,
+      outageId: decision.outageId,
+      unmatchedLocalities: facts.unmatched,
+      detail: {
+        fresh: !cached,
+        tokens: `${extraction.inputTokens ?? 0}/${extraction.outputTokens ?? 0}`,
+        relevance: extraction.relevance,
+        status: extraction.result.status,
+        sdc: facts.sdcNode?.name ?? null,
+        nodes: facts.nodes.map((n) => n.name),
+        localities: extraction.result.localities.length,
+        matchedLocalities: facts.localityIds.length,
+        usedLlm: decision.usedLlm,
+        topScore: decision.topScore,
+        reason: decision.reason,
+        outageTitle: outage?.title ?? null,
+        outageStatus: outage?.status ?? null,
+        outagePosts: outage?._count.posts ?? null,
+      },
+    };
   } catch (err) {
     logger.error({ postId, err: err.message }, 'processing failed');
     await setStatus(postId, 'PROCESSING_ERROR');
@@ -49,7 +72,7 @@ export async function processPost(postId) {
 }
 
 /** Process every post that has no link decision yet, oldest first (order matters for linking). */
-export async function processPending({ limit } = {}) {
+export async function processPending({ limit, onPost } = {}) {
   const posts = await prisma.sourcePost.findMany({
     where: { linkDecision: null, processingStatus: { notIn: ['NEEDS_REVIEW'] } },
     orderBy: { publishedAt: 'asc' },
@@ -59,6 +82,7 @@ export async function processPending({ limit } = {}) {
   const tally = {};
   for (const [i, p] of posts.entries()) {
     const res = await processPost(p.id);
+    onPost?.(res, i + 1, posts.length);
     tally[res.outcome] = (tally[res.outcome] ?? 0) + 1;
     if ((i + 1) % 10 === 0) logger.info({ done: i + 1, total: posts.length, tally }, 'progress');
   }

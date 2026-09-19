@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { prisma } from '../src/db/prisma.js';
 
-const golden = JSON.parse(readFileSync(new URL('../tests/golden/links.json', import.meta.url), 'utf8'));
+const goldenFile = process.argv.find((a) => a.startsWith('--file='))?.split('=')[1] ?? 'links.json';
+const golden = JSON.parse(readFileSync(new URL(`../tests/golden/${goldenFile}`, import.meta.url), 'utf8'));
 delete golden._note;
 
 const posts = await prisma.sourcePost.findMany({
