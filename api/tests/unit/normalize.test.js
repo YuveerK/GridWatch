@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { infraKey, localityKey, similarity } from '../../src/lib/normalize.js';
+import { differsByLabel, infraKey, localityKey, similarity } from '../../src/lib/normalize.js';
 
 describe('normalize', () => {
   it('strips type words from infrastructure names', () => {
@@ -17,5 +17,12 @@ describe('normalize', () => {
     expect(similarity('clover rd', 'clover rd')).toBe(1);
     expect(similarity('freedom park', 'freedom prk')).toBeGreaterThan(0.8);
     expect(similarity('abc', 'xyz')).toBe(0);
+  });
+
+  it('never treats equipment that differs by a short label or number as the same', () => {
+    expect(differsByLabel('tshepisong a', 'tshepisong b')).toBe(true);
+    expect(differsByLabel('clover rd 183', 'clover rd 182')).toBe(true);
+    expect(differsByLabel('roosevelt park', 'roosevelt')).toBe(false);
+    expect(differsByLabel('freedom park', 'freedom prk')).toBe(false);
   });
 });

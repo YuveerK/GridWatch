@@ -13,6 +13,7 @@ export default function Suburb() {
   if (outages.error) return <ErrorBox error={outages.error} />;
 
   const list = outages.data.data;
+  const possible = outages.data.possible ?? [];
   const live = list.filter((o) => LIVE.has(o.status));
   const past = list.filter((o) => !LIVE.has(o.status));
   const s = suburb.data;
@@ -33,6 +34,14 @@ export default function Suburb() {
         <>
           <h2>Current</h2>
           <div className="grid">{live.map((o) => <OutageCard key={o.id} outage={o} />)}</div>
+        </>
+      )}
+
+      {possible.length > 0 && (
+        <>
+          <h2>Possibly affected</h2>
+          <p className="muted small">City Power's posts for these outages named no suburb, but the equipment involved usually serves {s.name}.</p>
+          <div className="grid">{possible.map((o) => <OutageCard key={o.id} outage={o} />)}</div>
         </>
       )}
 

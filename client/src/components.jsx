@@ -35,6 +35,12 @@ export function OutageCard({ outage }) {
           <div style={{ width: `${outage.restorationPercent}%` }} />
         </div>
       )}
+      {shown.length === 0 && (outage.likelyAreas?.length ?? 0) > 0 && (
+        <div className="chips" title="The post named no suburb. These areas are usually served by this equipment.">
+          <span className="muted small">Likely areas:</span>
+          {outage.likelyAreas.slice(0, 5).map((l) => <Chip key={l.id} to={`/suburb/${l.id}`} muted>{l.canonicalName}</Chip>)}
+        </div>
+      )}
       {shown.length > 0 && (
         <div className="chips">
           {shown.map((l) => (

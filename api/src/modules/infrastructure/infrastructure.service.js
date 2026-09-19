@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../../db/prisma.js';
-import { infraKey, localityKey, similarity } from '../../lib/normalize.js';
+import { differsByLabel, infraKey, localityKey, similarity } from '../../lib/normalize.js';
 
 const FUZZY_NODE = 0.9;
 const FUZZY_LOCALITY = 0.92;
@@ -109,6 +109,7 @@ export async function resolveNode({ type, name, at }) {
     let best = null;
     let bestScore = 0;
     for (const p of peers) {
+      if (differsByLabel(key, p.normalizedKey)) continue;
       const s = similarity(key, p.normalizedKey);
       if (s > bestScore) [best, bestScore] = [p, s];
     }

@@ -16,7 +16,7 @@ const outages = await prisma.outage.findMany({
 });
 
 const checks = [];
-const check = (name, why, hits) => checks.push({ name, why, hits });
+const check = (name, why, hits, informational = false) => checks.push({ name, why, hits, informational });
 
 const live = (o) => ['ACTIVE', 'PARTIALLY_RESTORED'].includes(o.status);
 
@@ -50,9 +50,10 @@ check(
   outages.filter((o) => ['RESTORED', 'CLOSED'].includes(o.status) && !o.restoredAt && !o.posts.some((p) => p.role === 'RESTORATION') && o.kind === 'UNPLANNED' && o.status === 'RESTORED'),
 );
 check(
-  'No suburbs at all',
-  'cannot be found by suburb search',
-  outages.filter((o) => o.localities.length === 0),
+  'INFO: no suburb named by City Power (shown with likely areas from equipment)',
+  'not an error: the suburb page lists these under "Possibly affected"',
+  outages.filter((o) => o.localities.length === 0 && o.nodes.length > 0),
+  true,
 );
 check(
   'No equipment and no suburbs',
@@ -77,8 +78,8 @@ let problems = 0;
 console.log(`Audit of ${outages.length} outages\n`);
 for (const c of checks) {
   const n = c.hits.length;
-  problems += n;
-  console.log(`${n === 0 ? 'OK  ' : 'FAIL'}  ${c.name}: ${n}   (${c.why})`);
+  if (!c.informational) problems += n;
+  console.log(`${n === 0 ? 'OK  ' : c.informational ? 'INFO' : 'FAIL'}  ${c.name}: ${n}   (${c.why})`);
   for (const o of c.hits.slice(0, 4)) console.log(`        - ${o.title} [${o.status}] last update ${o.lastUpdateAt.toISOString().slice(0, 16)} | ${short(o.posts.at(-1)?.post.noteTweetText || o.posts.at(-1)?.post.text)}`);
 }
 console.log(`\nPosts needing review/errored: ${review}   Unprocessed posts: ${unprocessed}`);

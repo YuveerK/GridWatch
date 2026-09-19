@@ -40,3 +40,11 @@ export function similarity(a, b) {
   for (const [g, n] of ga) overlap += Math.min(n, gb.get(g) ?? 0);
   return (2 * overlap) / (a.length - 1 + b.length - 1);
 }
+
+/** True when two names differ only in a short (<=2 chars) or numeric token: those are different equipment, not typos. */
+export function differsByLabel(a, b) {
+  const ta = new Set(a.split(' '));
+  const tb = new Set(b.split(' '));
+  const odd = [...ta].filter((t) => !tb.has(t)).concat([...tb].filter((t) => !ta.has(t)));
+  return odd.some((t) => t.length <= 2 || /\d/.test(t));
+}

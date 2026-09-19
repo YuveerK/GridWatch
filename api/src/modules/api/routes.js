@@ -13,6 +13,29 @@ const outageInclude = {
   nodes: { include: { node: { select: { id: true, type: true, name: true, lifecycle: true } } } },
 };
 
+/** Areas usually served by an outage's equipment, for outages whose posts named no suburb. Marked as inferred. */
+async function withLikelyAreas(outages) {
+  const bare = outages.filter((o) => o.localities.length === 0 && o.nodes.length > 0);
+  if (!bare.length) return outages;
+  const nodeIds = [...new Set(bare.flatMap((o) => o.nodes.map((n) => n.nodeId)))];
+  const [learned, nodes] = await Promise.all([
+    prisma.nodeLocality.findMany({ where: { nodeId: { in: nodeIds }, evidenceCount: { gte: 3 } }, include: { locality: { select: { id: true, canonicalName: true } } }, orderBy: { evidenceCount: 'desc' } }),
+    prisma.infraNode.findMany({ where: { id: { in: nodeIds } }, select: { id: true, normalizedKey: true } }),
+  ]);
+  // a station named after a suburb ("Tshepisong Switching Station") is a decent hint for that suburb
+  const sameName = await prisma.locality.findMany({ where: { normalizedName: { in: nodes.map((n) => n.normalizedKey) } }, select: { id: true, canonicalName: true, normalizedName: true } });
+  const keyById = new Map(nodes.map((n) => [n.id, n.normalizedKey]));
+  for (const o of bare) {
+    const seen = new Map();
+    for (const n of o.nodes) {
+      for (const l of learned.filter((x) => x.nodeId === n.nodeId)) seen.set(l.locality.id, l.locality.canonicalName);
+      for (const l of sameName.filter((x) => x.normalizedName === keyById.get(n.nodeId))) seen.set(l.id, l.canonicalName);
+    }
+    o.likelyAreas = [...seen].slice(0, 8).map(([id, canonicalName]) => ({ id, canonicalName }));
+  }
+  return outages;
+}
+
 const shapeOutage = (o) => ({
   id: o.id,
   title: o.title,
@@ -28,6 +51,7 @@ const shapeOutage = (o) => ({
   retroactive: o.retroactive,
   infrastructure: o.nodes?.map((n) => n.node),
   localities: o.localities?.map((l) => ({ ...l.locality, restored: l.restored })),
+  likelyAreas: o.likelyAreas ?? [],
 });
 
 router.get('/health', wrap(async (_req, res) => {
@@ -45,7 +69,7 @@ router.get('/v1/outages', wrap(async (req, res) => {
   if (suburb) locality.normalizedName = { contains: localityKey(suburb) };
   if (region) locality.Region = { code: String(region).toUpperCase() };
   if (Object.keys(locality).length) where.localities = { some: { locality } };
-  const outages = await prisma.outage.findMany({ where, include: outageInclude, orderBy: { lastUpdateAt: 'desc' }, take: Math.min(Number(limit) || 50, 200) });
+  const outages = await withLikelyAreas(await prisma.outage.findMany({ where, include: outageInclude, orderBy: { lastUpdateAt: 'desc' }, take: Math.min(Number(limit) || 50, 200) }));
   res.json({ data: outages.map(shapeOutage) });
 }));
 
@@ -55,6 +79,7 @@ router.get('/v1/outages/:id', wrap(async (req, res) => {
     include: { ...outageInclude, posts: { orderBy: { postedAt: 'asc' }, include: { post: { select: { externalId: true, text: true, noteTweetText: true, publishedAt: true, PostMedia: { select: { url: true } }, extractions: { select: { imageText: true } } } } } } },
   });
   if (!outage) return res.status(404).json({ error: 'not_found' });
+  await withLikelyAreas([outage]);
   res.json({
     ...shapeOutage(outage),
     timeline: outage.posts.map((p) => ({
@@ -90,7 +115,19 @@ router.get('/v1/localities/:id/outages', wrap(async (req, res) => {
     orderBy: { lastUpdateAt: 'desc' },
     take: 50,
   });
-  res.json({ data: outages.map(shapeOutage) });
+  // outages whose posts named no suburb but whose equipment is known to serve this one
+  const loc = await prisma.locality.findUnique({ where: { id: req.params.id }, select: { normalizedName: true } });
+  const possible = await prisma.outage.findMany({
+    where: {
+      localities: { none: {} },
+      status: { in: ['ACTIVE', 'PARTIALLY_RESTORED', 'PLANNED', 'STALE'] },
+      nodes: { some: { node: { OR: [{ localities: { some: { localityId: req.params.id, evidenceCount: { gte: 3 } } } }, { normalizedKey: loc?.normalizedName ?? '\u0000' }] } } },
+    },
+    include: outageInclude,
+    orderBy: { lastUpdateAt: 'desc' },
+    take: 20,
+  });
+  res.json({ data: outages.map(shapeOutage), possible: (await withLikelyAreas(possible)).map(shapeOutage) });
 }));
 
 router.get('/v1/infrastructure/:id', wrap(async (req, res) => {

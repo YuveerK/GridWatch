@@ -41,6 +41,13 @@ export default function OutageDetail() {
           <div className="chips">{restored.map((l) => <Chip key={l.id} to={`/suburb/${l.id}`} muted>{l.canonicalName} ✓</Chip>)}</div>
         </section>
       )}
+      {affected.length === 0 && restored.length === 0 && o.likelyAreas.length > 0 && (
+        <section>
+          <h2>Likely affected areas</h2>
+          <p className="muted small">City Power's posts didn't name a suburb. These are areas this equipment usually serves, so treat them as a guess.</p>
+          <div className="chips">{o.likelyAreas.map((l) => <Chip key={l.id} to={`/suburb/${l.id}`} muted>{l.canonicalName}</Chip>)}</div>
+        </section>
+      )}
       {o.infrastructure.length > 0 && (
         <section>
           <h2>Infrastructure involved</h2>
