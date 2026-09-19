@@ -6,7 +6,8 @@ const FILTERS = [
   { id: 'live', label: 'Live', status: 'ACTIVE,PARTIALLY_RESTORED' },
   { id: 'planned', label: 'Planned', status: 'PLANNED' },
   { id: 'restored', label: 'Restored', status: 'RESTORED' },
-  { id: 'all', label: 'All', status: 'ACTIVE,PARTIALLY_RESTORED,PLANNED,RESTORED,CANCELLED,CLOSED' },
+  { id: 'stale', label: 'No update', status: 'STALE' },
+  { id: 'all', label: 'All', status: 'ACTIVE,PARTIALLY_RESTORED,PLANNED,RESTORED,STALE,CANCELLED,CLOSED' },
 ];
 
 export default function Dashboard() {

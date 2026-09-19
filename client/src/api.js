@@ -55,5 +55,6 @@ export const STATUS = {
   RESTORED: { label: 'Restored', tone: 'good' },
   PLANNED: { label: 'Planned', tone: 'info' },
   CANCELLED: { label: 'Cancelled', tone: 'muted' },
+  STALE: { label: 'No recent update', tone: 'muted' },
   CLOSED: { label: 'Closed', tone: 'muted' },
 };

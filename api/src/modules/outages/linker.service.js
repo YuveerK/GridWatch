@@ -129,14 +129,20 @@ function roleFor(extraction, isFirst) {
   return extraction.relevance === 'RESTORATION' || extraction.result.status === 'RESTORED' ? 'RESTORATION' : 'UPDATE';
 }
 
-function statusFor(extraction, current) {
-  const s = extraction.result.status;
-  if (s === 'RESTORED') return 'RESTORED';
-  if (s === 'PARTIALLY_RESTORED') return 'PARTIALLY_RESTORED';
+export function statusFor(extraction, current) {
+  const { status: s, localities = [] } = extraction.result;
+  // The suburbs are the ground truth for customers: "restored to Willowbrook, but a further fault must be located"
+  // is still a restoration, even if the headline status reads INVESTIGATING.
+  const restoredAll = localities.length > 0 && localities.every((l) => l.state === 'RESTORED');
+  const restoredSome = localities.some((l) => l.state === 'RESTORED');
+  // Only override the headline when it is silent about restoration (a post that itself says "partially restored" stays partial).
+  const headlineSilent = !['RESTORED', 'PARTIALLY_RESTORED', 'PLANNED', 'CANCELLED'].includes(s);
+  if (s === 'RESTORED' || (headlineSilent && restoredAll)) return 'RESTORED';
+  if (s === 'PARTIALLY_RESTORED' || (headlineSilent && restoredSome)) return 'PARTIALLY_RESTORED';
   if (s === 'CANCELLED') return 'CANCELLED';
   if (s === 'PLANNED') return 'PLANNED';
   // a fresh "still being repaired" update does not un-restore a restored outage
-  return current === 'RESTORED' || current === 'PARTIALLY_RESTORED' ? current : 'ACTIVE';
+  return current === 'RESTORED' || current === 'PARTIALLY_RESTORED' ? current : 'ACTIVE'; // a STALE outage that gets news is live again
 }
 
 const GENERIC_NODE = /^(pole[- ]mounted|mini[- ]?substations?|ring main units?|transformers?|cables?|lines?|feederboard.*|standby.*)$/i;
@@ -293,12 +299,18 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0 }) {
   return decide({ outcome: outageId ? 'LINKED' : 'NEW', outageId: finalId, topScore: top?.score ?? null, usedLlm, reason, candidates: summary });
 }
 
-/** Close outages that have been quiet for OUTAGE_AUTOCLOSE_HOURS. */
+/**
+ * Housekeeping, safe to run any time:
+ *  - live outages with no news for OUTAGE_AUTOCLOSE_HOURS become STALE (outcome unknown, not "resolved")
+ *  - restored outages older than that are CLOSED; planned ones once well past their window
+ */
 export async function sweepStaleOutages(now = new Date()) {
   const cutoff = new Date(now.getTime() - env.OUTAGE_AUTOCLOSE_HOURS * HOUR);
-  const { count } = await prisma.outage.updateMany({
-    where: { lastUpdateAt: { lt: cutoff }, status: { in: ['ACTIVE', 'PARTIALLY_RESTORED', 'RESTORED', 'PLANNED'] } },
-    data: { status: 'CLOSED' },
-  });
-  return count;
+  const plannedCutoff = new Date(now.getTime() - PLANNED_WINDOW_HOURS * HOUR);
+  const [stale, closed, closedPlanned] = await Promise.all([
+    prisma.outage.updateMany({ where: { lastUpdateAt: { lt: cutoff }, status: { in: ['ACTIVE', 'PARTIALLY_RESTORED'] } }, data: { status: 'STALE' } }),
+    prisma.outage.updateMany({ where: { lastUpdateAt: { lt: cutoff }, status: { in: ['RESTORED', 'CANCELLED'] } }, data: { status: 'CLOSED' } }),
+    prisma.outage.updateMany({ where: { lastUpdateAt: { lt: plannedCutoff }, status: 'PLANNED' }, data: { status: 'CLOSED' } }),
+  ]);
+  return { stale: stale.count, closed: closed.count + closedPlanned.count };
 }

@@ -8,6 +8,16 @@ import { processPending } from './modules/processing/processor.service.js';
 
 createApp().listen(env.PORT, () => logger.info(`GridWatch API listening on :${env.PORT}`));
 
+const sweep = async () => {
+  try {
+    logger.info(await sweepStaleOutages(), 'sweep');
+  } catch (err) {
+    logger.error({ err: err.message }, 'sweep failed');
+  }
+};
+sweep();
+setInterval(sweep, 60 * 60 * 1000).unref();
+
 let busy = false;
 async function tick() {
   if (busy) return;
@@ -15,7 +25,7 @@ async function tick() {
   try {
     if (env.X_API_BEARER_TOKEN) logger.info(await ingestNewPosts(), 'ingest');
     logger.info(await processPending(), 'process');
-    logger.info({ closed: await sweepStaleOutages() }, 'sweep');
+    await sweep();
   } catch (err) {
     logger.error({ err: err.message }, 'scheduled tick failed');
   } finally {

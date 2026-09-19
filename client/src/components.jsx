@@ -26,6 +26,9 @@ export function OutageCard({ outage }) {
         <span className="muted small">{outage.sdc ? `${prettySdc(outage.sdc)} SDC · ` : ''}updated {timeAgo(outage.lastUpdateAt)}</span>
       </div>
       <h3><Link to={`/outages/${outage.id}`}>{outage.title}</Link></h3>
+      {outage.status === 'STALE' && (
+        <p className="small muted">No update from City Power for {timeAgo(outage.lastUpdateAt).replace(' ago', '')}. It may already be resolved.</p>
+      )}
       {outage.cause && <p className="small">Cause: {outage.cause}</p>}
       {outage.restorationPercent != null && outage.status !== 'RESTORED' && (
         <div className="bar" title={`${outage.restorationPercent}% restored`}>
