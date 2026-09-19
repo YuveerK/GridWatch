@@ -1,6 +1,9 @@
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useTick } from '../lib/hooks.js';
 import { cooldownSeconds, describeResult, startRefresh, useRefresh } from '../lib/refresh.js';
 import Icon from './Icon.jsx';
+import WhatChanged from './WhatChanged.jsx';
 
 const STEP = { fetching: 'Fetching from X…', reading: 'Reading posts…', tidying: 'Updating outages…' };
 
@@ -19,7 +22,11 @@ function label(s, wait) {
  */
 export default function RefreshButton({ compact }) {
   const s = useRefresh();
+  const [open, setOpen] = useState(false);
   useTick(1000);
+  useEffect(() => {
+    if (s.state === 'running') setOpen(false);
+  }, [s.state]);
   if (!s.loaded || s.enabled === false) return null;
 
   const running = s.state === 'running';
@@ -54,9 +61,20 @@ export default function RefreshButton({ compact }) {
         {!running && outcome && (
           <span className="row" style={{ gap: 6, color: outcome.tone === 'live' ? 'var(--live)' : 'var(--ink-2)' }}>
             <Icon name={outcome.icon} /> {outcome.msg}
+            {s.state === 'done' && s.result?.newPosts > 0 && (
+              <button className="link small" style={{ background: 'none', border: 0, cursor: 'pointer', padding: 0 }} onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+                {open ? 'Hide what changed' : 'See what changed'}
+              </button>
+            )}
           </span>
         )}
       </div>
+      {open && s.state === 'done' && s.startedAt && (
+        <div className="card card-pad" style={{ marginTop: 12, maxWidth: 560, width: '100%' }}>
+          <WhatChanged since={new Date(s.startedAt).toISOString()} label="From this fetch" />
+          <p className="small" style={{ marginTop: 12 }}><Link to="/activity" className="link">Open the full activity page <Icon name="arrow" /></Link></p>
+        </div>
+      )}
     </div>
   );
 }

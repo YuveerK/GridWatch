@@ -8,8 +8,11 @@ import { BarList, ColumnChart, StatTile } from '../components/charts.jsx';
 import { CardSkeleton, EmptyState, ErrorState, Freshness, InfoTip, SectionHead, Skeleton, StatusBadge } from '../components/ui.jsx';
 import { nice, prettySdc, statusMeta, timeAgo, useApi } from '../lib/api.js';
 import { useDocumentTitle, useTick } from '../lib/hooks.js';
+import { isNewSince } from '../lib/newness.js';
+import { useRefresh } from '../lib/refresh.js';
 
 function Feed({ items }) {
+  const { lastBatch } = useRefresh();
   if (!items.length) return <p className="muted card-pad">No updates yet.</p>;
   return (
     <ul className="feed">
@@ -19,6 +22,7 @@ function Feed({ items }) {
           <li key={`${u.outageId}-${u.externalId}-${i}`}>
             <div className="meta">
               <span className={`badge tone-${m.tone}`} style={{ padding: '2px 8px', fontSize: 11.5 }}><Icon name={m.icon} />{m.label}</span>
+              {isNewSince(u.ingestedAt, lastBatch) && <span className="new-pill">New</span>}
               <span>{timeAgo(u.postedAt)}</span>
               {u.sdc && <span>· {prettySdc(u.sdc)}</span>}
             </div>
@@ -100,7 +104,7 @@ export default function Overview() {
           </section>
 
           <aside aria-labelledby="feed-h">
-            <SectionHead id="feed-h" title="Latest updates" sub="Straight from City Power, in one line" />
+            <SectionHead id="feed-h" title="Latest updates" sub="Straight from City Power, in one line" action={<Link to="/activity" className="link">What changed <Icon name="arrow" /></Link>} />
             <div className="card">
               {loading && !data ? <div className="card-pad stack">{[0, 1, 2, 3].map((i) => <Skeleton key={i} h={44} />)}</div> : <Feed items={data?.latestUpdates ?? []} />}
             </div>

@@ -448,3 +448,15 @@ details.orig .body { padding: 2px 14px 14px; }
 .btn:disabled, .icon-btn:disabled { opacity: 0.6; cursor: progress; }
 .icon.spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- what changed ---------- */
+.chg-h { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; margin-bottom: 10px; }
+.chg-h .icon { color: var(--ink-3); }
+.chg-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.chg { padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.chg .t { font-weight: 700; }
+.chg .t:hover { text-decoration: underline; }
+.chg-updates { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.chg-updates li { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; }
+.chg-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--tone, var(--brand)); margin-top: 7px; flex: none; }
+.new-pill { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: #fff; background: var(--brand); }

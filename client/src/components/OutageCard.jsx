@@ -1,5 +1,7 @@
 import { Link } from 'react-router-dom';
 import { firstSentence, fmtDay, nice, plural, prettySdc, statusMeta, timeAgo } from '../lib/api.js';
+import { isNewSince } from '../lib/newness.js';
+import { useRefresh } from '../lib/refresh.js';
 import Icon from './Icon.jsx';
 import { Chip, Meter, StatusBadge } from './ui.jsx';
 
@@ -12,6 +14,8 @@ export function scheduleLabel(s) {
 
 export default function OutageCard({ outage: o, compact }) {
   const m = statusMeta(o.status);
+  const { lastBatch } = useRefresh();
+  const fresh = isNewSince(o.latest?.ingestedAt, lastBatch);
   const areas = o.localities ?? [];
   const shown = areas.slice(0, compact ? 2 : 3);
   const likely = areas.length === 0 ? o.likelyAreas ?? [] : [];
@@ -22,7 +26,7 @@ export default function OutageCard({ outage: o, compact }) {
     <article className={`card ocard tone-${m.tone}${compact ? ' compact' : ''}`}>
       <div className="row between" style={{ gap: 8 }}>
         <StatusBadge status={o.status} kind={o.kind} />
-        <span className="small faint">{o.sdc ? prettySdc(o.sdc) : ''}</span>
+        <span className="row small faint" style={{ gap: 8 }}>{fresh && <span className="new-pill" title="Updated in the latest fetch">New update</span>}{o.sdc ? prettySdc(o.sdc) : ''}</span>
       </div>
       <h3><Link to={`/outages/${o.id}`} className="stretch">{nice(o.title)}</Link></h3>
       {planned && (

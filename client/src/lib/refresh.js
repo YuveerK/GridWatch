@@ -12,6 +12,7 @@ export const REFRESHED_EVENT = 'gridwatch:refreshed';
 let snap = { loaded: false, enabled: true, state: 'idle', receivedAt: 0 };
 const listeners = new Set();
 let timer = null;
+let inflight = false;
 
 function publish(next) {
   snap = { ...snap, ...next, loaded: true, receivedAt: Date.now() };
@@ -25,15 +26,22 @@ function apply(server, extra = {}) {
   if (server.state !== 'running' && timer) {
     clearInterval(timer);
     timer = null;
-    if (wasRunning && server.state === 'done') window.dispatchEvent(new Event(REFRESHED_EVENT));
+    if (wasRunning && server.state === 'done') {
+      window.dispatchEvent(new Event(REFRESHED_EVENT));
+      setTimeout(poll, 300); // pick up the new "latest batch" time
+    }
   }
 }
 
 async function poll() {
+  if (inflight) return;
+  inflight = true;
   try {
     apply(await get('/v1/refresh'));
   } catch {
     /* the server may be restarting; keep the last known state and try again */
+  } finally {
+    inflight = false;
   }
 }
 

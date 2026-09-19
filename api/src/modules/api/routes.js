@@ -50,7 +50,7 @@ async function decorate(outages) {
   await withLikelyAreas(outages);
   const ids = outages.map((o) => o.id);
   const rows = await prisma.$queryRaw`
-    SELECT DISTINCT ON (op."outageId") op."outageId" AS "outageId", op."postedAt" AS "postedAt", sp."externalId" AS "externalId", ps."summary" AS "summary"
+    SELECT DISTINCT ON (op."outageId") op."outageId" AS "outageId", op."postedAt" AS "postedAt", sp."createdAt" AS "ingestedAt", sp."externalId" AS "externalId", ps."summary" AS "summary"
     FROM "OutagePost" op
     JOIN "SourcePost" sp ON sp."id" = op."postId"
     LEFT JOIN "PostSummary" ps ON ps."postId" = op."postId" AND ps."faultIndex" = op."faultIndex"
@@ -74,7 +74,7 @@ async function decorate(outages) {
   }
   for (const o of outages) {
     const l = latest.get(o.id);
-    o.latest = l ? { summary: l.summary, at: l.postedAt, url: `https://x.com/CityPowerJhb/status/${l.externalId}` } : null;
+    o.latest = l ? { summary: l.summary, at: l.postedAt, ingestedAt: l.ingestedAt, url: `https://x.com/CityPowerJhb/status/${l.externalId}` } : null;
     o.scheduled = schedule.get(o.id) ?? null;
   }
   return outages;
@@ -172,12 +172,12 @@ router.get('/v1/overview', wrap(async (_req, res) => {
     prisma.outage.findMany({ where: { status: { in: LIVE } }, include: outageInclude, orderBy: { lastUpdateAt: 'desc' }, take: 8 }),
     prisma.outage.groupBy({ by: ['sdcName', 'status'], where: { status: { in: [...LIVE, 'PLANNED'] } }, _count: true }),
     prisma.$queryRaw`
-      SELECT to_char(("startedAt" AT TIME ZONE 'Africa/Johannesburg')::date, 'YYYY-MM-DD') AS day, COUNT(*)::int AS n
-      FROM "Outage" WHERE kind = 'UNPLANNED' AND "startedAt" >= now() - interval '16 days' GROUP BY 1 ORDER BY 1`,
+      SELECT to_char((("startedAt" AT TIME ZONE 'UTC') AT TIME ZONE 'Africa/Johannesburg')::date, 'YYYY-MM-DD') AS day, COUNT(*)::int AS n
+      FROM "Outage" WHERE kind = 'UNPLANNED' AND "startedAt" >= (now() AT TIME ZONE 'UTC') - interval '16 days' GROUP BY 1 ORDER BY 1`,
     prisma.outage.count({ where: { status: { in: ['RESTORED', 'CLOSED'] }, restoredAt: { gte: new Date(now - 24 * HOUR) } } }),
     prisma.sourcePost.aggregate({ _max: { publishedAt: true } }),
     prisma.$queryRaw`
-      SELECT op."outageId" AS "outageId", op."postedAt" AS "postedAt", op."role"::text AS "role", ps."summary" AS "summary",
+      SELECT op."outageId" AS "outageId", op."postedAt" AS "postedAt", sp."createdAt" AS "ingestedAt", op."role"::text AS "role", ps."summary" AS "summary",
              o."title" AS "title", o."status"::text AS "status", o."sdcName" AS "sdc", sp."externalId" AS "externalId"
       FROM "OutagePost" op
       JOIN "Outage" o ON o."id" = op."outageId"
@@ -360,7 +360,48 @@ router.get('/v1/infrastructure', wrap(async (req, res) => {
 const refreshEnabled = () => env.REFRESH_BUTTON === 'on';
 
 router.get('/v1/refresh', wrap(async (_req, res) => {
-  res.json({ enabled: refreshEnabled(), ...cycle.status() });
+  const lastBatch = await prisma.ingestionRun.findFirst({
+    where: { postsInserted: { gt: 0 } },
+    orderBy: { startedAt: 'desc' },
+    select: { startedAt: true, completedAt: true, postsInserted: true },
+  });
+  res.json({ enabled: refreshEnabled(), ...cycle.status(), lastBatch });
+}));
+
+/**
+ * What changed since a moment in time: outages that were opened or got updates, with each update's one-line
+ * summary, plus how many posts were read and how many were not outage-related (customer replies, notices).
+ */
+router.get('/v1/changes', wrap(async (req, res) => {
+  const parsed = new Date(String(req.query.since ?? ''));
+  const since = Number.isNaN(parsed.getTime()) ? new Date(Date.now() - 24 * HOUR) : parsed;
+  const rows = await prisma.$queryRaw`
+    SELECT ld."outageId" AS "outageId", ld."faultIndex" AS "faultIndex",
+           o."title" AS "title", o."status"::text AS "status", o."sdcName" AS "sdc", o."kind"::text AS "kind", o."createdAt" AS "outageCreatedAt",
+           op."role"::text AS "role", sp."externalId" AS "externalId", sp."publishedAt" AS "postedAt", ps."summary" AS "summary"
+    FROM "LinkDecision" ld
+    JOIN "Outage" o ON o."id" = ld."outageId"
+    JOIN "SourcePost" sp ON sp."id" = ld."postId"
+    LEFT JOIN "OutagePost" op ON op."outageId" = ld."outageId" AND op."postId" = ld."postId"
+    LEFT JOIN "PostSummary" ps ON ps."postId" = ld."postId" AND ps."faultIndex" = ld."faultIndex"
+    WHERE ld."createdAt" >= ${since.toISOString()}::timestamp AND ld."outageId" IS NOT NULL
+    ORDER BY sp."publishedAt" ASC`;
+
+  const byOutage = new Map();
+  for (const r of rows) {
+    const o = byOutage.get(r.outageId) ?? { id: r.outageId, title: r.title, status: r.status, sdc: r.sdc, kind: r.kind, isNew: r.outageCreatedAt >= since, updates: [] };
+    o.updates.push({ postedAt: r.postedAt, role: r.role, summary: r.summary, url: `https://x.com/CityPowerJhb/status/${r.externalId}` });
+    byOutage.set(r.outageId, o);
+  }
+  const outages = [...byOutage.values()].sort((a, b) => b.updates.at(-1).postedAt - a.updates.at(-1).postedAt);
+
+  const [newPosts, replies, notices, needsReview] = await Promise.all([
+    prisma.sourcePost.count({ where: { createdAt: { gte: since } } }),
+    prisma.linkDecision.count({ where: { createdAt: { gte: since }, reason: { startsWith: 'customer reply' } } }),
+    prisma.linkDecision.count({ where: { createdAt: { gte: since }, reason: { startsWith: 'not linkable' } } }),
+    prisma.linkDecision.count({ where: { createdAt: { gte: since }, outcome: 'NEEDS_REVIEW' } }),
+  ]);
+  res.json({ since, counts: { newPosts, replies, notices, needsReview, outagesNew: outages.filter((o) => o.isNew).length, outagesUpdated: outages.filter((o) => !o.isNew).length }, outages });
 }));
 
 router.post('/v1/refresh', wrap(async (req, res) => {
