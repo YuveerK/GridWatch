@@ -37,9 +37,11 @@ export const extractionSchema = z.object({
         restoration_percent: z.number().int().min(0).max(100).nullable(),
         equipment: z.array(entitySchema).describe('Only the equipment of THIS fault.'),
         localities: z.array(localitySchema).describe('Only the suburbs of THIS fault.'),
+        summary: z.string().describe('One plain sentence (max 25 words) on what is happening with THIS fault right now.'),
       }),
     )
     .describe('ONLY when the post or its graphic reports SEVERAL separate faults (typical SDC "outage update" graphics listing each active outage in its own section): one item per separate fault. Empty array when the post is about a single fault.'),
+  update_summary: z.string().describe('ONE plain sentence (max 25 words) telling a resident what this update says: what is happening, cause, progress, who is on site, what happens next, any time estimate. No hashtags, no phone numbers, no thanks or boilerplate, no long suburb lists (max 3 names).'),
   image_text: z.string().nullable().describe('Verbatim transcription of text visible in the attached images, preserving row/column structure. Maximum 3000 characters; stop there for very long lists. Null if no images or no text.'),
   confidence: z.number().min(0).max(1),
   review_reason: z.string().nullable().describe('Why a human should double check, else null.'),

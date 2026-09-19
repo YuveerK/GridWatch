@@ -2,6 +2,11 @@ import { Link, useParams } from 'react-router-dom';
 import { Chip, ErrorBox, Loading, StatusBadge } from '../components.jsx';
 import { cleanPostText, fmtDate, prettySdc, timeAgo, useApi } from '../api.js';
 
+const firstSentence = (t) => {
+  const m = t.replace(/\s+/g, ' ').trim().match(/^.{20,220}?[.!?](\s|$)/);
+  return m ? m[0].trim() : `${t.replace(/\s+/g, ' ').trim().slice(0, 200)}…`;
+};
+
 const ROLE = { OPENED: 'First report', UPDATE: 'Update', RESTORATION: 'Restoration' };
 
 export default function OutageDetail() {
@@ -70,24 +75,28 @@ export default function OutageDetail() {
                 <strong>{ROLE[t.role] ?? t.role}</strong>
                 <span className="muted small">{fmtDate(t.postedAt)}</span>
               </div>
-              <p className="post-text">{cleanPostText(t.text) || t.text}</p>
-              {t.images.length > 0 && (
-                <div className="images">
-                  {t.images.map((src) => (
-                    <a key={src} href={src} target="_blank" rel="noreferrer"><img src={`${src}?name=small`} alt="Image attached to the City Power post" loading="lazy" /></a>
-                  ))}
-                </div>
-              )}
-              {t.imageText && (
-                <details>
-                  <summary>Text read from the image</summary>
-                  <p className="post-text small">{t.imageText}</p>
-                </details>
-              )}
-              <p className="small">
-                <a href={t.url} target="_blank" rel="noreferrer">View on X ↗</a>
-                {t.reasons?.length > 0 && <span className="muted"> · linked because: {t.reasons.join(', ')}</span>}
-              </p>
+              <p className="tl-summary">{t.summary || firstSentence(cleanPostText(t.text) || t.text)}</p>
+              <details className="original">
+                <summary>City Power's original post{t.images.length > 0 ? ` · ${t.images.length} image${t.images.length === 1 ? '' : 's'}` : ''}</summary>
+                <p className="post-text">{cleanPostText(t.text) || t.text}</p>
+                {t.images.length > 0 && (
+                  <div className="images">
+                    {t.images.map((src) => (
+                      <a key={src} href={src} target="_blank" rel="noreferrer"><img src={`${src}?name=small`} alt="Image attached to the City Power post" loading="lazy" /></a>
+                    ))}
+                  </div>
+                )}
+                {t.imageText && (
+                  <details className="nested">
+                    <summary>Text read from the image</summary>
+                    <p className="post-text small">{t.imageText}</p>
+                  </details>
+                )}
+                <p className="small">
+                  <a href={t.url} target="_blank" rel="noreferrer">View on X ↗</a>
+                  {t.reasons?.length > 0 && <span className="muted"> · linked here because: {t.reasons.join(', ')}</span>}
+                </p>
+              </details>
             </li>
           ))}
         </ol>

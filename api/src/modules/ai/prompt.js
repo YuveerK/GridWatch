@@ -10,6 +10,7 @@ Rules:
 - A post whose only substance is how many calls/faults an SDC has ("sitting with 390 calls", "364 open calls") is SDC_SUMMARY, even if its hashtags say #CityPowerOutages.
 - Awareness, events, theft campaigns, tips, tariffs, WhatsApp channel promos and thank-yous with no outage detail are GENERAL_NOTICE or IRRELEVANT.
 - Equipment that is only mentioned as where the crew is currently busy ("the team will attend this outage after finishing at Lotus Substation", "once the current task at X is complete") is NOT part of this outage: leave it out of entities. Only list equipment that has failed or is being repaired for THIS outage.
+- update_summary (and each fault's summary): ONE plain sentence, max 25 words, facts only, written for a resident: what is happening, cause, progress, who is on site, what happens next, time estimate. No hashtags, phone numbers, thanks or apologies.
 - Locality names exactly as written; do not expand abbreviations. Return null / empty arrays when absent.`;
 
 export function buildUserText({ post, knowledge }) {

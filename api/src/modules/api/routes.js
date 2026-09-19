@@ -80,10 +80,12 @@ router.get('/v1/outages/:id', wrap(async (req, res) => {
   });
   if (!outage) return res.status(404).json({ error: 'not_found' });
   await withLikelyAreas([outage]);
+  const summaries = new Map((await prisma.postSummary.findMany({ where: { postId: { in: outage.posts.map((p) => p.postId) } } })).map((s) => [`${s.postId}|${s.faultIndex}`, s.summary]));
   res.json({
     ...shapeOutage(outage),
     timeline: outage.posts.map((p) => ({
       role: p.role,
+      summary: summaries.get(`${p.postId}|${p.faultIndex}`) ?? null,
       postedAt: p.postedAt,
       score: p.score,
       reasons: p.reasons,

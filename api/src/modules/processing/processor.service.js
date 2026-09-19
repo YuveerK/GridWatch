@@ -32,6 +32,7 @@ async function processFaults({ postRow, extraction, faults }) {
         cause: f.cause,
         eta_text: f.eta_text,
         restoration_percent: f.restoration_percent,
+        update_summary: f.summary ?? null,
         entities: [...(sdc ? [{ type: 'SDC', name: sdc, parent_name: null }] : []), ...f.equipment],
         localities: f.localities,
         faults: [],

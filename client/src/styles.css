@@ -152,3 +152,9 @@ details summary { cursor: pointer; color: var(--muted); font-size: 0.875rem; }
   .facts { grid-template-columns: 1fr; gap: 0; }
   .facts dd { margin-bottom: 8px; }
 }
+
+.tl-summary { margin: 6px 0 8px; font-weight: 500; }
+details.original { margin: 4px 0 2px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; background: var(--surface); }
+details.original > summary { font-size: 0.85rem; }
+details.original[open] > summary { margin-bottom: 6px; }
+details.nested { margin: 6px 0; }

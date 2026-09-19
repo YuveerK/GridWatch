@@ -80,6 +80,19 @@ export async function extractPost(postId, { force = false } = {}) {
     durationMs: Date.now() - started,
     error: error ?? (failed ? `${failed} image(s) could not be fetched` : null),
   };
+  if (result) {
+    const faults = result.faults ?? [];
+    const rows = faults.length >= 2 || (faults.length === 1 && result.relevance === 'SDC_SUMMARY')
+      ? faults.map((f, i) => ({ faultIndex: i, summary: f.summary }))
+      : [{ faultIndex: 0, summary: result.update_summary }];
+    for (const r of rows.filter((x) => x.summary?.trim())) {
+      await prisma.postSummary.upsert({
+        where: { postId_faultIndex: { postId, faultIndex: r.faultIndex } },
+        create: { postId, faultIndex: r.faultIndex, summary: r.summary.trim(), model: env.GEMINI_MODEL },
+        update: { summary: r.summary.trim(), model: env.GEMINI_MODEL },
+      });
+    }
+  }
   return prisma.postExtraction.upsert({
     where: { postId_promptVersion: { postId, promptVersion } },
     create: { postId, promptVersion, ...data },

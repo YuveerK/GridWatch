@@ -217,7 +217,7 @@ async function applyPost({ post, extraction, facts, outageId, score, reasons, is
       });
     }
     if (status === 'RESTORED') await tx.outageLocality.updateMany({ where: { outageId: id }, data: { restored: true } });
-    const opData = { role: roleFor(extraction, isNew && !retroactive), score, reasons, postedAt: post.postedAt };
+    const opData = { role: roleFor(extraction, isNew && !retroactive), score, reasons, postedAt: post.postedAt, faultIndex: post.faultIndex ?? 0 };
     await tx.outagePost.upsert({
       where: { outageId_postId: { outageId: id, postId: post.id } },
       create: { outageId: id, postId: post.id, ...opData },
@@ -237,6 +237,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0 }) {
     postedAt: postRow.publishedAt,
     conversationId: postRow.conversationId,
     text: postRow.noteTweetText || postRow.text,
+    faultIndex,
     relevance: extraction.relevance,
     status: extraction.result.status,
     kind: isPlanned(extraction, postRow.noteTweetText || postRow.text) ? 'PLANNED' : 'UNPLANNED',

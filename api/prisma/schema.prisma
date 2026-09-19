@@ -65,6 +65,7 @@ model SourcePost {
   extractions      PostExtraction[]
   outagePosts      OutagePost[]
   linkDecisions    LinkDecision[]
+  summaries        PostSummary[]
 
   @@unique([platform, externalId])
   @@index([processingStatus, publishedAt])
@@ -375,6 +376,7 @@ model OutagePost {
   role     OutagePostRole
   score    Float?
   reasons  Json?
+  faultIndex Int          @default(0)
   postedAt DateTime
   outage   Outage         @relation(fields: [outageId], references: [id], onDelete: Cascade)
   post     SourcePost     @relation(fields: [postId], references: [id], onDelete: Cascade)
@@ -382,6 +384,19 @@ model OutagePost {
   @@id([outageId, postId])
   @@index([outageId, postedAt])
   @@index([postId])
+}
+
+// One-sentence resident-friendly summary of a post (or of one fault inside a multi-fault graphic).
+// Kept apart from outage links so it survives replays of the engine.
+model PostSummary {
+  postId     String
+  faultIndex Int      @default(0)
+  summary    String
+  model      String
+  createdAt  DateTime @default(now())
+  post       SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([postId, faultIndex])
 }
 
 model LinkDecision {
