@@ -12,6 +12,8 @@ const schema = z.object({
   X_SOURCE_ACCOUNT_ID: z.string().default('337882328'),
   X_SOURCE_ACCOUNT_NAME: z.string().default('CityPowerJhb'),
   X_POLL_INTERVAL_MINUTES: z.coerce.number().default(5),
+  GEMINI_THINKING: z.enum(['default', 'minimal']).default('default'),
+  KNOWLEDGE_CONTEXT: z.enum(['on', 'off']).default('on'),
   PROCESSING_CONCURRENCY: z.coerce.number().default(3),
   MEDIA_MAX_BYTES: z.coerce.number().default(10 * 1024 * 1024),
   LINK_HIGH_SCORE: z.coerce.number().default(0.7),

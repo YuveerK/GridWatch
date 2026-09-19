@@ -41,7 +41,7 @@ export async function extractPost(postId, { force = false } = {}) {
   const text = postText(post);
   const started = Date.now();
   const { parts: imageParts, failed } = await loadImages(post);
-  const knowledge = await knowledgeContext(sdcFromText(text));
+  const knowledge = env.KNOWLEDGE_CONTEXT === 'on' ? await knowledgeContext(sdcFromText(text)) : null;
   const userText = buildUserText({
     post: { text, publishedAtLocal: sast(post.publishedAt), isReply: post.conversationId !== post.externalId },
     knowledge,

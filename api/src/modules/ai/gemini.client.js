@@ -12,6 +12,7 @@ export async function generateJson({ systemInstruction, parts, jsonSchema, hasIm
       systemInstruction,
       temperature: 0,
       maxOutputTokens: 6000,
+      ...(env.GEMINI_THINKING === 'minimal' ? { thinkingConfig: { thinkingLevel: 'MINIMAL' } } : {}),
       responseMimeType: 'application/json',
       responseJsonSchema: jsonSchema,
       ...(hasImages ? { mediaResolution: 'MEDIA_RESOLUTION_HIGH' } : {}),
@@ -20,6 +21,7 @@ export async function generateJson({ systemInstruction, parts, jsonSchema, hasIm
   return {
     text: response.text,
     inputTokens: response.usageMetadata?.promptTokenCount ?? null,
-    outputTokens: response.usageMetadata?.candidatesTokenCount ?? null,
+    // thinking tokens are billed as output
+    outputTokens: (response.usageMetadata?.candidatesTokenCount ?? 0) + (response.usageMetadata?.thoughtsTokenCount ?? 0),
   };
 }

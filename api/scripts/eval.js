@@ -4,14 +4,18 @@ import { prisma } from '../src/db/prisma.js';
 const goldenFile = process.argv.find((a) => a.startsWith('--file='))?.split('=')[1] ?? 'links.json';
 const golden = JSON.parse(readFileSync(new URL(`../tests/golden/${goldenFile}`, import.meta.url), 'utf8'));
 delete golden._note;
+const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1];
+const from = arg('from') ? new Date(arg('from')) : null;
+const to = arg('to') ? new Date(arg('to')) : null;
 
 const posts = await prisma.sourcePost.findMany({
   where: { OR: Object.keys(golden).map((s) => ({ externalId: { endsWith: s } })) },
-  select: { externalId: true, outagePost: { select: { outageId: true } }, text: true },
+  select: { externalId: true, publishedAt: true, outagePost: { select: { outageId: true } }, text: true },
 });
 
 const items = [];
 for (const p of posts) {
+  if ((from && p.publishedAt < from) || (to && p.publishedAt >= to)) continue;
   const key = Object.keys(golden).find((k) => p.externalId.endsWith(k));
   items.push({ key, truth: golden[key], predicted: p.outagePost?.outageId ?? null, text: p.text.replace(/\s+/g, ' ').slice(0, 80) });
 }

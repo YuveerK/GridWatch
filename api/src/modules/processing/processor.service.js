@@ -72,9 +72,13 @@ export async function processPost(postId) {
 }
 
 /** Process every post that has no link decision yet, oldest first (order matters for linking). */
-export async function processPending({ limit, onPost } = {}) {
+export async function processPending({ limit, onPost, from, to } = {}) {
   const posts = await prisma.sourcePost.findMany({
-    where: { linkDecision: null, processingStatus: { notIn: ['NEEDS_REVIEW'] } },
+    where: {
+      linkDecision: null,
+      processingStatus: { notIn: ['NEEDS_REVIEW'] },
+      ...(from || to ? { publishedAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } } : {}),
+    },
     orderBy: { publishedAt: 'asc' },
     select: { id: true },
     ...(limit ? { take: limit } : {}),
