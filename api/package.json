@@ -13,7 +13,8 @@
     "ingest": "node scripts/ingest.js",
     "process": "node scripts/process.js",
     "relink": "node scripts/relink.js",
-    "eval": "node scripts/eval.js"
+    "eval": "node scripts/eval.js",
+    "audit": "node scripts/audit.js"
   },
   "engines": {
     "node": ">=22"
