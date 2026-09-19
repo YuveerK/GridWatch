@@ -17,7 +17,8 @@ const isDigest = (facts) => !facts.fromDigest && facts.rootCount >= 3 || (facts.
 /** Separate faults reported in one graphic are different outages by definition. */
 export const linkedToPost = (candidate, postId) => candidate.raw.posts.some((p) => p.postId === postId);
 
-const PLANNED_TEXT = /planned (maintenance|power interruption|interruption|outage)|scheduled (maintenance|interruption|outage)/i;
+// \b so that "unplanned power interruption" / "unscheduled maintenance" are not mistaken for planned work
+const PLANNED_TEXT = /\bplanned (maintenance|power interruption|interruption|outage)|\bscheduled (maintenance|interruption|outage)/i;
 
 /** Planned work also shows up as "restored" posts, so relevance alone is not enough. */
 export function isPlanned(extraction, text) {
@@ -80,7 +81,7 @@ async function relatedNodeIds(nodeIds) {
   return out;
 }
 
-async function askLlm(post, extraction, ranked) {
+async function askLlm(post, extraction, ranked, { fromDigest = false } = {}) {
   const clip = (t) => (t ?? '').replace(/#\w+/g, '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, 220);
   const summaries = ranked.slice(0, 3).map((c) => {
     const first = c.raw.posts[0]?.post;
@@ -109,10 +110,11 @@ async function askLlm(post, extraction, ranked) {
     cause: r.cause,
     equipment: r.entities.filter((e) => e.type !== 'SDC').map((e) => `${e.type.toLowerCase()} ${e.name}`).slice(0, 12),
     suburbs: r.localities.map((l) => l.name).slice(0, 12),
-    text: clip(post.text),
+    // one fault inside a graphic: describe that fault, not the graphic's generic call-count text
+    text: fromDigest ? clip(r.update_summary) : clip(post.text),
   };
   const shortlist = ranked.slice(0, 3);
-  const key = `v3|${post.id}|${shortlist.map((c) => c.stableId).sort().join(',')}`;
+  const key = `v4|${post.id}|${post.faultIndex ?? 0}|${shortlist.map((c) => c.stableId).sort().join(',')}`;
   const hit = cachedVerdict(key);
   if (hit !== undefined) {
     const chosen = hit.stableId ? shortlist.find((c) => c.stableId === hit.stableId) : null;
@@ -254,7 +256,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0 }) {
     faultIndex,
     relevance: extraction.relevance,
     status: extraction.result.status,
-    kind: isPlanned(extraction, postRow.noteTweetText || postRow.text) ? 'PLANNED' : 'UNPLANNED',
+    kind: isPlanned(extraction, facts.fromDigest ? '' : postRow.noteTweetText || postRow.text) ? 'PLANNED' : 'UNPLANNED',
     sdcName: facts.sdcNode?.name ?? null,
     nodeIds: new Set(facts.nodes.map((n) => n.id)),
     localityIds: new Set(facts.localityIds),
@@ -282,7 +284,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0 }) {
     // a prose update about one incident that names many substations is not a multi-fault graphic: let the tie-break decide
     usedLlm = true;
     try {
-      const verdict = await askLlm(post, extraction, candidates);
+      const verdict = await askLlm(post, extraction, candidates, { fromDigest: Boolean(facts.fromDigest) });
       outageId = verdict.outageId;
       reason = `LLM: ${verdict.reason}`;
     } catch (err) {

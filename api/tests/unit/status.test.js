@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { initialStatus, linkedToPost, statusFor } from '../../src/modules/outages/linker.service.js';
+import { initialStatus, isPlanned, linkedToPost, statusFor } from '../../src/modules/outages/linker.service.js';
 
 const ex = (status, states) => ({ result: { status, localities: states.map((state) => ({ name: 'x', state })) } });
 
@@ -48,5 +48,13 @@ describe('faults from one graphic', () => {
     expect(initialStatus(true, 'ACTIVE')).toBe('RESTORED');
     expect(initialStatus(true, 'PARTIALLY_RESTORED')).toBe('PARTIALLY_RESTORED');
     expect(initialStatus(false, 'ACTIVE')).toBe('ACTIVE');
+  });
+
+  it('"unplanned power interruption" is not planned work, but "planned power interruption" is', () => {
+    const r = (text) => isPlanned({ relevance: 'RESTORATION', result: { status: 'RESTORED' } }, text);
+    expect(r('fully restored. This follows an unplanned power interruption caused by a cable fault')).toBe(false);
+    expect(r('There was unscheduled maintenance at the site')).toBe(false);
+    expect(r('Power restored following the planned power interruption')).toBe(true);
+    expect(r('scheduled maintenance is complete')).toBe(true);
   });
 });
