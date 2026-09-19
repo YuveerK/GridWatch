@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import SearchBox from '../components/SearchBox.jsx';
@@ -31,32 +31,31 @@ const boundsOf = (pts) => {
   const ys = pts.map((p) => p.lat);
   return [[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]];
 };
+const HUB_KINDS = [['', 'All'], ['SUBSTATION', 'Substations'], ['SWITCHING_STATION', 'Switching stations'], ['DISTRIBUTOR', 'Distributors']];
 
-/** Bounding box of a GeoJSON feature. */
-function featureBounds(f) {
-  const xs = [];
-  const ys = [];
-  const walk = (c) => (typeof c[0] === 'number' ? (xs.push(c[0]), ys.push(c[1])) : c.forEach(walk));
-  walk(f.geometry.coordinates);
-  return [[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]];
-}
-
+/**
+ * Two views of the same map:
+ *   Outages         where power is out right now (dots, grouped into bubbles when zoomed out)
+ *   Infrastructure  City Power's equipment; click one and lines animate out to the areas it feeds
+ */
 export default function MapPage() {
   useDocumentTitle('Map');
   const [params, setParams] = useSearchParams();
-  const sel = params.get('hub') ? { type: 'hub', id: params.get('hub') } : params.get('outage') ? { type: 'outage', id: params.get('outage') } : params.get('suburb') ? { type: 'suburb', id: params.get('suburb') } : null;
-  const [layers, setLayers] = useState({ regions: true, outages: true, equipment: false });
+  const hubId = params.get('hub');
+  const mode = hubId || params.get('view') === 'infrastructure' ? 'infrastructure' : 'outages';
+  const sel = mode === 'infrastructure' ? null : params.get('outage') ? { type: 'outage', id: params.get('outage') } : params.get('suburb') ? { type: 'suburb', id: params.get('suburb') } : null;
   const [focus, setFocus] = useState(null);
   const [replay, setReplay] = useState(0);
+  const [kind, setKind] = useState('');
   const [extra, setExtra] = useState(null); // a searched suburb that has no live outage
 
   const live = useApi('/v1/map', { refreshMs: 60_000 });
-  const regionsApi = useApi('/v1/map/regions');
-  const hubsApi = useApi('/v1/map/infrastructure');
-  const hubData = useApi(sel?.type === 'hub' ? `/v1/map/node/${sel.id}` : null);
-  const node = hubData.data?.node?.id === sel?.id ? hubData.data : null;
+  const hubsApi = useApi('/v1/map/infrastructure', { refreshMs: 120_000 });
+  const hubData = useApi(hubId ? `/v1/map/node/${hubId}` : null);
+  const node = hubData.data?.node?.id === hubId ? hubData.data : null;
 
   const outages = useMemo(() => live.data?.data ?? [], [live.data]);
+  const allHubs = useMemo(() => hubsApi.data?.data ?? [], [hubsApi.data]);
 
   // one entry per suburb, with the worst status among the live outages that touch it
   const suburbs = useMemo(() => {
@@ -78,126 +77,119 @@ export default function MapPage() {
   }, [outages]);
 
   const selectedOutage = sel?.type === 'outage' ? outages.find((o) => o.id === sel.id) : null;
+
   // the suburbs the animation actually reaches (very distant, weakly supported ones are left out of it)
   const servedIds = useMemo(() => {
     if (!node) return new Set();
     const drawn = node.edges.filter((e) => e.kind === 'suburb').map((e) => e.toId);
     return new Set(drawn.length ? drawn : node.places.map((p) => p.id));
   }, [node]);
-  const isDim = useCallback(
-    (s) => {
-      if (!sel) return false;
-      if (sel.type === 'outage') return !s.groups.includes(sel.id);
-      if (sel.type === 'suburb') return s.id !== sel.id;
-      return node ? !servedIds.has(s.id) : false;
-    },
-    [sel, servedIds, node],
-  );
 
   const points = useMemo(() => {
-    const pts = [...suburbs.values()].map((s) => ({ id: s.id, name: s.name, lat: s.lat, lon: s.lon, tone: s.tone, groups: s.groups, inferred: s.inferred, dim: isDim(s), note: `${s.outages.map((o) => nice(o.title)).slice(0, 2).join(' · ')}${s.outages.length > 2 ? ` · +${s.outages.length - 2} more` : ''}` }));
-    if (node) {
-      // suburbs the selected equipment serves, even when nothing is wrong there right now
-      for (const p of node.places) if (servedIds.has(p.id) && !suburbs.has(p.id)) pts.push({ id: p.id, name: nice(p.name), lat: p.lat, lon: p.lon, tone: 'plan', groups: [], dim: false, note: `Served by ${nice(node.node.name)}` });
+    if (mode === 'infrastructure') {
+      // only the areas the selected equipment feeds
+      return (node?.places ?? []).filter((p) => servedIds.has(p.id)).map((p) => ({ id: p.id, name: nice(p.name), lat: p.lat, lon: p.lon, tone: p.live ? 'live' : 'plan', groups: [], note: `Fed by ${nice(node.node.name)}${p.live ? ' · outage now' : ''}` }));
     }
-    if (extra && !suburbs.has(extra.id)) pts.push({ id: extra.id, name: extra.name, lat: extra.lat, lon: extra.lon, tone: 'good', groups: [], dim: false, note: 'No live outage reported' });
-    return pts;
-  }, [suburbs, isDim, node, extra, servedIds]);
-
-  const regions = useMemo(() => {
-    const feats = (regionsApi.data?.features ?? []).map((f) => {
-      const s = suburbs.get(f.properties.id);
-      const tone = s?.tone ?? 'idle';
-      const affected = tone === 'live' || tone === 'partial';
-      const dim = sel ? (s ? isDim(s) : sel.type !== 'hub' || !servedIds.has(f.properties.id)) : false;
-      return { ...f, properties: { ...f.properties, label: nice(f.properties.name), tone, affected, dim } };
+    const pts = [...suburbs.values()].map((s) => {
+      const dim = sel ? (sel.type === 'outage' ? !s.groups.includes(sel.id) : s.id !== sel.id) : false;
+      return { id: s.id, name: s.name, lat: s.lat, lon: s.lon, tone: s.tone, groups: s.groups, inferred: s.inferred, dim, note: `${s.outages.map((o) => nice(o.title)).slice(0, 2).join(' · ')}${s.outages.length > 2 ? ` · +${s.outages.length - 2} more` : ''}` };
     });
-    return { type: 'FeatureCollection', features: feats };
-  }, [regionsApi.data, suburbs, sel, isDim, servedIds]);
+    if (extra && !suburbs.has(extra.id)) pts.push({ id: extra.id, name: extra.name, lat: extra.lat, lon: extra.lon, tone: 'good', groups: [], note: 'No live outage reported' });
+    return pts;
+  }, [mode, suburbs, sel, node, servedIds, extra]);
 
-  // with equipment selected, show only it and the circuits under it (the other diamonds are just noise then)
+  // in the Infrastructure view: every piece of equipment, or (once one is picked) just it and its circuits
   const hubs = useMemo(() => {
-    const all = hubsApi.data?.data ?? [];
-    if (sel?.type !== 'hub') return all;
-    const keep = new Set([sel.id, ...(node?.children ?? []).filter((c) => c.near).map((c) => c.id)]);
-    return all.filter((h) => keep.has(h.id));
-  }, [hubsApi.data, sel, node]);
+    if (mode !== 'infrastructure') return [];
+    if (!hubId) return allHubs.filter((h) => !kind || h.type === kind);
+    const keep = new Set([hubId, ...(node?.children ?? []).filter((c) => c.near).map((c) => c.id)]);
+    return allHubs.filter((h) => keep.has(h.id));
+  }, [mode, allHubs, hubId, node, kind]);
 
-  const flow = useMemo(() => (node?.origin && node.edges?.length ? { key: `${node.node.id}:${replay}`, origin: node.origin, edges: node.edges } : null), [node, replay]);
+  const flow = useMemo(() => (mode === 'infrastructure' && node?.origin && node.edges?.length ? { key: `${node.node.id}:${replay}`, origin: node.origin, edges: node.edges } : null), [mode, node, replay]);
+  const layers = useMemo(() => ({ outages: true, equipment: mode === 'infrastructure' }), [mode]);
 
-  const focused = useRef(null);
-  const select = (type, id) => setParams(type ? { [type]: id } : {}, { replace: true });
+  // ── moving around
   const zoomTo = (pts) => {
     const b = boundsOf(pts);
     if (b) setFocus({ key: Math.random(), bounds: pts.length === 1 ? [[b[0][0] - 0.01, b[0][1] - 0.008], [b[1][0] + 0.01, b[1][1] + 0.008]] : b });
   };
+  const go = (next) => setParams(next, { replace: true });
+  const focused = useRef(null);
+  const setMode = (m) => {
+    setExtra(null);
+    focused.current = m === 'infrastructure' ? 'view:all' : 'all';
+    go(m === 'infrastructure' ? { view: 'infrastructure' } : {});
+    zoomTo(m === 'infrastructure' ? allHubs : [...suburbs.values()]);
+  };
   const pickOutage = (id) => {
     focused.current = `outage:${id}`;
-    select('outage', id);
+    go({ outage: id });
     setExtra(null);
     const o = outages.find((x) => x.id === id);
     if (o) zoomTo(o.places);
   };
-  const frameSuburb = (id, fallback) => {
-    const region = regionsApi.data?.features?.find((f) => f.properties.id === id);
-    if (region) setFocus({ key: Math.random(), bounds: featureBounds(region) }); // the whole outline, not just its centre
-    else if (fallback) zoomTo([fallback]);
-  };
   const pickSuburb = (id) => {
     focused.current = `suburb:${id}`;
-    const s = suburbs.get(id);
     setExtra(null);
-    select('suburb', id);
-    frameSuburb(id, s);
+    go({ suburb: id });
+    const s = suburbs.get(id);
+    if (s) zoomTo([s]);
   };
   const pickHub = (id) => {
-    select('hub', id);
+    go({ hub: id });
     setExtra(null);
-    setLayers((l) => ({ ...l, equipment: true }));
     setReplay((n) => n + 1);
   };
   const reset = () => {
-    select(null);
+    go(mode === 'infrastructure' ? { view: 'infrastructure' } : {});
     setExtra(null);
-    zoomTo([...suburbs.values()]);
+    zoomTo(mode === 'infrastructure' ? allHubs : [...suburbs.values()]);
   };
   const onSearch = (it) => {
-    if (it.kind === 'suburb') {
-      if (suburbs.has(it.id)) return pickSuburb(it.id);
-      if (it.lat != null) {
-        const s = { id: it.id, name: it.title, lat: it.lat, lon: it.lon };
-        setExtra(s);
-        select('suburb', it.id);
-        return zoomTo([s]);
-      }
-      return select('suburb', it.id);
-    }
+    if (it.kind === 'equipment') return pickHub(it.id);
     if (it.kind === 'outage') return outages.some((o) => o.id === it.id) ? pickOutage(it.id) : window.location.assign(`/outages/${it.id}`);
-    return pickHub(it.id);
+    if (suburbs.has(it.id)) return pickSuburb(it.id);
+    if (it.lat != null) {
+      const s = { id: it.id, name: it.title, lat: it.lat, lon: it.lon };
+      setExtra(s);
+      go({ suburb: it.id });
+      return zoomTo([s]);
+    }
+    return go({ suburb: it.id });
   };
 
-  // a link like /map?outage=… opens already selected: zoom to it once the data is here
+  // a link like /map?outage=… or /map?view=infrastructure opens already framed: zoom to it once the data is here
   useEffect(() => {
-    if (!live.data || !sel || focused.current === `${sel.type}:${sel.id}`) return;
-    if (sel.type === 'outage' && selectedOutage) {
-      focused.current = `outage:${sel.id}`;
+    if (!live.data) return;
+    const key = mode === 'infrastructure' ? `view:${hubId ?? 'all'}` : sel ? `${sel.type}:${sel.id}` : 'all';
+    if (focused.current === key) return;
+    if (mode === 'infrastructure') {
+      if (hubId || !allHubs.length) return; // a chosen piece frames itself with its animation
+      focused.current = key;
+      zoomTo(allHubs);
+    } else if (sel?.type === 'outage' && selectedOutage) {
+      focused.current = key;
       zoomTo(selectedOutage.places);
-    } else if (sel.type === 'suburb' && suburbs.has(sel.id)) {
-      focused.current = `suburb:${sel.id}`;
-      frameSuburb(sel.id, suburbs.get(sel.id));
+    } else if (sel?.type === 'suburb' && suburbs.has(sel.id)) {
+      focused.current = key;
+      zoomTo([suburbs.get(sel.id)]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live.data, sel?.type, sel?.id, selectedOutage, suburbs]);
+  }, [live.data, mode, hubId, allHubs.length, sel?.type, sel?.id, selectedOutage, suburbs]);
 
   const error = live.error && !live.data;
   const mapped = outages.filter((o) => o.places.length).length;
   const suburbSel = sel?.type === 'suburb' ? suburbs.get(sel.id) ?? (extra?.id === sel.id ? { ...extra, outages: [], tone: 'good' } : null) : null;
+  const hubList = useMemo(() => [...allHubs].filter((h) => !kind || h.type === kind).sort((a, b) => Number(b.live) - Number(a.live) || b.served - a.served).slice(0, 60), [allHubs, kind]);
+
+  const back = <button type="button" className="link back" onClick={reset}><Icon name="arrow" className="flip" /> {mode === 'infrastructure' ? 'All equipment' : 'All outages'}</button>;
 
   return (
     <div className="container page">
       <header className="page-head">
-        <h1>Outage map</h1>
-        <p>Where power is out right now, and how City Power's equipment feeds each area. Tap a suburb or a piece of equipment to explore it.</p>
+        <h1>{mode === 'infrastructure' ? 'Power network map' : 'Outage map'}</h1>
+        <p>{mode === 'infrastructure' ? "City Power's equipment. Pick a substation or distributor and watch power flow out to the areas it feeds." : "Where power is out right now. Switch to Infrastructure to see how City Power's equipment feeds each area."}</p>
       </header>
 
       {error && <ErrorState error={live.error} />}
@@ -206,43 +198,47 @@ export default function MapPage() {
         <div className="map-layout">
           <div className="card map-card">
             <div className="map-bar">
+              <div className="seg" role="group" aria-label="Map view">
+                <button type="button" aria-pressed={mode === 'outages'} onClick={() => setMode('outages')}><Icon name="alert" /> Outages</button>
+                <button type="button" aria-pressed={mode === 'infrastructure'} onClick={() => setMode('infrastructure')}><Icon name="network" /> Infrastructure</button>
+              </div>
               <div className="map-search">
-                <SearchBox compact placeholder="Find a suburb or equipment…" onPickItem={onSearch} />
+                <SearchBox compact placeholder={mode === 'infrastructure' ? 'Find equipment…' : 'Find a suburb or equipment…'} onPickItem={onSearch} />
               </div>
-              <div className="seg" role="group" aria-label="Map layers">
-                <button type="button" aria-pressed={layers.outages} onClick={() => setLayers((l) => ({ ...l, outages: !l.outages }))}>Outages</button>
-                <button type="button" aria-pressed={layers.regions} onClick={() => setLayers((l) => ({ ...l, regions: !l.regions }))}>Areas</button>
-                <button type="button" aria-pressed={layers.equipment} onClick={() => setLayers((l) => ({ ...l, equipment: !l.equipment }))}>Equipment</button>
-              </div>
-              <button type="button" className="btn small ghost" onClick={reset} title="Show every live outage"><Icon name="refresh" /> Reset</button>
+              <button type="button" className="btn small ghost" onClick={reset} title="Show everything again"><Icon name="refresh" /> Reset</button>
             </div>
             <div className="map-stage">
-              <Suspense fallback={<MapFallback height={560} />}>
+              <Suspense fallback={<MapFallback height={580} />}>
                 <MapView
-                  regions={regions}
                   points={points}
                   hubs={hubs}
                   flow={flow}
                   focus={focus}
                   layers={layers}
-                  selectedHub={sel?.type === 'hub' ? sel.id : null}
-                  onPickSuburb={pickSuburb}
+                  selectedHub={hubId}
+                  onPickSuburb={mode === 'outages' ? pickSuburb : undefined}
                   onPickHub={pickHub}
-                  onClear={() => select(null)}
+                  onClear={() => (mode === 'outages' ? go({}) : hubId && go({ view: 'infrastructure' }))}
                   height={580}
-                  label="Map of suburbs with power outages and the equipment that feeds them"
+                  label={mode === 'infrastructure' ? "Map of City Power's equipment and the areas it feeds" : 'Map of suburbs with power outages'}
                 />
               </Suspense>
-              {sel?.type === 'hub' && hubData.loading && <div className="map-toast">Loading connections…</div>}
+              {hubId && hubData.loading && !node && <div className="map-toast">Loading connections…</div>}
+              {mode === 'infrastructure' && !hubId && <div className="map-toast">Click a diamond to see what it feeds</div>}
             </div>
             <div className="map-foot">
-              <Legend items={[['live', 'Power out'], ['partial', 'Partly restored'], ['good', 'Power back'], ['live', 'Likely area', 'hollow'], ['plan', 'Equipment', 'diamond']]} />
-              <span className="small faint">Suburb outlines © Statistics South Africa (Census 2011) · Map © OpenStreetMap contributors</span>
+              {mode === 'outages' ? (
+                <Legend items={[['live', 'Power out'], ['partial', 'Partly restored'], ['good', 'Power back'], ['live', 'Likely area', 'hollow']]} />
+              ) : (
+                <Legend items={[['plan', 'Equipment', 'diamond'], ['live', 'Outage now', 'diamond'], ['plan', 'Area it feeds']]} />
+              )}
+              <span className="small faint">Map © OpenStreetMap contributors</span>
             </div>
           </div>
 
           <aside className="map-panel" aria-label="Details">
-            {!sel && (
+            {/* ── Outages view ── */}
+            {mode === 'outages' && !sel && (
               <>
                 <div className="small muted" style={{ marginBottom: 8 }}>{plural(outages.length, 'live outage')}{mapped < outages.length ? ` · ${outages.length - mapped} could not be placed` : ''}</div>
                 {outages.length === 0 && <EmptyState icon="check" title="No live outages right now">When City Power reports one, the affected suburbs will show up here.</EmptyState>}
@@ -266,7 +262,7 @@ export default function MapPage() {
 
             {selectedOutage && (
               <div className="card card-pad stack" style={{ gap: 14 }}>
-                <button type="button" className="link back" onClick={reset}><Icon name="arrow" className="flip" /> All outages</button>
+                {back}
                 <div>
                   <StatusBadge status={selectedOutage.status} />
                   <h2 className="panel-title">{nice(selectedOutage.title)}</h2>
@@ -294,7 +290,7 @@ export default function MapPage() {
 
             {suburbSel && (
               <div className="card card-pad stack" style={{ gap: 14 }}>
-                <button type="button" className="link back" onClick={reset}><Icon name="arrow" className="flip" /> All outages</button>
+                {back}
                 <h2 className="panel-title">{nice(suburbSel.name)}</h2>
                 {suburbSel.outages.length === 0 ? <p className="small muted">No live outage reported here right now.</p> : (
                   <ul className="rows">
@@ -312,16 +308,39 @@ export default function MapPage() {
               </div>
             )}
 
-            {sel?.type === 'hub' && (
+            {/* ── Infrastructure view ── */}
+            {mode === 'infrastructure' && !hubId && (
+              <div className="card">
+                <div className="card-pad" style={{ paddingBottom: 10 }}>
+                  <div className="small muted" style={{ marginBottom: 8 }}>{plural(allHubs.length, 'piece')} of equipment with a known area. Outages first.</div>
+                  <div className="seg" role="group" aria-label="Type of equipment">
+                    {HUB_KINDS.map(([k, label]) => <button key={k || 'all'} type="button" aria-pressed={kind === k} onClick={() => setKind(k)}>{label}</button>)}
+                  </div>
+                </div>
+                <ul className="rows">
+                  {hubList.map((h) => (
+                    <li key={h.id}>
+                      <button type="button" className="map-item" onClick={() => pickHub(h.id)}>
+                        <span className="t row" style={{ gap: 8 }}><i className={`key-dot diamond tone-${h.live ? 'live' : 'plan'}`} />{nice(h.name)}</span>
+                        <span className="small faint">{typeLabel(h.type)} · feeds {plural(h.served, 'area')}{h.live ? ' · outage now' : ''}</span>
+                      </button>
+                    </li>
+                  ))}
+                  {hubList.length === 0 && <li className="small faint" style={{ padding: 16 }}>Nothing of that type yet.</li>}
+                </ul>
+              </div>
+            )}
+
+            {mode === 'infrastructure' && hubId && (
               <div className="card card-pad stack" style={{ gap: 14 }}>
-                <button type="button" className="link back" onClick={reset}><Icon name="arrow" className="flip" /> All outages</button>
+                {back}
                 {!node && <Skeleton h={140} />}
                 {node && (
                   <>
                     <div>
                       <div className="eyebrow"><i className="key-dot diamond tone-plan" /> {typeLabel(node.node.type)}</div>
                       <h2 className="panel-title">{nice(node.node.name)}</h2>
-                      <p className="small muted">Feeds {plural(node.total, 'suburb')}{node.children.length ? ` through ${plural(node.children.length, 'circuit')}` : ''}. The glowing lines show how power reaches them.</p>
+                      <p className="small muted">Feeds {plural(node.total, 'area')}{node.children.length ? ` through ${plural(node.children.length, 'circuit')}` : ''}. The glowing lines show how power reaches them.</p>
                     </div>
                     <button type="button" className="btn small" onClick={() => setReplay((n) => n + 1)}><Icon name="refresh" /> Replay animation</button>
                     {node.children.length > 0 && (
@@ -333,13 +352,15 @@ export default function MapPage() {
                       </div>
                     )}
                     <div>
-                      <div className="panel-h">Suburbs it serves</div>
+                      <div className="panel-h">Areas it feeds</div>
                       <div className="chips">
-                        {[...node.places].sort((a, b) => Number(b.live) - Number(a.live)).map((p) => <button key={p.id} type="button" className="chip" onClick={() => pickSuburb(p.id)}>{p.live && <span className="dot live" style={{ width: 7, height: 7 }} />}{nice(p.name)}</button>)}
+                        {[...node.places].sort((a, b) => Number(b.live) - Number(a.live)).map((p) => (
+                          <Link key={p.id} to={`/suburb/${p.id}`} className="chip">{p.live && <span className="dot live" style={{ width: 7, height: 7 }} />}{nice(p.name)}</Link>
+                        ))}
                       </div>
-                      {node.unplaced > 0 && <p className="small faint" style={{ marginTop: 8 }}>{plural(node.unplaced, 'more suburb')} could not be placed on the map.</p>}
+                      {node.unplaced > 0 && <p className="small faint" style={{ marginTop: 8 }}>{plural(node.unplaced, 'more area')} could not be placed on the map.</p>}
                     </div>
-                    <p className="small faint">City Power doesn't publish where equipment stands, so its marker sits at the centre of the suburbs it serves. The connections come from City Power's own posts.</p>
+                    <p className="small faint">City Power doesn't publish where equipment stands, so its marker sits at the centre of the areas it feeds. The connections come from City Power's own posts.</p>
                     <Link to={`/network/${node.node.id}`} className="btn">Open equipment page <Icon name="arrow" /></Link>
                   </>
                 )}

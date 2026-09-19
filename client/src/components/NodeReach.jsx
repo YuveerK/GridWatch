@@ -6,7 +6,7 @@ import Icon from './Icon.jsx';
 import { SectionHead } from './ui.jsx';
 
 const MapView = lazy(() => import('./MapView.jsx'));
-const LAYERS = { regions: false, outages: true, equipment: false };
+const LAYERS = { outages: true, equipment: false };
 
 /** Where a piece of equipment reaches: its suburbs, with the power flowing out to them. */
 export default function NodeReach({ id }) {

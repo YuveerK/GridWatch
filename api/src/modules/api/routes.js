@@ -8,7 +8,6 @@ import { env } from '../../config/env.js';
 import { cycle } from '../processing/cycle.js';
 import { processPending, processPost } from '../processing/processor.service.js';
 import { equipmentFlow, equipmentHubs } from '../geo/equipment-map.service.js';
-import { regionsGeoJson } from '../geo/regions.service.js';
 
 export const router = Router();
 
@@ -327,12 +326,6 @@ router.get('/v1/map', wrap(async (_req, res) => {
       };
     }),
   });
-}));
-
-/** Suburb outlines (Stats SA Census 2011 sub-places) for every suburb in use, as GeoJSON. Coloured by the page from the live outages. */
-router.get('/v1/map/regions', wrap(async (_req, res) => {
-  res.set('Cache-Control', 'public, max-age=300');
-  res.json(await regionsGeoJson());
 }));
 
 /** Every substation, switching station and distributor with a known area, at its inferred position. */

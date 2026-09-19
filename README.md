@@ -56,7 +56,6 @@ npm run geocode           # place any newly learned suburbs on the map
 
 Backups are written to `api/data/backups/` (not committed). To undo a re-read: `npm run reread -- --restore=data/backups/<file>.json`, then rebuild.
 
-### Map data sources
+### About the map
 
-- **Suburb outlines** are Statistics South Africa's Census 2011 sub-places (free public data). They are matched to our suburbs by name, and where the name differs, by the outline the suburb's map pin falls inside (marked as approximate). The simplified file the map uses is `api/data/boundaries/jhb-subplaces.json`. To rebuild it: download `Subplace.zip` from https://github.com/j-norwood-young/SA-Maps (Git LFS), unzip it, then `cd api && node scripts/build-boundaries.js path/to/SP_SA_2011.shp`. The 2011 data predates newer townships, so those have no outline (they still get their pin).
 - **Equipment positions are inferred.** City Power publishes no coordinates for its equipment, so each substation, switching station or distributor is drawn at the centre of the suburbs its posts tie it to. The connections (which suburbs it feeds) are real; the marker position is not. Suburbs implausibly far from the rest are left out of the animation.

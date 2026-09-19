@@ -94,20 +94,19 @@ const at = (pts, u) => {
 
 /**
  * The map. Everything is data in, events out:
- *  regions   GeoJSON outlines, each feature with { id, name, tone, affected, dim, label, center }
  *  points    one dot per suburb: { id, name, lat, lon, tone, groups[], dim, inferred, note }
  *  hubs      equipment at its inferred position: { id, name, type, lon, lat, live, served }
  *  flow      { key, origin, edges[{from,to,kind,live}] } -> animated "power flow"; null for none
  *  focus     { key, bounds } -> fly to these bounds
- *  layers    { regions, outages, equipment }
- * Suburb positions are centres and outlines are Stats SA's 2011 sub-places; the page explains this in words.
+ *  layers    { outages, equipment }
+ * Suburb positions are their centres, and equipment positions are inferred; the page says so in words.
  */
-export default function MapView({ regions = EMPTY, points = [], hubs = [], flow = null, focus = null, layers = { regions: true, outages: true, equipment: false }, selectedHub = null, onPickSuburb, onPickHub, onClear, height = 460, cooperative = false, label = 'Map' }) {
+export default function MapView({ points = [], hubs = [], flow = null, focus = null, layers = { outages: true, equipment: false }, selectedHub = null, onPickSuburb, onPickHub, onClear, height = 460, cooperative = false, label = 'Map' }) {
   const box = useRef(null);
   const mapRef = useRef(null);
   const readyRef = useRef(false);
   const latest = useRef({});
-  latest.current = { regions, points, hubs, flow, focus, layers, selectedHub, onPickSuburb, onPickHub, onClear };
+  latest.current = { points, hubs, flow, focus, layers, selectedHub, onPickSuburb, onPickHub, onClear };
   const dark = useIsDark();
   const raf = useRef(0);
   const framed = useRef(false);
@@ -125,17 +124,6 @@ export default function MapView({ regions = EMPTY, points = [], hubs = [], flow 
       })),
     };
   };
-  const regionCollection = () => {
-    const c = colors();
-    const feats = latest.current.regions.features ?? [];
-    return { type: 'FeatureCollection', features: feats.map((f) => ({ ...f, properties: { ...f.properties, color: c[f.properties.tone] ?? c.idle, affected: f.properties.affected ? 1 : 0, dim: f.properties.dim ? 1 : 0 } })) };
-  };
-  const labelCollection = () => ({
-    type: 'FeatureCollection',
-    features: (latest.current.regions.features ?? [])
-      .filter((f) => f.properties.center && f.properties.label)
-      .map((f) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: f.properties.center }, properties: { name: f.properties.label, affected: f.properties.affected ? 1 : 0, dim: f.properties.dim ? 1 : 0 } })),
-  });
   const hubCollection = () => ({
     type: 'FeatureCollection',
     features: latest.current.hubs.map((h) => ({
@@ -156,7 +144,6 @@ export default function MapView({ regions = EMPTY, points = [], hubs = [], flow 
     if (!map || !readyRef.current) return;
     const { layers: l, selectedHub: sel, flow: fl } = latest.current;
     const vis = (ids, on) => ids.forEach((id) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'));
-    vis(['regions-fill', 'regions-line', 'regions-hover', 'region-labels'], l.regions);
     vis(['cluster-halo', 'cluster', 'cluster-count', 'dots-halo', 'dots', 'dot-labels'], l.outages);
     vis(['hubs'], l.equipment || sel != null || fl != null);
   };
@@ -179,44 +166,13 @@ export default function MapView({ regions = EMPTY, points = [], hubs = [], flow 
       map.addImage('hub-live', hubImage(c.live, c.card));
       map.addImage('hub-sel', hubImage(c.ink, c.card, 56));
 
-      // suburb outlines
-      map.addSource('regions', { type: 'geojson', data: regionCollection(), generateId: true });
-      map.addLayer({
-        id: 'regions-fill', type: 'fill', source: 'regions',
-        paint: {
-          'fill-color': ['get', 'color'],
-          // the zoom expression has to be the outermost one; each stop then decides by suburb
-          'fill-opacity': ['interpolate', ['linear'], ['zoom'],
-            9, ['case', ['==', ['get', 'dim'], 1], 0.03, ['==', ['get', 'affected'], 1], 0.2, 0],
-            12.5, ['case', ['==', ['get', 'dim'], 1], 0.04, ['==', ['get', 'affected'], 1], 0.3, 0.05]],
-        },
-      });
-      map.addLayer({
-        id: 'regions-line', type: 'line', source: 'regions',
-        paint: {
-          'line-color': ['case', ['==', ['get', 'affected'], 1], ['get', 'color'], c.idle],
-          'line-width': ['case', ['==', ['get', 'affected'], 1], 1.6, 0.8],
-          'line-opacity': ['interpolate', ['linear'], ['zoom'],
-            9, ['case', ['==', ['get', 'dim'], 1], 0.1, ['==', ['get', 'affected'], 1], 0.8, 0],
-            12.5, ['case', ['==', ['get', 'dim'], 1], 0.12, ['==', ['get', 'affected'], 1], 0.85, 0.35]],
-        },
-      });
-      map.addLayer({ id: 'regions-hover', type: 'line', source: 'regions', filter: ['==', ['id'], -1], paint: { 'line-color': c.ink, 'line-width': 2.4 } });
-      map.addSource('labels', { type: 'geojson', data: labelCollection() });
-      map.addLayer({
-        id: 'region-labels', type: 'symbol', source: 'labels',
-        filter: ['step', ['zoom'], false, 11, ['==', ['get', 'affected'], 1], 12.4, true],
-        layout: { 'text-field': ['get', 'name'], 'text-font': FONT_BOLD, 'text-size': ['interpolate', ['linear'], ['zoom'], 10, 10, 14, 14], 'text-max-width': 7, 'text-padding': 4 },
-        paint: { 'text-color': c.ink, 'text-halo-color': c.card, 'text-halo-width': 1.6, 'text-opacity': ['case', ['==', ['get', 'dim'], 1], 0.25, ['==', ['get', 'affected'], 1], 1, 0.6] },
-      });
-
       // equipment
       map.addSource('hubs', { type: 'geojson', data: hubCollection() });
       map.addLayer({
         id: 'hubs', type: 'symbol', source: 'hubs', minzoom: 9.2,
         layout: {
           'icon-image': ['case', ['==', ['get', 'selected'], 1], 'hub-sel', ['==', ['get', 'live'], 1], 'hub-live', 'hub-idle'],
-          'icon-size': ['interpolate', ['linear'], ['zoom'], 9, 0.45, 13, 0.75],
+          'icon-size': ['interpolate', ['linear'], ['zoom'], 9, ['+', 0.4, ['*', 0.012, ['min', ['get', 'served'], 20]]], 13, ['+', 0.65, ['*', 0.02, ['min', ['get', 'served'], 20]]]],
           'icon-allow-overlap': true,
           'text-field': ['step', ['zoom'], '', 12, ['get', 'name']], 'text-font': FONT, 'text-size': 11, 'text-offset': [0, 1.3], 'text-anchor': 'top', 'text-optional': true,
         },
@@ -267,11 +223,6 @@ export default function MapView({ regions = EMPTY, points = [], hubs = [], flow 
     });
 
     // ── hover and click
-    let hoverId = null;
-    const clearHover = () => {
-      if (hoverId != null && map.getLayer('regions-hover')) map.setFilter('regions-hover', ['==', ['id'], -1]);
-      hoverId = null;
-    };
     const pop = (lngLat, html) => popup.setLngLat(lngLat).setHTML(html).addTo(map);
     const hit = (point, ids) => map.queryRenderedFeatures(point, { layers: ids.filter((l) => map.getLayer(l) && map.getLayoutProperty(l, 'visibility') !== 'none') });
     map.on('mousemove', (e) => {
@@ -279,30 +230,18 @@ export default function MapView({ regions = EMPTY, points = [], hubs = [], flow 
       const hub = hit(e.point, ['hubs'])[0];
       const dot = hit(e.point, ['dots'])[0];
       const cluster = hit(e.point, ['cluster'])[0];
-      const region = hit(e.point, ['regions-fill'])[0];
-      map.getCanvas().style.cursor = hub || dot || cluster || region ? 'pointer' : '';
+      map.getCanvas().style.cursor = hub || dot || cluster ? 'pointer' : '';
       if (hub) {
-        clearHover();
         const p = hub.properties;
         return pop(hub.geometry.coordinates, `<b>${esc(p.name)}</b><div style="margin-top:2px;opacity:.75">${esc(String(p.type).toLowerCase().replace('_', ' '))} · serves ${p.served} suburb${p.served === 1 ? '' : 's'}${p.live ? ' · outage now' : ''}</div><div style="margin-top:3px;opacity:.6;font-size:11.5px">Position inferred from the suburbs it serves</div>`);
       }
       if (dot) {
-        clearHover();
         const p = dot.properties;
         return pop(dot.geometry.coordinates, `<b>${esc(p.name)}</b>${p.note ? `<div style="margin-top:2px;opacity:.75">${esc(p.note)}</div>` : ''}`);
       }
-      popup.remove();
-      if (region) {
-        if (hoverId !== region.id) {
-          hoverId = region.id;
-          map.setFilter('regions-hover', ['==', ['id'], region.id]);
-        }
-      } else clearHover();
+      return popup.remove();
     });
-    map.on('mouseleave', () => {
-      popup.remove();
-      clearHover();
-    });
+    map.on('mouseleave', () => popup.remove());
     map.on('click', (e) => {
       const hub = hit(e.point, ['hubs'])[0];
       if (hub) return latest.current.onPickHub?.(hub.properties.id);
@@ -312,8 +251,6 @@ export default function MapView({ regions = EMPTY, points = [], hubs = [], flow 
       }
       const dot = hit(e.point, ['dots'])[0];
       if (dot) return latest.current.onPickSuburb?.(dot.properties.id);
-      const region = hit(e.point, ['regions-fill'])[0];
-      if (region) return latest.current.onPickSuburb?.(region.properties.id);
       return latest.current.onClear?.();
     });
 
@@ -328,11 +265,6 @@ export default function MapView({ regions = EMPTY, points = [], hubs = [], flow 
   }, [dark, cooperative]);
 
   // ── keep the sources in step with the data
-  useEffect(() => {
-    if (!readyRef.current) return;
-    setData('regions', regionCollection());
-    setData('labels', labelCollection());
-  }, [regions, ready]);
   useEffect(() => {
     if (readyRef.current) setData('pts', pointCollection());
   }, [points, ready]);
