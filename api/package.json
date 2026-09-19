@@ -14,7 +14,8 @@
     "process": "node scripts/process.js",
     "relink": "node scripts/relink.js",
     "eval": "node scripts/eval.js",
-    "audit": "node scripts/audit.js"
+    "audit": "node scripts/audit.js",
+    "batch": "node scripts/batch-report.js"
   },
   "engines": {
     "node": ">=22"
