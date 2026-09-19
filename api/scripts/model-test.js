@@ -19,6 +19,13 @@ const costOf = (i, o) => (i * inP + o * outP) / 1e6;
 
 console.log(`MODEL ${env.GEMINI_MODEL}  version ${env.AI_PROMPT_VERSION}  knowledge-context ${env.KNOWLEDGE_CONTEXT}  budget $${budget}\n`);
 
+// This wipes every outage and everything learned about the network first, so it only runs on a throw-away database
+// (a name starting gridwatch_test_ or gridwatch_replay_), never on the live one.
+const dbName = new URL(process.env.DATABASE_URL).pathname.slice(1);
+if (!/^gridwatch_(test|replay)_/.test(dbName)) {
+  console.error(`Refusing to run: "${dbName}" is not a disposable database. Point DATABASE_URL at a copy (see scripts/replay-eval.js --keep), then re-run.`);
+  process.exit(1);
+}
 await resetLearnedState();
 const localityKeys = new Set((await prisma.locality.findMany({ select: { canonicalName: true } })).map((l) => localityKey(l.canonicalName)));
 const window = { publishedAt: { gte: new Date(DAYS[0].from), lt: new Date(DAYS[0].to) } };

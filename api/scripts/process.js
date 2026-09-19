@@ -7,6 +7,11 @@ const limit = limitArg ? Number(limitArg.split('=')[1]) : undefined;
 const verbose = args.includes('--verbose');
 
 if (args.includes('--reset')) {
+  // wipes every outage and everything learned about the network, then replays from the stored readings
+  if (!args.includes('--confirm')) {
+    console.error('--reset deletes all outages, links and learned equipment. Re-run with --reset --confirm if that is what you want.');
+    process.exit(1);
+  }
   await resetLearnedState();
   console.log('learned state reset (extractions kept)\n');
 }

@@ -31,7 +31,7 @@ export default function Suburb() {
   const current = list.filter((o) => LIVE.has(o.status));
   const history = list.filter((o) => !LIVE.has(o.status));
   const saved = area?.id === s.id;
-  const answer = computeAnswer(s.name, list, possible);
+  const answer = computeAnswer(s.name, list, possible, s.id);
 
   return (
     <div className="container page">

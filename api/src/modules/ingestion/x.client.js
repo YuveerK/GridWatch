@@ -10,6 +10,13 @@ export class XRateLimitError extends Error {
   }
 }
 
+/** X rejected the saved pagination token (expired or no longer valid): the interval must be re-fetched from its start. */
+export class XInvalidTokenError extends Error {
+  constructor(detail) {
+    super(`X rejected the saved pagination token: ${detail}`);
+  }
+}
+
 /** The request never reached X (internet or DNS trouble, or a timeout). Nothing was sent, so nothing was charged. */
 export class XNetworkError extends Error {
   constructor(reason) {
@@ -71,7 +78,11 @@ export async function fetchTimelinePage({ userId, sinceId, paginationToken }, { 
     const reset = Number(res.headers.get('x-rate-limit-reset'));
     throw new XRateLimitError(reset ? new Date(reset * 1000) : null);
   }
-  if (!res.ok) throw new Error(`X API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) {
+    const detail = (await res.text()).slice(0, 300);
+    if (res.status === 400 && paginationToken && /pagination|token|next_token/i.test(detail)) throw new XInvalidTokenError(detail);
+    throw new Error(`X API ${res.status}: ${detail}`);
+  }
 
   const body = await res.json();
   const mediaByKey = new Map((body.includes?.media ?? []).map((m) => [m.media_key, m]));

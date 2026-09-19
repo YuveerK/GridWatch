@@ -117,11 +117,52 @@ describe('refresh cycle', () => {
     expect(calls.process).toBe(0);
   });
 
-  it('flags when the per-run cap was hit so the operator knows to click again', async () => {
-    const { cycle } = make({ process: async () => ({ total: 50 }) });
+  it('flags when the per-run cap left work behind, and does not when the cap was hit exactly', async () => {
+    const left = make({ process: async () => ({ total: 50, attempted: 50, remaining: 7 }) });
+    left.cycle.start('manual');
+    await left.cycle.whenIdle();
+    expect(left.cycle.status().result).toMatchObject({ capped: true, backlog: 7 });
+    const exact = make({ process: async () => ({ total: 50, attempted: 50, remaining: 0 }) });
+    exact.cycle.start('manual');
+    await exact.cycle.whenIdle();
+    expect(exact.cycle.status().result).toMatchObject({ capped: false, backlog: 0 });
+  });
+
+  it('counts failed extractions and review work instead of reporting a clean refresh', async () => {
+    const { cycle } = make({ process: async () => ({ total: 6, attempted: 6, remaining: 0, tally: { LINKED: 2, FAILED: 3, NEEDS_REVIEW: 1 } }) });
     cycle.start('manual');
     await cycle.whenIdle();
-    expect(cycle.status().result.capped).toBe(true);
+    expect(cycle.status().result).toMatchObject({ processed: 6, succeeded: 2, failed: 3, needsReview: 1 });
+  });
+
+  it('keeps the cooldown when a later step fails after posts were paid for', async () => {
+    const { cycle } = make({ process: async () => { throw new Error('database went away'); } });
+    cycle.start('manual');
+    await cycle.whenIdle();
+    expect(cycle.status().state).toBe('error');
+    expect(cycle.start('manual')).toMatchObject({ started: false, reason: 'cooldown' });
+  });
+
+  it('reports an incomplete fetch and runs everything inside the lease it is given', async () => {
+    const held = [];
+    const { cycle } = make({
+      lease: async (fn) => ({ acquired: true, value: await fn({ tag: 'ctx' }) }),
+      ingest: async ({ ctx }) => { held.push(ctx?.tag); return { status: 'SUCCEEDED', postsFetched: 1, postsInserted: 1, incomplete: true }; },
+      process: async ({ ctx }) => { held.push(ctx?.tag); return { total: 0, attempted: 0, remaining: 0, tally: {} }; },
+      sweep: async ({ ctx }) => { held.push(ctx?.tag); },
+    });
+    cycle.start('manual');
+    await cycle.whenIdle();
+    expect(held).toEqual(['ctx', 'ctx', 'ctx']);
+    expect(cycle.status().result.fetchIncomplete).toBe(true);
+  });
+
+  it('a busy pipeline is reported, and costs nothing so it can be retried at once', async () => {
+    const { cycle } = make({ lease: async () => ({ acquired: false }) });
+    cycle.start('manual');
+    await cycle.whenIdle();
+    expect(cycle.status().error).toMatch(/already in progress/);
+    expect(cycle.start('manual').started).toBe(true);
   });
 
   it('passes the real reason through when the fetch step fails', async () => {

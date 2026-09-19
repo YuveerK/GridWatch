@@ -61,3 +61,18 @@ console.log('\nWRONGLY SPLIT (same truth, different outages):');
 for (const [k, n] of groups(splitPairs)) console.log(`  ${n}× ${k}`);
 if (wrongNone.length) console.log('\nNON-OUTAGE attached:', wrongNone.map((i) => `${i.key} "${i.text}"`));
 await prisma.$disconnect();
+
+// Optional quality gate for CI / release checks:  --min-f1=90  --min-precision=90  --min-recall=90  (percent), also fails on non-outage posts attached to outages.
+// Without these flags the exit code stays 0 as before: a person reads the numbers.
+const gate = [];
+for (const [flag, value] of [['min-f1', f1], ['min-precision', precision], ['min-recall', recall]]) {
+  const min = arg(flag);
+  if (min !== undefined && value * 100 < Number(min)) gate.push(`${flag.slice(4)} ${(value * 100).toFixed(1)}% is below ${min}%`);
+}
+if (process.argv.includes('--strict-none') && wrongNone.length) gate.push(`${wrongNone.length} non-outage posts attached to outages`);
+if (missing.length && process.argv.includes('--strict-missing')) gate.push(`${missing.length} labelled posts are missing from the database`);
+if (gate.length) {
+  console.error(`
+QUALITY GATE FAILED: ${gate.join('; ')}`);
+  process.exitCode = 1;
+}

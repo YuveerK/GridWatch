@@ -13,7 +13,7 @@ export default function NodeReach({ id }) {
   const { data } = useApi(`/v1/map/node/${id}`);
   const [replay, setReplay] = useState(0);
   const points = useMemo(
-    () => (data?.places ?? []).map((p) => ({ id: p.id, name: nice(p.name), lat: p.lat, lon: p.lon, tone: p.live ? 'live' : 'plan', groups: [], note: `${p.live ? 'Power out now · ' : ''}named in ${plural(p.evidence, 'post')} about this equipment` })),
+    () => (data?.places ?? []).map((p) => ({ id: p.id, name: nice(p.name), lat: p.lat, lon: p.lon, tone: p.state === 'out' ? 'live' : 'plan', groups: [], note: `${p.state === 'out' ? 'Power out now · ' : p.state === 'restored' ? 'Power restored · ' : ''}named in ${plural(p.evidence, 'post')} about this equipment` })),
     [data],
   );
   const flow = useMemo(() => (data?.origin && data.edges?.length ? { key: `${id}:${replay}`, origin: data.origin, edges: data.edges } : null), [data, id, replay]);

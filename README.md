@@ -5,26 +5,39 @@ Tracks City Power (Johannesburg) outages from their posts on X.
 ## Run locally
 
 ```
-cd api && npm install && cp data/.env .env   # needs DATABASE_URL, GEMINI_API_KEY, X_API_BEARER_TOKEN
+cd api && npm install && cp .env.example .env   # then fill in DATABASE_URL, GEMINI_API_KEY, X_API_BEARER_TOKEN and an OPERATOR_TOKEN
 npx prisma migrate deploy
+npm run seed:geography          # empty database only: loads the Johannesburg suburbs (add -- --dry-run to preview)
 SCHEDULER=off npm start          # API on :4000 (omit SCHEDULER=off to poll X every few minutes)
 cd ../client && npm install && npm run dev   # UI on :5173, proxies /v1 to the API
 ```
 
 Useful scripts (in `api/`): `npm run ingest -- --process` (fetch new posts and process them),
-`npm run process -- --reset` (replay everything from cached extractions), `npm run eval` (linking accuracy on the hand-labelled set in `tests/golden/links.json`).
+`npm run process -- --reset --confirm` (deletes every outage and replays from stored readings), `npm run relink` (same replay; report-only unless `--confirm`), `node scripts/reprocess.js <postId>` (re-link single posts), `npm run eval` (linking accuracy on the hand-labelled set in `tests/golden/links.json`).
+
+Tests: `npm test` (unit, no database), `npm run test:integration` (creates and drops its own throw-away PostgreSQL database on the server in `DATABASE_URL`; it never touches your data), `npm run test:all`.
 
 ## Fetching the latest posts
 
 The **Refresh / Fetch latest posts** button (header and overview) pulls new posts from X, reads them and updates the site.
-It is an operator tool for now. Settings in `api/.env`:
+It is an operator tool. Settings in `api/.env`:
 
 | Setting | Default | What it does |
 |---|---|---|
 | `REFRESH_BUTTON` | `on` | `off` hides the button and blocks the endpoint (use this once the scheduler is running). |
 | `REFRESH_COOLDOWN_SECONDS` | `60` | Minimum wait between manual fetches (a failed attempt can be retried at once). |
 | `REFRESH_MAX_POSTS` | `200` | Most posts read per click, to cap spend. Click again if it says more are waiting. |
-| `REFRESH_TOKEN` | unset | If set, the API requires this in an `x-refresh-token` header. |
+| `OPERATOR_TOKEN` | unset | Required for the button and every `/admin` route (see below). |
+
+### Operator access
+
+Anything that spends money or changes data (`POST /v1/refresh`, every `/admin/*` route) fails closed: it is refused unless the caller is an operator.
+
+- Set `OPERATOR_TOKEN` (16+ random characters) in `api/.env`. The refresh button then shows **Operator sign-in**; paste the token once and the server keeps you signed in with an HttpOnly cookie for `OPERATOR_SESSION_HOURS`. The token is never in the web page. Scripts send `Authorization: Bearer <token>`.
+- On your own machine you can instead set `ALLOW_LOCAL_OPERATOR=on`: requests from this computer are trusted. It is ignored in production and for proxied requests.
+- If the client is served from a different origin than the API, list that origin in `CORS_ALLOWED_ORIGINS` (the Vite dev proxy does not need it).
+
+Fetching, reading, linking, sweeping and admin actions all take one database lease (`WorkLease`), so the scheduler, the button, the admin routes and the CLI scripts never overlap; a second one is told it is busy. A crashed run's lease expires by itself and its half-finished posts are re-queued.
 
 To use the scheduler instead, start the API without `SCHEDULER=off`; it runs the same single-flight cycle every few minutes.
 
@@ -50,11 +63,11 @@ Every post is read once by Gemini and the result is stored. Each stored reading 
 ```
 cd api
 npm run reread            # re-read stale posts only (about $0.002 per post)
-node scripts/process.js --reset   # then rebuild the outages from the fresh readings
+node scripts/reprocess.js <postId>...   # only posts whose fault layout changed are listed at the end of the run
 npm run geocode           # place any newly learned suburbs on the map
 ```
 
-Backups are written to `api/data/backups/` (not committed). To undo a re-read: `npm run reread -- --restore=data/backups/<file>.json`, then rebuild.
+Backups are written to `api/data/backups/` (not committed) and cover readings and their summaries. To undo a re-read: `npm run reread -- --restore=data/backups/<file>.json`, then re-link the posts it lists.
 
 ### About the map
 

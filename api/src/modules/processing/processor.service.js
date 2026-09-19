@@ -1,8 +1,11 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
-import { extractPost } from '../ai/extraction.service.js';
-import { learnFromExtraction } from '../infrastructure/infrastructure.service.js';
-import { linkPost } from '../outages/linker.service.js';
+import { extractPost, faultLayout } from '../ai/extraction.service.js';
+import { LeaseLostError, assertLeaseInTx, exclusive, recoverStaleWork } from '../coordination/lease.js';
+import { learnFromExtraction, removeContributions } from '../infrastructure/infrastructure.service.js';
+import { linkPost, recordDecision } from '../outages/linker.service.js';
+import { refoldOutage } from '../outages/outage-state.js';
 
 const STATUS_BY_RELEVANCE = {
   OUTAGE: 'RELEVANT',
@@ -13,17 +16,24 @@ const STATUS_BY_RELEVANCE = {
   GENERAL_NOTICE: 'GENERAL_NOTICE',
   IRRELEVANT: 'IRRELEVANT',
 };
+const RELEVANCE_BY_STATUS = { RESTORED: 'RESTORATION', PLANNED: 'PLANNED_OUTAGE', CANCELLED: 'PLANNED_OUTAGE', PARTIALLY_RESTORED: 'UPDATE' };
+const PENDING_STATUSES = ['UNPROCESSED', 'PROCESSING_ERROR'];
 
 const setStatus = (id, processingStatus) => prisma.sourcePost.update({ where: { id }, data: { processingStatus } });
 
-const RELEVANCE_BY_STATUS = { RESTORED: 'RESTORATION', PLANNED: 'PLANNED_OUTAGE', CANCELLED: 'PLANNED_OUTAGE', PARTIALLY_RESTORED: 'UPDATE' };
-
-/** A graphic reporting several separate faults: learn and link each fault as its own mini-post. */
-async function processFaults({ postRow, extraction, faults }) {
+/**
+ * What the linker sees for a reading: one item for an ordinary post, or one synthetic "mini-post" per fault for a graphic
+ * reporting several separate faults. Each item is learned and linked (and retried) on its own.
+ */
+export function faultItems(extraction) {
+  if (faultLayout(extraction.result) === 1 && !(extraction.result.faults?.length === 1 && extraction.relevance === 'SDC_SUMMARY')) {
+    return [{ faultIndex: 0, extraction, fromDigest: false }];
+  }
   const sdc = extraction.result.sdc;
-  const outcomes = [];
-  for (const [i, f] of faults.entries()) {
-    const synthetic = {
+  return extraction.result.faults.map((f, faultIndex) => ({
+    faultIndex,
+    fromDigest: true,
+    extraction: {
       ...extraction,
       relevance: RELEVANCE_BY_STATUS[f.status] ?? 'OUTAGE',
       result: {
@@ -37,50 +47,73 @@ async function processFaults({ postRow, extraction, faults }) {
         localities: f.localities,
         faults: [],
       },
-    };
-    const facts = { ...(await learnFromExtraction(synthetic, postRow.publishedAt)), fromDigest: true };
-    if (!facts.nodes.length && !facts.localityIds.length) continue;
-    const decision = await linkPost({ postRow, extraction: synthetic, facts, faultIndex: i });
-    outcomes.push(decision.outcome);
-  }
-  const anyLinked = outcomes.length > 0;
-  await setStatus(postRow.id, 'RELEVANT');
-  if (!anyLinked) await prisma.linkDecision.create({ data: { postId: postRow.id, outcome: 'NEW', reason: 'digest post: no fault with equipment or suburbs' } });
-  return { postId: postRow.id, outcome: outcomes.includes('LINKED') ? 'LINKED' : 'NEW', detail: { fresh: false, tokens: '-', relevance: extraction.relevance, status: 'MULTI', sdc, nodes: [], localities: 0, matchedLocalities: 0, usedLlm: false, topScore: null, reason: `${faults.length} faults split (${outcomes.join(',')})`, outageTitle: null, outageStatus: null, outagePosts: null } };
+    },
+  }));
 }
 
-/** extract → learn infrastructure → link/open outage for one post. */
-export async function processPost(postId) {
+/** Everything the post ends up as, from its per-fault decisions: review work is never hidden behind a linked sibling. */
+function finalStatus(items, decisions, extraction) {
+  const byIndex = new Map(decisions.map((d) => [d.faultIndex, d]));
+  const review = items.filter((it) => byIndex.get(it.faultIndex)?.outcome === 'NEEDS_REVIEW');
+  if (review.length) {
+    // "Reminder of upcoming planned maintenance" with no place named has nothing to attach to: a notice, not a to-do.
+    // An outage report with no place is different (someone may be without power), so that one stays flagged.
+    const harmless = items.length === 1 && /no infrastructure or locality/.test(byIndex.get(0)?.reason ?? '') && ['PLANNED_OUTAGE', 'UPDATE', 'RESTORATION'].includes(extraction.relevance);
+    return harmless ? 'GENERAL_NOTICE' : 'NEEDS_REVIEW';
+  }
+  return items.length > 1 ? 'RELEVANT' : STATUS_BY_RELEVANCE[extraction.relevance];
+}
+
+async function decisionsOf(postId) {
+  return prisma.linkDecision.findMany({ where: { postId }, orderBy: { faultIndex: 'asc' } });
+}
+
+async function processLocked(postId, ctx, { force = false } = {}) {
+  ctx?.assertHeld();
   const postRow = await prisma.sourcePost.findUniqueOrThrow({ where: { id: postId } });
   await prisma.sourcePost.update({ where: { id: postId }, data: { processingStatus: 'PROCESSING', processingStartedAt: new Date() } });
   try {
     // Replies to individual customers ("@user Hi, ...") carry no outage identity of their own.
     if (/^\s*@\w+/.test(postRow.noteTweetText || postRow.text)) {
-      await prisma.linkDecision.create({ data: { postId, outcome: 'NEW', reason: 'customer reply, skipped' } });
+      await recordDecision(ctx, { id: postId, faultIndex: 0 }, { outcome: 'NEW', reason: 'customer reply, skipped' });
       await setStatus(postId, 'IRRELEVANT');
       return { postId, outcome: 'SKIPPED_REPLY' };
     }
     const cached = await prisma.postExtraction.findFirst({ where: { postId, status: 'SUCCEEDED' }, select: { id: true } });
-    const extraction = await extractPost(postId);
+    const extraction = await extractPost(postId, { force, signal: ctx?.signal });
     if (extraction.status !== 'SUCCEEDED') {
       await setStatus(postId, extraction.status === 'FAILED' ? 'PROCESSING_ERROR' : 'NEEDS_REVIEW');
       return { postId, outcome: extraction.status };
     }
-    const alreadyLinked = await prisma.linkDecision.findFirst({ where: { postId } });
-    if (alreadyLinked) {
-      await setStatus(postId, STATUS_BY_RELEVANCE[extraction.relevance]);
+    const items = faultItems(extraction);
+    const have = new Set((await decisionsOf(postId)).map((d) => d.faultIndex));
+    const todo = items.filter((it) => !have.has(it.faultIndex));
+    if (!todo.length) {
+      await setStatus(postId, finalStatus(items, await decisionsOf(postId), extraction));
       return { postId, outcome: 'ALREADY_LINKED' };
     }
-    const faults = extraction.result.faults ?? [];
-    // several faults, or a call-count summary that still names one concrete fault: link each fault separately
-    if (faults.length >= 2 || (faults.length === 1 && extraction.relevance === 'SDC_SUMMARY')) return processFaults({ postRow, extraction, faults });
-    const facts = await learnFromExtraction(extraction, postRow.publishedAt);
-    const decision = await linkPost({ postRow, extraction, facts });
-    const noPlace = decision.outcome === 'NEEDS_REVIEW' && /no infrastructure or locality/.test(decision.reason ?? '');
-    // "Reminder of upcoming planned maintenance" with no place named has nothing to attach to: a notice, not a to-do.
-    // An outage report with no place is different (someone may be without power), so that one stays flagged.
-    const harmless = noPlace && ['PLANNED_OUTAGE', 'UPDATE', 'RESTORATION'].includes(extraction.relevance);
-    await setStatus(postId, harmless ? 'GENERAL_NOTICE' : decision.outcome === 'NEEDS_REVIEW' ? 'NEEDS_REVIEW' : STATUS_BY_RELEVANCE[extraction.relevance]);
+
+    // Faults are handled one at a time and each commits its own decision: after a failure the next attempt does only what is missing.
+    let single = null;
+    for (const item of todo) {
+      ctx?.assertHeld();
+      const source = { postId, faultIndex: item.faultIndex };
+      const facts = { ...(await learnFromExtraction(item.extraction, postRow.publishedAt, { source })), fromDigest: item.fromDigest };
+      if (item.fromDigest && !facts.nodes.length && !facts.localityIds.length) {
+        await recordDecision(ctx, { id: postId, faultIndex: item.faultIndex }, { outcome: 'NEW', reason: 'fault names no equipment or suburbs' });
+        continue;
+      }
+      const decision = await linkPost({ postRow, extraction: item.extraction, facts, faultIndex: item.faultIndex, ctx });
+      if (!item.fromDigest) single = { decision, facts };
+    }
+    const decisions = await decisionsOf(postId);
+    await setStatus(postId, finalStatus(items, decisions, extraction));
+
+    if (!single) {
+      const outcomes = decisions.map((d) => d.outcome);
+      return { postId, outcome: outcomes.includes('NEEDS_REVIEW') ? 'NEEDS_REVIEW' : outcomes.includes('LINKED') ? 'LINKED' : 'NEW', detail: { fresh: false, tokens: '-', relevance: extraction.relevance, status: 'MULTI', sdc: extraction.result.sdc, nodes: [], localities: 0, matchedLocalities: 0, usedLlm: false, topScore: null, reason: `${items.length} faults split (${outcomes.join(',')})`, outageTitle: null, outageStatus: null, outagePosts: null } };
+    }
+    const { decision, facts } = single;
     const outage = decision.outageId ? await prisma.outage.findUnique({ where: { id: decision.outageId }, select: { title: true, status: true, _count: { select: { posts: true } } } }) : null;
     return {
       postId,
@@ -105,53 +138,126 @@ export async function processPost(postId) {
       },
     };
   } catch (err) {
+    if (err instanceof LeaseLostError) throw err; // not this post's fault: the new owner requeues it
     logger.error({ postId, err }, 'processing failed'); // the full error, with where it happened
     await setStatus(postId, 'PROCESSING_ERROR');
     return { postId, outcome: 'ERROR', error: err.message };
   }
 }
 
-/** Process every post that has no link decision yet, oldest first (order matters for linking). */
-export async function processPending({ limit, onPost, onStart, from, to } = {}) {
-  const posts = await prisma.sourcePost.findMany({
-    where: {
-      linkDecisions: { none: {} },
-      processingStatus: { notIn: ['NEEDS_REVIEW'] },
-      ...(from || to ? { publishedAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } } : {}),
-    },
-    orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }],
-    select: { id: true },
-    ...(limit ? { take: limit } : {}),
-  });
-  onStart?.(posts.length);
-  const tally = {};
-  for (const [i, p] of posts.entries()) {
-    let res = await processPost(p.id);
-    if (res.outcome === 'ERROR') {
-      // a one-off hiccup (database busy, network blip) should not lose an update: try once more, otherwise the next fetch picks it up
-      await new Promise((r) => setTimeout(r, 1500));
-      res = await processPost(p.id);
-    }
-    onPost?.(res, i + 1, posts.length);
-    tally[res.outcome] = (tally[res.outcome] ?? 0) + 1;
-    if ((i + 1) % 10 === 0) logger.info({ done: i + 1, total: posts.length, tally }, 'progress');
-  }
-  return { total: posts.length, tally };
+/** extract → learn infrastructure → link/open outage for one post. Holds (or takes) the pipeline lease. */
+export async function processPost(postId, { ctx, force = false } = {}) {
+  const outcome = await exclusive(ctx, (held) => processLocked(postId, held, { force }));
+  return outcome.acquired ? outcome.value : { postId, outcome: 'BUSY' };
 }
 
-/** Wipe learned graph + outages (extractions are kept) so everything can be replayed chronologically. */
-export async function resetLearnedState() {
-  await prisma.$transaction([
-    prisma.linkDecision.deleteMany(),
-    prisma.outagePost.deleteMany(),
-    prisma.outageLocality.deleteMany(),
-    prisma.outageNode.deleteMany(),
-    prisma.outage.deleteMany(),
-    prisma.nodeLocality.deleteMany(),
-    prisma.infraEdge.deleteMany(),
-    prisma.nodeAlias.deleteMany(),
-    prisma.infraNode.deleteMany(),
-    prisma.locality.deleteMany({ where: { sourceLabel: 'learned-from-posts' } }),
-    prisma.sourcePost.updateMany({ data: { processingStatus: 'UNPROCESSED' } }),
+/**
+ * Process posts that are not done yet, oldest first (order matters for linking): never attempted, or failed part-way
+ * (their finished faults are kept, only the rest is redone). Posts waiting for review are left for a person.
+ *   limit  undefined/null = everything, 0 = nothing, n = at most n. `remaining` reports what was left behind.
+ */
+export async function processPending({ limit, onPost, onStart, from, to, ctx } = {}) {
+  const outcome = await exclusive(ctx, async (held) => {
+    await recoverStaleWork();
+    const where = {
+      processingStatus: { in: PENDING_STATUSES },
+      ...(from || to ? { publishedAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } } : {}),
+    };
+    const take = limit == null ? undefined : Math.max(0, Math.floor(limit));
+    const posts = take === 0 ? [] : await prisma.sourcePost.findMany({ where, orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }], select: { id: true }, ...(take ? { take } : {}) });
+    onStart?.(posts.length);
+    const tally = {};
+    let done = 0;
+    for (const [i, p] of posts.entries()) {
+      if (held.lost || held.signal?.aborted) break;
+      let res = await processLocked(p.id, held);
+      if (res.outcome === 'ERROR' && !held.lost) {
+        // a one-off hiccup (database busy, network blip) should not lose an update: try once more, otherwise the next run picks it up
+        await new Promise((r) => setTimeout(r, 1500));
+        res = await processLocked(p.id, held);
+      }
+      done += 1;
+      onPost?.(res, i + 1, posts.length);
+      tally[res.outcome] = (tally[res.outcome] ?? 0) + 1;
+      if ((i + 1) % 10 === 0) logger.info({ done: i + 1, total: posts.length, tally }, 'progress');
+    }
+    const remaining = await prisma.sourcePost.count({ where });
+    return { total: posts.length, attempted: done, tally, remaining };
+  });
+  return outcome.acquired ? outcome.value : { skipped: true, total: 0, attempted: 0, tally: {}, remaining: null };
+}
+
+/**
+ * Re-do one post. `reextract: false` (default) re-links using the stored reading: nothing is sent to the AI.
+ * `reextract: true` also asks the AI to read the post again (and keeps the old reading if that fails).
+ * The post's old contribution is removed first (its timeline entries, decisions, graph evidence), the outages it touched
+ * are recomputed from their remaining posts (an outage with none left is deleted), and then it is linked afresh. Doing
+ * it twice changes nothing more than doing it once.
+ */
+export async function reprocessPost(postId, { ctx, reextract = false } = {}) {
+  const outcome = await exclusive(ctx, async (held) => {
+    await recoverStaleWork();
+    const post = await prisma.sourcePost.findUnique({ where: { id: postId }, select: { id: true } });
+    if (!post) return { postId, outcome: 'NOT_FOUND' };
+
+    // Evidence counted before contributions were recorded is adopted first, so taking it back below is exact.
+    await adoptLegacyEvidence(postId);
+
+    const touched = await prisma.$transaction(async (tx) => {
+      await assertLeaseInTx(tx, held);
+      const links = await tx.outagePost.findMany({ where: { postId }, select: { outageId: true } });
+      const outageIds = [...new Set(links.map((l) => l.outageId))];
+      if (outageIds.length) await tx.$queryRaw`SELECT id FROM "Outage" WHERE id IN (${Prisma.join(outageIds)}) ORDER BY id FOR UPDATE`;
+      await tx.outagePost.deleteMany({ where: { postId } });
+      await tx.linkDecision.deleteMany({ where: { postId } });
+      await tx.sourcePost.update({ where: { id: postId }, data: { processingStatus: 'UNPROCESSED' } });
+      const results = {};
+      for (const id of outageIds) results[id] = await refoldOutage(tx, id);
+      return results;
+    });
+    await removeContributions(postId);
+    const res = await processLocked(postId, held, { force: reextract });
+    return { ...res, reprocessed: true, outagesRecomputed: Object.keys(touched).length, outagesDeleted: Object.values(touched).filter((v) => v === 'deleted').length };
+  });
+  return outcome.acquired ? outcome.value : { postId, outcome: 'BUSY' };
+}
+
+
+/** Record (without counting) the graph evidence an already-processed post contributed before contributions were tracked. */
+async function adoptLegacyEvidence(postId) {
+  if (await prisma.evidenceContribution.findFirst({ where: { postId }, select: { postId: true } })) return;
+  if (!(await prisma.linkDecision.findFirst({ where: { postId }, select: { id: true } }))) return;
+  const [row, extraction] = await Promise.all([
+    prisma.sourcePost.findUniqueOrThrow({ where: { id: postId }, select: { publishedAt: true } }),
+    prisma.postExtraction.findFirst({ where: { postId, status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' } }),
   ]);
+  if (!extraction) return;
+  for (const item of faultItems(extraction)) {
+    await learnFromExtraction(item.extraction, row.publishedAt, { source: { postId, faultIndex: item.faultIndex }, mode: 'record-only' });
+  }
+}
+
+/**
+ * Wipe learned graph + outages (extractions are kept) so everything can be replayed chronologically.
+ * Destructive: nothing in the app calls it; the CLI insists on --confirm. Takes the pipeline lease, so it cannot run under a fetch or a linking pass.
+ */
+export async function resetLearnedState({ ctx } = {}) {
+  const outcome = await exclusive(ctx, (held) =>
+    prisma.$transaction(async (tx) => {
+      await assertLeaseInTx(tx, held);
+      await tx.linkDecision.deleteMany();
+      await tx.outagePost.deleteMany();
+      await tx.outageLocality.deleteMany();
+      await tx.outageNode.deleteMany();
+      await tx.outage.deleteMany();
+      await tx.evidenceContribution.deleteMany();
+      await tx.nodeLocality.deleteMany();
+      await tx.infraEdge.deleteMany();
+      await tx.nodeAlias.deleteMany();
+      await tx.infraNode.deleteMany();
+      await tx.locality.deleteMany({ where: { sourceLabel: 'learned-from-posts' } });
+      await tx.sourcePost.updateMany({ data: { processingStatus: 'UNPROCESSED' } });
+    }),
+  );
+  if (!outcome.acquired) throw new Error('another worker holds the pipeline lease; try again when it has finished');
 }

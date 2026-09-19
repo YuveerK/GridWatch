@@ -4,12 +4,16 @@ import Icon from './Icon.jsx';
 import { scheduleLabel } from './OutageCard.jsx';
 
 /** Turn a suburb's outages into one plain answer to "is my power out?". */
-export function computeAnswer(name, outages = [], possible = []) {
-  const active = outages.filter((o) => o.status === 'ACTIVE');
-  const partial = outages.filter((o) => o.status === 'PARTIALLY_RESTORED');
+export function computeAnswer(name, outages = [], possible = [], localityId = null) {
+  // A partly restored outage can already be over for THIS suburb: judge each outage by the suburb's own flag, not the outage's overall status.
+  const restoredHere = (o) => localityId != null && o.localities?.some((l) => l.id === localityId && l.restored);
+  const live = outages.filter((o) => (o.status === 'ACTIVE' || o.status === 'PARTIALLY_RESTORED') && !restoredHere(o));
+  const active = live.filter((o) => o.status === 'ACTIVE');
+  const partial = live.filter((o) => o.status === 'PARTIALLY_RESTORED');
   const maybe = possible.filter((o) => o.status === 'ACTIVE' || o.status === 'PARTIALLY_RESTORED');
   const planned = outages.filter((o) => o.status === 'PLANNED' && (!o.scheduled || dayDiff(o.scheduled.date) >= 0));
-  const justRestored = outages.filter((o) => o.status === 'RESTORED' && o.restoredAt && Date.now() - new Date(o.restoredAt) < 24 * 3_600_000);
+  const recent = (t) => t && Date.now() - new Date(t) < 24 * 3_600_000;
+  const justRestored = outages.filter((o) => (o.status === 'RESTORED' && recent(o.restoredAt)) || ((o.status === 'ACTIVE' || o.status === 'PARTIALLY_RESTORED') && restoredHere(o) && recent(o.lastUpdateAt)));
 
   if (active.length) return { tone: 'live', icon: 'alert', kicker: 'Right now', title: `Power outage reported in ${name}`, outage: active[0], more: active.length - 1 };
   if (partial.length) return { tone: 'partial', icon: 'half', kicker: 'Right now', title: `Power is being restored in ${name}`, outage: partial[0], more: partial.length - 1 };

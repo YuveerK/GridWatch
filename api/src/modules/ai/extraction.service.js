@@ -28,13 +28,36 @@ function sast(date) {
   return new Intl.DateTimeFormat('en-ZA', { timeZone: 'Africa/Johannesburg', dateStyle: 'full', timeStyle: 'short' }).format(date);
 }
 
-async function fetchImage(url) {
-  const res = await fetch(`${url}?name=large`, { signal: AbortSignal.timeout(20_000) });
+// Only images X itself serves are fetched (the URL came from a stored payload, so it is not blindly trusted), the size
+// limit is enforced while streaming so an oversized or endless body is never buffered, and the whole read has a deadline.
+const TRUSTED_MEDIA_HOST = /(^|.)twimg.com$/i;
+
+export function mediaUrl(raw) {
+  const u = new URL(raw);
+  if (u.protocol !== 'https:' || !TRUSTED_MEDIA_HOST.test(u.hostname)) throw new Error('untrusted image host');
+  if (!u.searchParams.has('name')) u.searchParams.set('name', 'large'); // full-size render, without breaking an existing query
+  return u.toString();
+}
+
+async function fetchImage(url, { fetchFn = fetch } = {}) {
+  const res = await fetchFn(mediaUrl(url), { signal: AbortSignal.timeout(20_000), redirect: 'error' });
   if (!res.ok) throw new Error(`image ${res.status}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length > env.MEDIA_MAX_BYTES) throw new Error('image too large');
+  const declared = Number(res.headers.get('content-length'));
+  if (declared > env.MEDIA_MAX_BYTES) throw new Error('image too large');
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of res.body ?? []) {
+    size += chunk.length;
+    if (size > env.MEDIA_MAX_BYTES) {
+      await res.body.cancel?.().catch(() => {});
+      throw new Error('image too large');
+    }
+    chunks.push(chunk);
+  }
+  const buf = Buffer.concat(chunks);
   return { inlineData: { mimeType: res.headers.get('content-type')?.split(';')[0] || 'image/jpeg', data: buf.toString('base64') } };
 }
+export const _fetchImageForTest = fetchImage;
 
 async function loadImages(post) {
   const photos = post.PostMedia.filter((m) => m.mediaType === 'photo').slice(0, MAX_IMAGES);
@@ -44,7 +67,7 @@ async function loadImages(post) {
   return { parts, failed };
 }
 
-export async function extractPost(postId, { force = false } = {}) {
+export async function extractPost(postId, { force = false, signal } = {}) {
   const promptVersion = env.AI_PROMPT_VERSION;
   const existing = await prisma.postExtraction.findUnique({ where: { postId_promptVersion: { postId, promptVersion } } });
   if (existing?.status === 'SUCCEEDED' && !force) return existing;
@@ -69,6 +92,7 @@ export async function extractPost(postId, { force = false } = {}) {
         parts: [{ text: userText }, ...imageParts],
         jsonSchema: extractionJsonSchema,
         hasImages: imageParts.length > 0,
+        signal,
       });
       usage = { inputTokens: (usage.inputTokens ?? 0) + (out.inputTokens ?? 0), outputTokens: (usage.outputTokens ?? 0) + (out.outputTokens ?? 0) };
       result = { ...extractionSchema.parse(JSON.parse(out.text)), __reading: readingStamp() };
@@ -92,22 +116,30 @@ export async function extractPost(postId, { force = false } = {}) {
     durationMs: Date.now() - started,
     error: error ?? (failed ? `${failed} image(s) could not be fetched` : null),
   };
-  if (result) {
-    const faults = result.faults ?? [];
-    const rows = faults.length >= 2 || (faults.length === 1 && result.relevance === 'SDC_SUMMARY')
-      ? faults.map((f, i) => ({ faultIndex: i, summary: f.summary }))
-      : [{ faultIndex: 0, summary: result.update_summary }];
-    for (const r of rows.filter((x) => x.summary?.trim())) {
-      await prisma.postSummary.upsert({
-        where: { postId_faultIndex: { postId, faultIndex: r.faultIndex } },
-        create: { postId, faultIndex: r.faultIndex, summary: r.summary.trim(), model: env.GEMINI_MODEL },
-        update: { summary: r.summary.trim(), model: env.GEMINI_MODEL },
-      });
-    }
+  // A forced re-read that fails must not replace a good reading with a failure.
+  if (!result && existing?.status === 'SUCCEEDED') {
+    logger.warn({ postId, error }, 're-read failed; keeping the existing successful reading');
+    return Object.assign(existing, { keptAfterFailure: true });
   }
-  return prisma.postExtraction.upsert({
-    where: { postId_promptVersion: { postId, promptVersion } },
-    create: { postId, promptVersion, ...data },
-    update: data,
+  // The reading and its summaries are one unit: written together, and summaries the new reading no longer has are removed
+  // (two faults shrinking to one must not leave a stale second summary).
+  return prisma.$transaction(async (tx) => {
+    await tx.postSummary.deleteMany({ where: { postId } });
+    if (result) {
+      const faults = result.faults ?? [];
+      const rows = faults.length >= 2 || (faults.length === 1 && result.relevance === 'SDC_SUMMARY')
+        ? faults.map((f, i) => ({ faultIndex: i, summary: f.summary }))
+        : [{ faultIndex: 0, summary: result.update_summary }];
+      for (const r of rows.filter((x) => x.summary?.trim())) {
+        await tx.postSummary.create({ data: { postId, faultIndex: r.faultIndex, summary: r.summary.trim(), model: env.GEMINI_MODEL, promptVersion } });
+      }
+    }
+    return tx.postExtraction.upsert({ where: { postId_promptVersion: { postId, promptVersion } }, create: { postId, promptVersion, ...data }, update: data });
   });
+}
+
+/** The fault layout a reading implies: what the linker keys its per-fault decisions on. */
+export function faultLayout(result) {
+  const faults = result?.faults ?? [];
+  return faults.length >= 2 || (faults.length === 1 && result?.relevance === 'SDC_SUMMARY') ? faults.length : 1;
 }

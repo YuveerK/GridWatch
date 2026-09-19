@@ -1,9 +1,12 @@
+import { createHash } from 'node:crypto';
 import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { generateJson } from '../ai/gemini.client.js';
 import { tailPlace } from '../../lib/normalize.js';
-import { parseSchedule } from '../../lib/schedule.js';
+import { scheduleWindow } from '../../lib/schedule.js';
+import { assertLeaseInTx, exclusive } from '../coordination/lease.js';
+import { buildEffect, initialStatus, refoldOutage, statusFor } from './outage-state.js';
 import { scoreCandidate } from './scoring.js';
 import { cachedVerdict, storeVerdict } from './tiebreak-cache.js';
 
@@ -37,13 +40,20 @@ const tieBreakSchema = {
   required: ['outage_id', 'reason'],
 };
 
+const originOf = (o) => {
+  const first = o.posts.reduce((a, p) => (!a || p.postedAt < a.postedAt || (+p.postedAt === +a.postedAt && p.faultIndex < a.faultIndex) ? p : a), null);
+  return first ? `${first.postId}#${first.faultIndex}` : o.id;
+};
+
 async function loadCandidates(post) {
   const since = new Date(post.postedAt.getTime() - env.OUTAGE_WINDOW_HOURS * HOUR);
   const outages = await prisma.outage.findMany({
     where: {
       status: { not: 'CLOSED' },
+      // an outage that opened after this post was published cannot be what the post is about (late or historical posts)
+      startedAt: { lte: post.postedAt },
       // planned work (reminders days ahead, multi-day isolations) stays linkable much longer than a fault
-      OR: [{ kind: 'UNPLANNED', lastUpdateAt: { gte: since } }, { kind: 'PLANNED', lastUpdateAt: { gte: new Date(post.postedAt.getTime() - PLANNED_WINDOW_HOURS * HOUR) } }],
+      OR: [{ kind: 'UNPLANNED', lastUpdateAt: { gte: since } }, { kind: 'PLANNED', lastUpdateAt: { gte: new Date(post.postedAt.getTime() - PLANNED_WINDOW_HOURS * HOUR) } }, { kind: 'PLANNED', scheduledEnd: { gte: post.postedAt } }],
     },
     orderBy: [{ startedAt: 'asc' }, { title: 'asc' }],
     include: {
@@ -55,7 +65,8 @@ async function loadCandidates(post) {
   return outages.map((o) => ({
     raw: o,
     id: o.id,
-    stableId: o.posts.reduce((a, p) => (!a || p.postedAt < a.postedAt ? p : a), null)?.postId ?? o.id,
+    // identity = the earliest post AND fault that opened it, so two outages opened by sibling faults of one graphic are distinct
+    stableId: originOf(o),
     kind: o.kind,
     status: o.status,
     sdcName: o.sdcName,
@@ -117,8 +128,29 @@ async function askLlm(post, extraction, ranked, { fromDigest = false } = {}) {
     text: fromDigest ? clip(r.update_summary) : clip(post.text),
   };
   const shortlist = ranked.slice(0, 3);
-  const key = `${post.amended ? 'v5' : 'v4'}|${post.id}|${post.faultIndex ?? 0}|${shortlist.map((c) => c.stableId).sort().join(',')}`;
-  const hit = cachedVerdict(key);
+  // the key fingerprints everything the model sees (and the model), so a changed reading or candidate never reuses an old verdict;
+  // candidates enter by their stable identity, not by database id, so replays on fresh ids still hit the cache
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify({ model: env.GEMINI_MODEL, amended: post.amended, newPost, candidates: summaries.map(({ outage_id, ...rest }, i) => ({ ...rest, origin: shortlist[i].stableId })) }))
+    .digest('hex')
+    .slice(0, 24);
+  const key = `v6|${post.id}|${post.faultIndex ?? 0}|${fingerprint}`;
+  let hit = cachedVerdict(key);
+  if (hit === undefined) {
+    // Verdicts cached before the fingerprinted key existed identified a candidate by its earliest post alone. Two outages opened
+    // by sibling faults of one graphic share that id, so such entries are ambiguous and are ignored; an unambiguous one still counts.
+    const legacyIds = shortlist.map((c) => c.raw.posts[0]?.postId ?? c.id);
+    if (new Set(legacyIds).size === legacyIds.length) {
+      const legacy = cachedVerdict(`${post.amended ? 'v5' : 'v4'}|${post.id}|${post.faultIndex ?? 0}|${[...legacyIds].sort().join(',')}`);
+      if (legacy !== undefined) {
+        const chosen = legacy.stableId ? shortlist[legacyIds.indexOf(legacy.stableId)] : null;
+        if (!legacy.stableId || chosen) {
+          storeVerdict(key, { stableId: chosen?.stableId ?? null, reason: legacy.reason });
+          hit = { stableId: chosen?.stableId ?? null, reason: legacy.reason };
+        }
+      }
+    }
+  }
   if (hit !== undefined) {
     const chosen = hit.stableId ? shortlist.find((c) => c.stableId === hit.stableId) : null;
     return { outageId: chosen?.id ?? null, reason: `${hit.reason} (cached)` };
@@ -140,26 +172,7 @@ function roleFor(extraction, isFirst) {
   return extraction.relevance === 'RESTORATION' || extraction.result.status === 'RESTORED' ? 'RESTORATION' : 'UPDATE';
 }
 
-/** A restoration post with no outage to attach to opens a restored outage, unless the post itself says restoration is only partial. */
-export const initialStatus = (retroactive, status) => (retroactive && status !== 'PARTIALLY_RESTORED' ? 'RESTORED' : status);
-
-export function statusFor(extraction, current) {
-  const { status: s, localities = [], restoration_percent: pct } = extraction.result;
-  // "restored to 48 percent" is partial no matter how the suburbs were tagged
-  if (pct != null && pct < 100 && !['RESTORED', 'PLANNED', 'CANCELLED'].includes(s)) return pct > 0 ? 'PARTIALLY_RESTORED' : 'ACTIVE';
-  // The suburbs are the ground truth for customers: "restored to Willowbrook, but a further fault must be located"
-  // is still a restoration, even if the headline status reads INVESTIGATING.
-  const restoredAll = localities.length > 0 && localities.every((l) => l.state === 'RESTORED');
-  const restoredSome = localities.some((l) => l.state === 'RESTORED');
-  // Only override the headline when it is silent about restoration (a post that itself says "partially restored" stays partial).
-  const headlineSilent = !['RESTORED', 'PARTIALLY_RESTORED', 'PLANNED', 'CANCELLED'].includes(s);
-  if (s === 'RESTORED' || (headlineSilent && restoredAll)) return 'RESTORED';
-  if (s === 'PARTIALLY_RESTORED' || (headlineSilent && restoredSome)) return 'PARTIALLY_RESTORED';
-  if (s === 'CANCELLED') return 'CANCELLED';
-  if (s === 'PLANNED') return 'PLANNED';
-  // a fresh "still being repaired" update does not un-restore a restored outage
-  return current === 'RESTORED' || current === 'PARTIALLY_RESTORED' ? current : 'ACTIVE'; // a STALE outage that gets news is live again
-}
+export { initialStatus, statusFor };
 
 const GENERIC_NODE = /^(pole[- ]mounted|mini[- ]?substations?|ring main units?|transformers?|cables?|lines?|feederboard.*|standby.*)$/i;
 const STREETY = /\b(street|st|road|rd|avenue|ave|drive|dr|lane|between|to)\b|^\d/i;
@@ -175,82 +188,106 @@ function titleFor(facts, extraction) {
   return `${head ?? facts.sdcNode?.name ?? 'Unknown location'}${tail}`;
 }
 
-async function applyPost({ post, extraction, facts, outageId, score, reasons, isNew, retroactive }) {
-  const r = extraction.result;
-  const current = isNew ? null : (await prisma.outage.findUnique({ where: { id: outageId }, select: { status: true } })).status;
-  const status = statusFor(extraction, current);
-  const kind = post.kind;
+export class StaleCandidateError extends Error {}
 
-  return prisma.$transaction(async (tx) => {
-    let id = outageId;
-    if (isNew) {
-      const created = await tx.outage.create({
-        data: {
-          kind,
-          status: initialStatus(retroactive, status),
-          title: titleFor(facts, extraction),
-          sdcName: facts.sdcNode?.name ?? null,
-          cause: r.cause,
-          etaText: r.eta_text,
-          restorationPercent: r.restoration_percent,
-          primaryNodeId: facts.nodes.at(-1)?.id ?? null,
-          retroactive: Boolean(retroactive),
-          digest: isDigest(facts),
-          startedAt: post.postedAt,
-          lastUpdateAt: post.postedAt,
-          restoredAt: status === 'RESTORED' ? post.postedAt : null,
-        },
-      });
-      id = created.id;
-    } else {
-      await tx.outage.update({
-        where: { id },
-        data: {
-          status,
-          lastUpdateAt: post.postedAt,
-          ...(r.cause ? { cause: r.cause } : {}),
-          ...(r.eta_text ? { etaText: r.eta_text } : {}),
-          ...(r.restoration_percent != null ? { restorationPercent: r.restoration_percent } : {}),
-          restoredAt: status === 'RESTORED' ? post.postedAt : null,
-          ...(facts.sdcNode ? { sdcName: facts.sdcNode.name } : {}),
-        },
-      });
-    }
-    // A digest post (many nodes) must not smear its nodes across an existing single-fault outage.
-    const mayExpand = isNew || !(isDigest(facts) || facts.fromDigest);
-    for (const n of mayExpand ? facts.nodes : []) {
-      await tx.outageNode.upsert({ where: { outageId_nodeId: { outageId: id, nodeId: n.id } }, create: { outageId: id, nodeId: n.id }, update: {} });
-    }
-    // "restored to 48 percent" does not make every named suburb fully restored, whatever the extractor tagged
-    const partial = r.restoration_percent != null && r.restoration_percent < 100 && status !== 'RESTORED';
-    for (const localityId of facts.localityIds) {
-      const restored = status === 'RESTORED' || (!partial && facts.restoredLocalityIds.includes(localityId));
-      if (!mayExpand) {
-        if (restored) await tx.outageLocality.updateMany({ where: { outageId: id, localityId }, data: { restored } });
-        continue;
+/**
+ * The one place a link is committed: the outage change, the post's timeline entry (with its effect) and the per-fault
+ * decision are written in ONE transaction, under a check that this worker still holds the pipeline lease. Either the
+ * whole decision exists or none of it does, so a crash or a lost race can never leave a change without its marker.
+ * Nothing slow (AI, network) happens in here: the candidates and verdict were settled before.
+ */
+async function commitLink({ ctx, post, extraction, facts, outageId, isNew, retroactive, score, reasons, decision }) {
+  return prisma.$transaction(
+    async (tx) => {
+      await assertLeaseInTx(tx, ctx);
+      const already = await tx.linkDecision.findUnique({ where: { postId_faultIndex: { postId: post.id, faultIndex: post.faultIndex } } });
+      if (already) return already; // another attempt finished first: one result
+      let id = outageId;
+      if (isNew) {
+        const created = await tx.outage.create({
+          data: {
+            kind: post.kind,
+            status: 'ACTIVE',
+            title: titleFor(facts, extraction),
+            sdcName: facts.sdcNode?.name ?? null,
+            primaryNodeId: facts.nodes.at(-1)?.id ?? null,
+            retroactive: Boolean(retroactive),
+            digest: isDigest(facts),
+            startedAt: post.postedAt,
+            lastUpdateAt: post.postedAt,
+          },
+        });
+        id = created.id;
+      } else {
+        // serialise with any other change to this outage and make sure it is still there and still open to news
+        const locked = await tx.$queryRaw`SELECT status FROM "Outage" WHERE id = ${id} FOR UPDATE`;
+        if (!locked.length || locked[0].status === 'CLOSED') throw new StaleCandidateError(`outage ${id} changed while the post was being linked`);
       }
-      await tx.outageLocality.upsert({
-        where: { outageId_localityId: { outageId: id, localityId } },
-        create: { outageId: id, localityId, restored },
-        update: { restored },
+      // A digest post (many nodes) must not smear its nodes across an existing single-fault outage.
+      const expand = isNew || !(isDigest(facts) || facts.fromDigest);
+      const effect = buildEffect({ extraction, facts, post, retroactive, expand });
+      await tx.outagePost.create({
+        data: { outageId: id, postId: post.id, role: roleFor(extraction, isNew && !retroactive), score, reasons, postedAt: post.postedAt, faultIndex: post.faultIndex, effect },
       });
-    }
-    if (status === 'RESTORED') await tx.outageLocality.updateMany({ where: { outageId: id }, data: { restored: true } });
-    const opData = { role: roleFor(extraction, isNew && !retroactive), score, reasons, postedAt: post.postedAt, faultIndex: post.faultIndex ?? 0 };
-    await tx.outagePost.upsert({
-      where: { outageId_postId: { outageId: id, postId: post.id } },
-      create: { outageId: id, postId: post.id, ...opData },
-      update: {},
-    });
-    return id;
+      const folded = await refoldOutage(tx, id);
+      if (folded === 'legacy') await applyLegacy(tx, { id, post, extraction, facts, effect, expand });
+      return tx.linkDecision.create({ data: { postId: post.id, faultIndex: post.faultIndex, outageId: id, ...decision } });
+    },
+    { timeout: 30_000 },
+  );
+}
+
+/** Outages from before effects were stored can only be updated additively, and never let an older post become the latest word. */
+async function applyLegacy(tx, { id, post, extraction, facts, effect, expand }) {
+  const r = extraction.result;
+  const o = await tx.outage.findUnique({ where: { id }, select: { status: true, lastUpdateAt: true, restoredAt: true } });
+  const newest = post.postedAt >= o.lastUpdateAt;
+  const status = newest ? statusFor(extraction, o.status) : o.status;
+  await tx.outage.update({
+    where: { id },
+    data: {
+      status,
+      ...(newest ? { lastUpdateAt: post.postedAt } : {}),
+      ...(newest && r.cause ? { cause: r.cause } : {}),
+      ...(newest && r.eta_text ? { etaText: r.eta_text } : {}),
+      ...(newest && status === 'RESTORED' ? { restorationPercent: 100 } : newest && r.restoration_percent != null ? { restorationPercent: r.restoration_percent } : {}),
+      restoredAt: status === 'RESTORED' ? o.restoredAt ?? post.postedAt : null,
+      ...(facts.sdcNode ? { sdcName: facts.sdcNode.name } : {}),
+    },
+  });
+  if (expand) {
+    for (const n of facts.nodes) await tx.outageNode.upsert({ where: { outageId_nodeId: { outageId: id, nodeId: n.id } }, create: { outageId: id, nodeId: n.id }, update: {} });
+  }
+  const partial = r.restoration_percent != null && r.restoration_percent < 100 && status !== 'RESTORED';
+  for (const l of effect.locs) {
+    const restored = status === 'RESTORED' || (!partial && l.restored);
+    if (expand) await tx.outageLocality.upsert({ where: { outageId_localityId: { outageId: id, localityId: l.id } }, create: { outageId: id, localityId: l.id, restored }, update: { restored } });
+    else if (restored) await tx.outageLocality.updateMany({ where: { outageId: id, localityId: l.id }, data: { restored } });
+  }
+  if (status === 'RESTORED') await tx.outageLocality.updateMany({ where: { outageId: id }, data: { restored: true } });
+}
+
+/**
+ * Record a decision that changes no outage (not linkable, needs review, digest with no outage). Idempotent per fault.
+ */
+export async function recordDecision(ctx, post, data) {
+  return prisma.$transaction(async (tx) => {
+    await assertLeaseInTx(tx, ctx);
+    const already = await tx.linkDecision.findUnique({ where: { postId_faultIndex: { postId: post.id, faultIndex: post.faultIndex } } });
+    if (already) return already;
+    return tx.linkDecision.create({ data: { postId: post.id, faultIndex: post.faultIndex, ...data } });
   });
 }
 
-/** Link (or open) an outage for one extracted post. Idempotent per post. */
-export async function linkPost({ postRow, extraction, facts, faultIndex = 0 }) {
+/**
+ * Link (or open) an outage for one extracted post. Idempotent per post and fault.
+ * `ctx` is the held pipeline lease (from exclusive/withLease); every commit re-checks it.
+ */
+export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx }) {
   const existing = await prisma.linkDecision.findUnique({ where: { postId_faultIndex: { postId: postRow.id, faultIndex } } });
   if (existing) return existing;
 
+  const text = facts.fromDigest ? '' : postRow.noteTweetText || postRow.text;
   const post = {
     id: postRow.id,
     postedAt: postRow.publishedAt,
@@ -259,16 +296,17 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0 }) {
     faultIndex,
     relevance: extraction.relevance,
     status: extraction.result.status,
-    kind: isPlanned(extraction, facts.fromDigest ? '' : postRow.noteTweetText || postRow.text) ? 'PLANNED' : 'UNPLANNED',
+    kind: isPlanned(extraction, text) ? 'PLANNED' : 'UNPLANNED',
     sdcName: facts.sdcNode?.name ?? null,
     nodeIds: new Set(facts.nodes.map((n) => n.id)),
     localityIds: new Set(facts.localityIds),
     // "[AMENDED UPDATE]" / "*Amended*" in the opening words: a correction of an earlier post (not judged for one fault inside a graphic)
     amended: !facts.fromDigest && AMENDED.test((postRow.noteTweetText || postRow.text || '').slice(0, 90)),
+    schedule: scheduleFor(extraction, postRow, facts),
   };
   post.relatedNodeIds = await relatedNodeIds(post.nodeIds);
 
-  const decide = (data) => prisma.linkDecision.create({ data: { postId: post.id, faultIndex, ...data } });
+  const decide = (data) => recordDecision(ctx, post, data);
 
   if (!LINKABLE.has(extraction.relevance)) return decide({ outcome: 'NEW', reason: `not linkable (${extraction.relevance})` });
 
@@ -310,47 +348,65 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0 }) {
   }
 
   const linkedTop = outageId && top?.id === outageId ? top : null;
-  const finalId = await applyPost({
+  return commitLink({
+    ctx,
     post,
     extraction,
     facts,
     outageId,
-    score: linkedTop?.score ?? null,
-    reasons: linkedTop?.reasons ?? null,
     isNew: !outageId,
     retroactive: !outageId && extraction.relevance === 'RESTORATION',
+    score: linkedTop?.score ?? null,
+    reasons: linkedTop?.reasons ?? null,
+    decision: { outcome: outageId ? 'LINKED' : 'NEW', topScore: top?.score ?? null, usedLlm, reason, candidates: summary },
   });
-  return decide({ outcome: outageId ? 'LINKED' : 'NEW', outageId: finalId, topScore: top?.score ?? null, usedLlm, reason, candidates: summary });
+}
+
+// Planned work: the announced window. Filled in by the schedule work (see lib/schedule.js); null when unknown.
+function scheduleFor(extraction, postRow, facts) {
+  return scheduleWindow(extraction, facts.fromDigest ? '' : postRow.noteTweetText || postRow.text, postRow.publishedAt);
 }
 
 /**
- * Housekeeping, safe to run any time:
- *  - live outages with no news for OUTAGE_AUTOCLOSE_HOURS become STALE (outcome unknown, not "resolved")
- *  - restored outages older than that are CLOSED; planned ones once well past their window
+ * Housekeeping, safe to run any time (it takes the pipeline lease itself unless the caller already holds it):
+ *  - live unplanned outages with no news for OUTAGE_AUTOCLOSE_HOURS become STALE (outcome unknown, not "resolved")
+ *  - restored/cancelled outages older than that are CLOSED
+ *  - planned work closes only once its announced window has ended (grace: 6h). Only when no window is known does it fall
+ *    back to "no news for PLANNED_WINDOW_HOURS".
+ * Every update repeats its condition in the UPDATE itself, so a post that lands mid-sweep (and refreshes lastUpdateAt) wins.
  */
-export async function sweepStaleOutages(now = new Date()) {
+export async function sweepStaleOutages(now = new Date(), { ctx } = {}) {
+  const outcome = await exclusive(ctx, () => sweepLocked(now));
+  return outcome.acquired ? outcome.value : { skipped: true };
+}
+
+async function sweepLocked(now) {
   const cutoff = new Date(now.getTime() - env.OUTAGE_AUTOCLOSE_HOURS * HOUR);
   const plannedCutoff = new Date(now.getTime() - PLANNED_WINDOW_HOURS * HOUR);
-  const [stale, closed, closedPlanned] = await Promise.all([
-    prisma.outage.updateMany({ where: { lastUpdateAt: { lt: cutoff }, status: { in: ['ACTIVE', 'PARTIALLY_RESTORED'] } }, data: { status: 'STALE' } }),
-    prisma.outage.updateMany({ where: { lastUpdateAt: { lt: cutoff }, status: { in: ['RESTORED', 'CANCELLED'] } }, data: { status: 'CLOSED' } }),
-    prisma.outage.updateMany({ where: { lastUpdateAt: { lt: plannedCutoff }, status: 'PLANNED' }, data: { status: 'CLOSED' } }),
-  ]);
-  // Planned work whose announced date is well past has finished, whether or not City Power said so.
-  const yesterday = new Date(now.getTime() - 24 * HOUR).toISOString().slice(0, 10);
-  const planned = await prisma.outage.findMany({
-    where: { status: 'PLANNED' },
+  const graceEnd = new Date(now.getTime() - 6 * HOUR);
+  const stale = await prisma.outage.updateMany({ where: { kind: 'UNPLANNED', lastUpdateAt: { lt: cutoff }, status: { in: ['ACTIVE', 'PARTIALLY_RESTORED'] } }, data: { status: 'STALE' } });
+  const closed = await prisma.outage.updateMany({ where: { lastUpdateAt: { lt: cutoff }, status: { in: ['RESTORED', 'CANCELLED'] } }, data: { status: 'CLOSED' } });
+  // planned work with an announced window: closed after the window, however long ago it was announced
+  const closedWindow = await prisma.outage.updateMany({ where: { status: 'PLANNED', scheduledEnd: { lt: graceEnd } }, data: { status: 'CLOSED' } });
+  // no window stored (older rows): read one from the posts, then fall back to the age rule
+  const unknown = await prisma.outage.findMany({
+    where: { status: 'PLANNED', scheduledEnd: null },
     select: { id: true, posts: { orderBy: { postedAt: 'desc' }, take: 6, select: { post: { select: { text: true, noteTweetText: true, publishedAt: true } } } } },
   });
-  const pastIds = planned
-    .filter((o) => {
-      for (const p of o.posts) {
-        const s = parseSchedule(p.post.noteTweetText || p.post.text, p.post.publishedAt);
-        if (s) return s.date < yesterday;
-      }
-      return false;
-    })
-    .map((o) => o.id);
-  const closedPast = pastIds.length ? await prisma.outage.updateMany({ where: { id: { in: pastIds } }, data: { status: 'CLOSED' } }) : { count: 0 };
-  return { stale: stale.count, closed: closed.count + closedPlanned.count + closedPast.count };
+  const done = [];
+  const undated = [];
+  for (const o of unknown) {
+    let w = null;
+    for (const p of o.posts) {
+      w = scheduleWindow(null, p.post.noteTweetText || p.post.text, p.post.publishedAt);
+      if (w) break;
+    }
+    if (w) {
+      await prisma.outage.updateMany({ where: { id: o.id, scheduledEnd: null }, data: { scheduledStart: new Date(w.start), scheduledEnd: new Date(w.end) } });
+      if (new Date(w.end) < graceEnd) done.push(o.id);
+    } else undated.push(o.id);
+  }
+  const closedKnown = done.length ? await prisma.outage.updateMany({ where: { id: { in: done }, status: 'PLANNED' }, data: { status: 'CLOSED' } }) : { count: 0 };
+  const closedUndated = undated.length ? await prisma.outage.updateMany({ where: { id: { in: undated }, status: 'PLANNED', lastUpdateAt: { lt: plannedCutoff } }, data: { status: 'CLOSED' } }) : { count: 0 };
+  return { stale: stale.count, closed: closed.count + closedWindow.count + closedKnown.count + closedUndated.count };
 }

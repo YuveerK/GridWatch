@@ -1,5 +1,4 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import { get } from './api.js';
 
 const BASE = import.meta.env.VITE_API_URL ?? '';
 export const REFRESHED_EVENT = 'gridwatch:refreshed';
@@ -9,7 +8,7 @@ export const REFRESHED_EVENT = 'gridwatch:refreshed';
  * agrees. The server owns the truth (it may already be running from a scheduler or another tab);
  * we poll it while a cycle is running and tell the pages to reload when it finishes.
  */
-let snap = { loaded: false, enabled: true, state: 'idle', receivedAt: 0 };
+let snap = { loaded: false, enabled: true, operator: false, signInAvailable: false, state: 'idle', receivedAt: 0 };
 const listeners = new Set();
 let timer = null;
 let inflight = false;
@@ -37,7 +36,8 @@ async function poll() {
   if (inflight) return;
   inflight = true;
   try {
-    apply(await get('/v1/refresh'));
+    const res = await fetch(`${BASE}/v1/refresh`, { credentials: 'include' }); // the operator session is a cookie
+    if (res.ok) apply(await res.json());
   } catch {
     /* the server may be restarting; keep the last known state and try again */
   } finally {
@@ -47,8 +47,9 @@ async function poll() {
 
 export async function startRefresh() {
   try {
-    const res = await fetch(`${BASE}/v1/refresh`, { method: 'POST' });
+    const res = await fetch(`${BASE}/v1/refresh`, { method: 'POST', credentials: 'include' });
     const body = await res.json().catch(() => ({}));
+    if (res.status === 401 || res.status === 403 && body.error === 'origin_not_allowed') return publish({ operator: false, state: 'idle', notice: 'sign-in' });
     if (res.status === 403) return publish({ enabled: false });
     if (res.status === 429) return apply({ ...snap, ...body }, { notice: 'cooldown' });
     if (res.status === 409) return apply(body, { notice: 'running' });
@@ -56,6 +57,29 @@ export async function startRefresh() {
     apply(body);
   } catch {
     publish({ state: 'error', error: "Couldn't reach the server. Is the API running?" });
+  }
+}
+
+/** Sign in as the operator (the token is sent once; the server answers with an HttpOnly cookie, so no secret is kept in the page). */
+export async function signIn(token) {
+  try {
+    const res = await fetch(`${BASE}/v1/operator/session`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }) });
+    if (res.status === 401) return { ok: false, message: 'That token is not right.' };
+    if (res.status === 429) return { ok: false, message: 'Too many attempts. Wait a minute and try again.' };
+    if (!res.ok) return { ok: false, message: 'Sign-in is not available on this server.' };
+    publish({ operator: true, notice: null });
+    await poll();
+    return { ok: true };
+  } catch {
+    return { ok: false, message: "Couldn't reach the server. Is the API running?" };
+  }
+}
+
+export async function signOut() {
+  try {
+    await fetch(`${BASE}/v1/operator/session`, { method: 'DELETE', credentials: 'include' });
+  } finally {
+    publish({ operator: false });
   }
 }
 
@@ -81,10 +105,12 @@ export function cooldownSeconds(s) {
 
 export function describeResult(r) {
   if (!r) return '';
-  if (r.newPosts === 0) return 'No new posts from City Power.';
+  if (r.newPosts === 0 && !r.processed && !r.failed && !r.needsReview && !r.capped && !r.fetchIncomplete) return 'No new posts from City Power.';
   const bits = [`${r.newPosts} new post${r.newPosts === 1 ? '' : 's'}`];
   if (r.newOutages) bits.push(`${r.newOutages} new outage${r.newOutages === 1 ? '' : 's'}`);
   if (r.updates) bits.push(`${r.updates} update${r.updates === 1 ? '' : 's'}`);
+  const review = r.needsReview ? ` ${r.needsReview} need a person to look at them.` : '';
   const failed = r.failed ? ` ${r.failed} could not be read this time and will be retried on the next fetch.` : '';
-  return `${bits.join(' · ')}.${failed}${r.capped ? ' More are waiting: fetch again.' : ''}`;
+  const more = r.capped ? ` ${r.backlog ?? 'More'} still waiting: fetch again.` : r.fetchIncomplete ? ' There are more posts on X than one fetch takes: fetch again.' : '';
+  return `${bits.join(' · ')}.${failed}${review}${more}`;
 }

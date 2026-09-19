@@ -50,7 +50,7 @@ export default function MyArea({ banner }) {
     );
   }
 
-  const answer = computeAnswer(nice(area.name), data.data, data.possible);
+  const answer = computeAnswer(nice(area.name), data.data, data.possible, area.id);
   if (banner) {
     return (
       <AnswerCard

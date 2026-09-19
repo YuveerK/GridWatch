@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTick } from '../lib/hooks.js';
-import { cooldownSeconds, describeResult, startRefresh, useRefresh } from '../lib/refresh.js';
+import { cooldownSeconds, describeResult, signIn, startRefresh, useRefresh } from '../lib/refresh.js';
 import Icon from './Icon.jsx';
 import WhatChanged from './WhatChanged.jsx';
 
@@ -55,6 +55,34 @@ function label(s, wait) {
   return 'Fetch latest posts';
 }
 
+/** Operator sign-in: paste the operator token once; the server keeps you signed in with a cookie. */
+function SignIn({ compact }) {
+  const [open, setOpen] = useState(false);
+  const [token, setToken] = useState('');
+  const [message, setMessage] = useState('');
+  const submit = async (e) => {
+    e.preventDefault();
+    const r = await signIn(token);
+    if (r.ok) setToken('');
+    else setMessage(r.message);
+  };
+  if (!open) {
+    return (
+      <button type="button" className={compact ? 'icon-btn' : 'btn ghost small'} onClick={() => setOpen(true)} title="Operators can sign in to fetch the newest posts">
+        <Icon name="refresh" />
+        <span className="label">Operator sign-in</span>
+      </button>
+    );
+  }
+  return (
+    <form onSubmit={submit} className="row" style={{ gap: 8 }}>
+      <input type="password" autoComplete="off" aria-label="Operator token" placeholder="Operator token" value={token} onChange={(e) => setToken(e.target.value)} />
+      <button type="submit" className="btn small" disabled={!token}>Sign in</button>
+      {message && <span className="small" role="alert" style={{ color: 'var(--live)' }}>{message}</span>}
+    </form>
+  );
+}
+
 /**
  * Operator button: pull the newest City Power posts from X, read them and refresh the site.
  * `compact` is the header version; the full version also explains the outcome in words.
@@ -67,6 +95,7 @@ export default function RefreshButton({ compact }) {
     if (s.state === 'running') setOpen(false);
   }, [s.state]);
   if (!s.loaded || s.enabled === false) return null;
+  if (!s.operator) return s.signInAvailable ? <SignIn compact={compact} /> : null; // nothing to offer visitors
 
   const running = s.state === 'running';
   const wait = cooldownSeconds(s);

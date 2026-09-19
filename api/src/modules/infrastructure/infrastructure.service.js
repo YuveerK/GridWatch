@@ -9,6 +9,53 @@ const STATION_TYPES = ['SUBSTATION', 'SWITCHING_STATION'];
 
 let localityIndex = null;
 
+// ── idempotent evidence ──────────────────────────────────────────────────────────────────────
+// Each fact a post teaches the graph (this equipment exists, this feeds that, this serves that suburb) is recorded once per
+// source (postId + faultIndex). The counters only move when that record is first written, so retrying a post, or reprocessing
+// it, can never inflate them. `source` is { postId, faultIndex } (omit it for the old always-count behaviour).
+// mode 'record-only' writes the records without touching counters: used to adopt data that was counted before records existed.
+
+/** Inserts the contribution record; true when it is new AND the counter should move. */
+async function shouldCount(db, source, kind, refA, refB = '', mode = 'count') {
+  if (!source) return true;
+  const { count } = await db.evidenceContribution.createMany({ data: [{ postId: source.postId, faultIndex: source.faultIndex ?? 0, kind, refA, refB }], skipDuplicates: true });
+  return count === 1 && mode !== 'record-only';
+}
+
+/** Take back everything one source taught the graph (before it is learned again, or when it is removed). */
+export async function removeContributions(postId, faultIndex = null) {
+  const where = { postId, ...(faultIndex == null ? {} : { faultIndex }) };
+  const rows = await prisma.evidenceContribution.findMany({ where });
+  if (!rows.length) return { removed: 0 };
+  await prisma.$transaction(async (tx) => {
+    for (const r of rows) {
+      if (r.kind === 'NODE') {
+        const n = await tx.infraNode.findUnique({ where: { id: r.refA } });
+        if (n) {
+          const evidenceCount = Math.max(0, n.evidenceCount - 1); // may reach 0: then nothing currently supports it, and re-learning restores it exactly
+          await tx.infraNode.update({ where: { id: n.id }, data: { evidenceCount, lifecycle: n.lifecycle === 'CONFIRMED' && evidenceCount < CONFIRM_AT ? 'CANDIDATE' : n.lifecycle } });
+        }
+      } else if (r.kind === 'EDGE') {
+        const key = { parentId_childId: { parentId: r.refA, childId: r.refB } };
+        const e = await tx.infraEdge.findUnique({ where: key });
+        if (e) {
+          if (e.evidenceCount <= 1) await tx.infraEdge.delete({ where: key });
+          else await tx.infraEdge.update({ where: key, data: { evidenceCount: { decrement: 1 } } });
+        }
+      } else if (r.kind === 'NODE_LOCALITY') {
+        const key = { nodeId_localityId: { nodeId: r.refA, localityId: r.refB } };
+        const l = await tx.nodeLocality.findUnique({ where: key });
+        if (l) {
+          if (l.evidenceCount <= 1) await tx.nodeLocality.delete({ where: key });
+          else await tx.nodeLocality.update({ where: key, data: { evidenceCount: { decrement: 1 } } });
+        }
+      }
+    }
+    await tx.evidenceContribution.deleteMany({ where });
+  });
+  return { removed: rows.length };
+}
+
 const baseName = (key) => key.replace(/\s+ext(\s+\d+)*(\s+and\s+\d+)*$/, '').trim();
 
 /** name → [Locality] built from canonical names + aliases (loaded once; geography is static). */
@@ -84,7 +131,7 @@ async function learnLocality(name) {
 /** Find or create a node; bumps evidence and promotes to CONFIRMED. */
 const JUNK_NAME = /^(affected|unspecified|unspecific|unnamed|tbc|unknown|customers?|areas?|surrounding( areas)?|n\/a|none|the|a|an|feeder|line|cable|mini[- ]?substation|substation|distributor)$/i;
 
-export async function resolveNode({ type, name, at }) {
+export async function resolveNode({ type, name, at, source = null, mode = 'count' }) {
   if (!name || JUNK_NAME.test(name.trim())) return null;
   // "Inner City", "InnerCity" and "InnerCitySDC" are one service delivery centre
   const key = type === 'SDC' ? infraKey(name).replace(/\s+/g, '').replace(/sdc$/, '') : infraKey(name);
@@ -123,7 +170,8 @@ export async function resolveNode({ type, name, at }) {
     }
   }
   if (node) {
-    const evidenceCount = node.evidenceCount + 1;
+    const count = await shouldCount(prisma, source, 'NODE', node.id, '', mode);
+    const evidenceCount = node.evidenceCount + (count ? 1 : 0);
     return prisma.infraNode.update({
       where: { id: node.id },
       data: {
@@ -134,34 +182,58 @@ export async function resolveNode({ type, name, at }) {
       },
     });
   }
-  return prisma.infraNode.create({ data: { type, name: name.trim(), normalizedKey: key, firstSeenAt: at, lastSeenAt: at } });
+  const created = await prisma.infraNode.create({ data: { type, name: name.trim(), normalizedKey: key, firstSeenAt: at, lastSeenAt: at } });
+  await shouldCount(prisma, source, 'NODE', created.id, '', 'record-only'); // its first evidence is already the initial 1
+  return created;
 }
 
-async function bumpEdge(parentId, childId, at) {
-  if (parentId === childId) return;
-  await prisma.infraEdge.upsert({
-    where: { parentId_childId: { parentId, childId } },
-    create: { parentId, childId, lastSeenAt: at },
-    update: { evidenceCount: { increment: 1 }, lastSeenAt: at },
+async function bumpEdge(parentId, childId, at, source, mode) {
+  if (parentId === childId) return; // never a self-link
+  await prisma.$transaction(async (tx) => {
+    const count = await shouldCount(tx, source, 'EDGE', parentId, childId, mode);
+    await tx.infraEdge.upsert({
+      where: { parentId_childId: { parentId, childId } },
+      create: { parentId, childId, lastSeenAt: at },
+      update: { ...(count ? { evidenceCount: { increment: 1 } } : {}), lastSeenAt: at },
+    });
   });
 }
 
-async function bumpNodeLocality(nodeId, localityId, at) {
-  await prisma.nodeLocality.upsert({
-    where: { nodeId_localityId: { nodeId, localityId } },
-    create: { nodeId, localityId, lastSeenAt: at },
-    update: { evidenceCount: { increment: 1 }, lastSeenAt: at },
+async function bumpNodeLocality(nodeId, localityId, at, source, mode) {
+  await prisma.$transaction(async (tx) => {
+    const count = await shouldCount(tx, source, 'NODE_LOCALITY', nodeId, localityId, mode);
+    await tx.nodeLocality.upsert({
+      where: { nodeId_localityId: { nodeId, localityId } },
+      create: { nodeId, localityId, lastSeenAt: at },
+      update: { ...(count ? { evidenceCount: { increment: 1 } } : {}), lastSeenAt: at },
+    });
   });
+}
+
+// Which type may be the parent of which (lower number = higher in the chain). A name that matches several nodes of different
+// types is resolved by asking "which of them could actually be this thing's parent?", never by guessing.
+const RANK = { SDC: 0, SUBSTATION: 1, SWITCHING_STATION: 1, FEEDER: 2, DISTRIBUTOR: 2, CIRCUIT: 2, LINE: 3, MINI_SUBSTATION: 3, TRANSFORMER: 4, KIOSK: 4, CABLE: 5, OTHER: 6 };
+
+/** The node an entity's parent_name refers to, or null when it is missing or genuinely ambiguous. Never the node itself. */
+export function pickParent(node, candidates) {
+  const options = candidates.filter((c) => c.node.id !== node.id);
+  if (!options.length) return null;
+  const higher = options.filter((c) => (RANK[c.node.type] ?? 9) < (RANK[node.type] ?? 9));
+  const pool = higher.length ? higher : options.filter((c) => c.node.type !== node.type);
+  if (!pool.length) return null;
+  const best = Math.min(...pool.map((c) => RANK[c.node.type] ?? 9));
+  const top = pool.filter((c) => (RANK[c.node.type] ?? 9) === best);
+  return new Set(top.map((c) => c.node.id)).size === 1 ? top[0] : null; // several equally plausible, different nodes: ambiguous
 }
 
 /**
  * Learn from one extraction. Returns the facts the linker needs:
  * { sdcNode, nodes: [InfraNode] (non-SDC, most specific last), localityIds: [], restoredLocalityIds: [], unmatched: [] }
  */
-export async function learnFromExtraction(extraction, at) {
+export async function learnFromExtraction(extraction, at, { source = null, mode = 'count' } = {}) {
   const result = extraction.result;
   const sdcName = result.sdc ?? result.entities.find((e) => e.type === 'SDC')?.name ?? null;
-  const sdcNode = sdcName ? await resolveNode({ type: 'SDC', name: sdcName, at }) : null;
+  const sdcNode = sdcName ? await resolveNode({ type: 'SDC', name: sdcName, at, source, mode }) : null;
 
   // A bare line/feeder label ("A", "D", "1B") is only meaningful with its station: "Tshepisong A".
   const stationNames = result.entities.filter((e) => ['SUBSTATION', 'SWITCHING_STATION'].includes(e.type)).map((e) => e.name);
@@ -172,22 +244,33 @@ export async function learnFromExtraction(extraction, at) {
       const station = e.parent_name ?? (stationNames.length === 1 ? stationNames[0] : null);
       return station ? { ...e, name: `${station} ${e.name.trim()}`, parent_name: e.parent_name ?? station } : e;
     });
-  const resolved = new Map(); // infraKey → node
+  // Identity is the node itself (type + name), not just the name: a "Central" substation and a "Central" distributor are two nodes.
+  const resolved = new Map(); // node.id → { node, entities: [entity] }
+  const byName = new Map(); // infraKey(name) → [{ node }]  (every node that name could mean)
   for (const e of entities) {
-    const node = await resolveNode({ type: e.type, name: e.name, at });
-    if (node) resolved.set(infraKey(e.name), { node, entity: e });
+    const node = await resolveNode({ type: e.type, name: e.name, at, source, mode });
+    if (!node) continue;
+    const cur = resolved.get(node.id) ?? { node, entities: [] };
+    cur.entities.push(e);
+    resolved.set(node.id, cur);
+    const k = infraKey(e.name);
+    const list = byName.get(k) ?? [];
+    if (!list.some((x) => x.node.id === node.id)) list.push({ node });
+    byName.set(k, list);
   }
 
   const children = new Set();
   const hasParent = new Set();
-  for (const { node, entity } of resolved.values()) {
-    const parent = entity.parent_name ? resolved.get(infraKey(entity.parent_name)) : null;
+  for (const { node, entities: es } of resolved.values()) {
+    const named = es.find((x) => x.parent_name);
+    const parent = named ? pickParent(node, byName.get(infraKey(named.parent_name)) ?? []) : null;
     if (parent) {
-      await bumpEdge(parent.node.id, node.id, at);
+      await bumpEdge(parent.node.id, node.id, at, source, mode);
       children.add(parent.node.id);
       hasParent.add(node.id);
     } else if (sdcNode) {
-      await bumpEdge(sdcNode.id, node.id, at);
+      // no parent named, or a named parent that could not be resolved unambiguously: attach to the service centre rather than guess
+      await bumpEdge(sdcNode.id, node.id, at, source, mode);
     }
   }
 
@@ -212,7 +295,7 @@ export async function learnFromExtraction(extraction, at) {
     }
     if (!localityIds.includes(loc.id)) localityIds.push(loc.id);
     if (l.state === 'RESTORED') restoredLocalityIds.push(loc.id);
-    for (const leaf of leaves) await bumpNodeLocality(leaf.id, loc.id, at);
+    for (const leaf of leaves) await bumpNodeLocality(leaf.id, loc.id, at, source, mode);
   }
   // Independent branches: a normal substation → distributor chain is 1; a multi-fault digest image is 3+.
   const rootCount = nodes.filter((n) => !hasParent.has(n.id)).length;

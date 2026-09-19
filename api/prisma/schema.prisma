@@ -66,6 +66,7 @@ model SourcePost {
   outagePosts      OutagePost[]
   linkDecisions    LinkDecision[]
   summaries        PostSummary[]
+  evidence         EvidenceContribution[]
 
   @@unique([platform, externalId])
   @@index([processingStatus, publishedAt])
@@ -340,6 +341,9 @@ model Outage {
   startedAt          DateTime
   lastUpdateAt       DateTime
   restoredAt         DateTime?
+  // announced window for planned work (UTC instants), when the posts gave one
+  scheduledStart     DateTime?
+  scheduledEnd       DateTime?
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
 
@@ -381,6 +385,8 @@ model OutagePost {
   reasons  Json?
   faultIndex Int          @default(0)
   postedAt DateTime
+  // what this fault said about the outage (status inputs, percent, cause, eta, equipment, suburbs); current state is folded from these in time order
+  effect   Json?
   outage   Outage         @relation(fields: [outageId], references: [id], onDelete: Cascade)
   post     SourcePost     @relation(fields: [postId], references: [id], onDelete: Cascade)
 
@@ -396,6 +402,7 @@ model PostSummary {
   faultIndex Int      @default(0)
   summary    String
   model      String
+  promptVersion String?
   createdAt  DateTime @default(now())
   post       SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
 
@@ -417,4 +424,41 @@ model LinkDecision {
   outage     Outage?     @relation(fields: [outageId], references: [id], onDelete: SetNull)
 
   @@unique([postId, faultIndex])
+}
+
+/// Cross-process lock. One row per named lock; `expiresAt` is compared with the database clock.
+model WorkLease {
+  name       String   @id
+  owner      String
+  acquiredAt DateTime @default(now())
+  expiresAt  DateTime
+  renewedAt  DateTime @default(now())
+}
+
+/// Where ingestion really is. `completedHighWater` only advances once every page of an interval has been stored;
+/// the cursor lets an interrupted run resume where it stopped (and is dropped if X says the token has expired).
+model IngestionState {
+  accountId          String    @id
+  completedHighWater String?
+  cursorToken        String?
+  cursorSinceId      String?
+  cursorNewest       String?
+  incomplete         Boolean   @default(false)
+  lastCompletedAt    DateTime?
+  updatedAt          DateTime  @updatedAt
+}
+
+/// One row per (source fault, learned fact). Evidence counters only move when a row is first inserted or removed,
+/// so retries and reprocessing can never inflate or double-count what a post taught the graph.
+model EvidenceContribution {
+  postId     String
+  faultIndex Int        @default(0)
+  kind       String
+  refA       String
+  refB       String     @default("")
+  createdAt  DateTime   @default(now())
+  post       SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([postId, faultIndex, kind, refA, refB])
+  @@index([postId])
 }
