@@ -27,3 +27,5 @@ It is an operator tool for now. Settings in `api/.env`:
 | `REFRESH_TOKEN` | unset | If set, the API requires this in an `x-refresh-token` header. |
 
 To use the scheduler instead, start the API without `SCHEDULER=off`; it runs the same single-flight cycle every few minutes.
+
+X fetches leave out replies by default (`X_INCLUDE_REPLIES=off`). They are City Power answering individual customers, which is never outage news, and X charges per post returned.

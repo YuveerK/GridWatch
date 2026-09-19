@@ -11,6 +11,8 @@ const schema = z.object({
   X_API_BEARER_TOKEN: z.string().optional(),
   X_SOURCE_ACCOUNT_ID: z.string().default('337882328'),
   X_SOURCE_ACCOUNT_NAME: z.string().default('CityPowerJhb'),
+  // Replies are City Power answering individual customers ("@user Hi, we have no ETR"): never useful, and each costs $0.005.
+  X_INCLUDE_REPLIES: z.enum(['on', 'off']).default('off'),
   X_POLL_INTERVAL_MINUTES: z.coerce.number().default(5),
   GEMINI_THINKING: z.enum(['default', 'minimal']).default('default'),
   KNOWLEDGE_CONTEXT: z.enum(['on', 'off']).default('on'),

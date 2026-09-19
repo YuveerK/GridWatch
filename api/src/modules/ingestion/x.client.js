@@ -19,7 +19,8 @@ export async function fetchTimelinePage({ userId, sinceId, paginationToken }) {
   if (!env.X_API_BEARER_TOKEN) throw new Error('X_API_BEARER_TOKEN is not set');
   const params = new URLSearchParams({
     max_results: '100',
-    exclude: 'retweets',
+    // Pay per post returned, so don't fetch what we'd discard: replies are customer-service answers, not outage news.
+    exclude: env.X_INCLUDE_REPLIES === 'on' ? 'retweets' : 'retweets,replies',
     'tweet.fields': TWEET_FIELDS,
     expansions: 'attachments.media_keys',
     'media.fields': 'media_key,type,url,width,height,duration_ms,preview_image_url',
