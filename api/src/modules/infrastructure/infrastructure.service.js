@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../../db/prisma.js';
-import { differsByLabel, infraKey, localityKey, similarity } from '../../lib/normalize.js';
+import { differsByLabel, infraKey, isNotSuburbName, localityKey, similarity } from '../../lib/normalize.js';
 
 const FUZZY_NODE = 0.9;
 const FUZZY_LOCALITY = 0.92;
@@ -10,7 +10,6 @@ const STATION_TYPES = ['SUBSTATION', 'SWITCHING_STATION'];
 let localityIndex = null;
 
 const baseName = (key) => key.replace(/\s+ext(\s+\d+)*(\s+and\s+\d+)*$/, '').trim();
-const NOT_A_SUBURB = /((street|st|road|rd|avenue|ave|drive|dr|lane|centre|center|clinic|water|hospital|school|mall|station)|^\d|to|parts? of)/i;
 
 /** name → [Locality] built from canonical names + aliases (loaded once; geography is static). */
 async function getLocalityIndex() {
@@ -71,7 +70,7 @@ export async function resolveLocality(name, preferIds = new Set()) {
 async function learnLocality(name) {
   const clean = name.trim();
   const key = localityKey(clean);
-  if (key.length < 3 || NOT_A_SUBURB.test(clean)) return null;
+  if (key.length < 3 || isNotSuburbName(clean)) return null;
   let loc = await prisma.locality.findFirst({ where: { normalizedName: key, regionId: null } });
   if (!loc) {
     loc = await prisma.locality.create({

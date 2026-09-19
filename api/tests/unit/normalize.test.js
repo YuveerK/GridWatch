@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { differsByLabel, infraKey, localityKey, similarity } from '../../src/lib/normalize.js';
+import { differsByLabel, infraKey, isNotSuburbName, localityKey, similarity } from '../../src/lib/normalize.js';
 
 describe('normalize', () => {
   it('strips type words from infrastructure names', () => {
@@ -24,5 +24,14 @@ describe('normalize', () => {
     expect(differsByLabel('clover rd 183', 'clover rd 182')).toBe(true);
     expect(differsByLabel('roosevelt park', 'roosevelt')).toBe(false);
     expect(differsByLabel('freedom park', 'freedom prk')).toBe(false);
+  });
+
+  it('keeps streets, facilities and companies out of the suburb list but accepts real suburbs', () => {
+    for (const bad of ['Marshall Street West', 'Nasturtium Avenue', 'Kya Sand Rd 24', 'Transnet', 'Standby Oil 2', 'Civic Centre', 'Johannesburg Water', 'Sandringham Police Station', '12th to 13th Avenue', 'Newtown, Westgate', 'Elm/Valerie', 'Athol and Barnard', 'Ward 81', 'Prichard 153']) {
+      expect(isNotSuburbName(bad), bad).toBe(true);
+    }
+    for (const good of ['Westdene', 'Houghton', 'Bryanston', 'Northcliff', 'Randjiespark', 'Kya Sand', 'Orange Grove East', 'Lenasia Extension 3', 'Bird Haven']) {
+      expect(isNotSuburbName(good), good).toBe(false);
+    }
   });
 });
