@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { Link } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import { StatusBadge } from '../components/ui.jsx';
@@ -60,7 +61,7 @@ export default function About() {
       <div className="prose"><h2>Words you'll see</h2></div>
       <div className="card card-pad">
         <dl className="facts" style={{ gridTemplateColumns: 'minmax(150px, 220px) 1fr', gap: '16px 24px' }}>
-          {TERMS.map(([t, d]) => (<><dt key={`${t}-t`} style={{ color: 'var(--ink)', fontWeight: 650 }}>{t}</dt><dd key={`${t}-d`} className="muted" style={{ fontWeight: 400 }}>{d}</dd></>))}
+          {TERMS.map(([t, d]) => (<Fragment key={t}><dt style={{ color: 'var(--ink)', fontWeight: 650 }}>{t}</dt><dd className="muted" style={{ fontWeight: 400 }}>{d}</dd></Fragment>))}
         </dl>
       </div>
 

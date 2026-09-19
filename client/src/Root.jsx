@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
+import ErrorBoundary from './components/ErrorBoundary.jsx';
 import Icon from './components/Icon.jsx';
 import RefreshButton from './components/RefreshButton.jsx';
 import SearchBox from './components/SearchBox.jsx';
@@ -24,7 +25,9 @@ const NAV = [
 
 function ScrollToTop() {
   const { pathname } = useLocation();
-  useEffect(() => window.scrollTo(0, 0), [pathname]);
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
   return null;
 }
 
@@ -64,7 +67,9 @@ export default function Root() {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, []);
-  useEffect(() => setSearching(false), [pathname]);
+  useEffect(() => {
+    setSearching(false);
+  }, [pathname]);
 
   return (
     <>
@@ -92,6 +97,7 @@ export default function Root() {
       </header>
 
       <main id="main">
+        <ErrorBoundary resetKey={pathname}>
         <Routes>
           <Route path="/" element={<Overview />} />
           <Route path="/outages" element={<Outages />} />
@@ -103,6 +109,7 @@ export default function Root() {
           <Route path="/about" element={<About />} />
           <Route path="*" element={<div className="container page"><EmptyState icon="search" title="Page not found" action={<Link to="/" className="btn primary">Back to the overview</Link>}>That page doesn't exist.</EmptyState></div>} />
         </Routes>
+        </ErrorBoundary>
       </main>
 
       <footer className="site-footer">
