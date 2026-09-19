@@ -46,9 +46,9 @@ export default function NodeDetail() {
       </header>
 
       <div className="cols-3" style={{ marginBottom: 8 }}>
-        <div className="card card-pad"><div className="small muted">Mentioned in</div><div style={{ fontSize: 28, fontWeight: 800 }} className="num">{plural(n.evidenceCount, 'post')}</div><div className="small faint">{n.lifecycle === 'CONFIRMED' ? 'Confirmed by several posts' : 'Seen only once so far'}</div></div>
-        <div className="card card-pad"><div className="small muted">First seen</div><div style={{ fontSize: 22, fontWeight: 750 }}>{fmtDay(n.firstSeenAt)}</div></div>
-        <div className="card card-pad"><div className="small muted">Last seen</div><div style={{ fontSize: 22, fontWeight: 750 }}>{fmtDay(n.lastSeenAt)}</div></div>
+        <div className="card card-pad"><div className="small muted">Mentioned in</div><div style={{ fontSize: 28, fontWeight: 700 }} className="num">{plural(n.evidenceCount, 'post')}</div><div className="small faint">{n.lifecycle === 'CONFIRMED' ? 'Confirmed by several posts' : 'Seen only once so far'}</div></div>
+        <div className="card card-pad"><div className="small muted">First seen</div><div style={{ fontSize: 22, fontWeight: 700 }}>{fmtDay(n.firstSeenAt)}</div></div>
+        <div className="card card-pad"><div className="small muted">Last seen</div><div style={{ fontSize: 22, fontWeight: 700 }}>{fmtDay(n.lastSeenAt)}</div></div>
       </div>
 
       <section className="section" aria-labelledby="flow-h">

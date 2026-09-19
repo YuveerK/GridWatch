@@ -31,7 +31,7 @@ export default function MyArea({ banner }) {
             <div className="ico" style={{ background: 'var(--brand-tint)', color: 'var(--brand)' }}><Icon name="star" /></div>
           </div>
           <div>
-            <h2 style={{ fontSize: 19, fontWeight: 750, letterSpacing: '-0.015em' }}>Save your area</h2>
+            <h2 style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.015em' }}>Save your area</h2>
             <p className="muted small">Pick your suburb once and this page will tell you straight away if your power is out.</p>
           </div>
         </div>

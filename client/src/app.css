@@ -40,8 +40,8 @@
 
   --radius: 16px;
   --radius-sm: 10px;
-  /* One place to change the typeface. Roboto is bundled (no third-party request). */
-  --font: 'Roboto Variable', Roboto, system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  /* One place to change the typeface. Inter is bundled (no third-party request). */
+  --font: Inter, system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -111,7 +111,10 @@ body {
   color: var(--ink);
   font: 15px/1.55 var(--font);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  /* fixed-width digits everywhere: counters, percentages, dates and "21 min ago" never jiggle as they change */
+  font-variant-numeric: tabular-nums;
 }
 a { color: inherit; text-decoration: none; }
 button { font: inherit; color: inherit; }
@@ -164,7 +167,7 @@ h1, h2, h3, p { margin: 0; }
 .between { justify-content: space-between; }
 .page { padding-top: 28px; padding-bottom: 64px; }
 .page-head { margin-bottom: 22px; }
-.page-head h1 { font-size: 34px; line-height: 1.12; letter-spacing: -0.03em; font-weight: 750; }
+.page-head h1 { font-size: 34px; line-height: 1.12; letter-spacing: -0.03em; font-weight: 700; }
 .page-head p { margin-top: 8px; max-width: 62ch; color: var(--ink-2); font-size: 16px; }
 .crumbs { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-3); margin-bottom: 14px; flex-wrap: wrap; }
 .crumbs a:hover { color: var(--ink); text-decoration: underline; }
@@ -181,7 +184,7 @@ h1, h2, h3, p { margin: 0; }
 .hero { position: relative; padding: 44px 0 56px; background: var(--glow); }
 .hero-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap: 36px; align-items: center; }
 .eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--brand-strong); background: var(--brand-tint); padding: 5px 12px; border-radius: 999px; }
-.hero h1 { font-size: 46px; line-height: 1.05; letter-spacing: -0.03em; font-weight: 800; margin: 16px 0 12px; max-width: 16ch; }
+.hero h1 { font-size: 46px; line-height: 1.05; letter-spacing: -0.03em; font-weight: 700; margin: 16px 0 12px; max-width: 16ch; }
 .hero .lede { font-size: 17px; color: var(--ink-2); max-width: 46ch; }
 .hero .search { margin-top: 24px; max-width: 520px; }
 
@@ -239,7 +242,7 @@ a.chip:hover { background: color-mix(in srgb, var(--ink) 11%, transparent); }
 .tile { padding: 18px 20px; background: radial-gradient(120% 130% at 0% 0%, color-mix(in srgb, var(--tone, var(--card)) 8%, var(--card)), var(--card) 62%); display: flex; flex-direction: column; gap: 4px; position: relative; overflow: hidden; }
 .tile .k { font-size: 13px; color: var(--ink-2); font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .tile .k .icon { color: var(--tone); font-size: 16px; }
-.tile .v { font-size: 40px; line-height: 1.05; font-weight: 800; letter-spacing: -0.03em; margin-top: 4px; }
+.tile .v { font-size: 40px; line-height: 1.05; font-weight: 700; letter-spacing: -0.03em; margin-top: 4px; }
 .tile.hero-tile .v { font-size: 52px; }
 .tile .h { font-size: 13px; color: var(--ink-3); }
 .tile .spark { position: absolute; right: 14px; bottom: 14px; opacity: 0.95; }
@@ -298,7 +301,7 @@ table.data th { color: var(--ink-3); font-weight: 600; }
 /* ---------- answer banner (my area / suburb) ---------- */
 .answer { display: flex; gap: 16px; align-items: flex-start; padding: 22px; border-radius: var(--radius); background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--tone, var(--card)) 11%, var(--card)), var(--card) 65%); box-shadow: var(--shadow-1); }
 .answer .ico { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; background: var(--tint); color: var(--tone); font-size: 24px; flex: none; }
-.answer h2, .answer h3 { font-size: 20px; line-height: 1.2; letter-spacing: -0.015em; font-weight: 750; }
+.answer h2, .answer h3 { font-size: 20px; line-height: 1.2; letter-spacing: -0.015em; font-weight: 700; }
 .answer p { margin-top: 6px; color: var(--ink-2); }
 .answer .kicker { font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px; }
 .answer.big { padding: 26px; }
@@ -318,7 +321,7 @@ input.field { min-width: 220px; }
 /* ---------- detail page ---------- */
 .dhero { padding: 26px; border-radius: 22px; position: relative; overflow: hidden; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow-1); }
 .dhero::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 5px; background: var(--tone); }
-.dhero h1 { font-size: 34px; line-height: 1.12; letter-spacing: -0.025em; font-weight: 800; margin: 14px 0 6px; max-width: 24ch; }
+.dhero h1 { font-size: 34px; line-height: 1.12; letter-spacing: -0.025em; font-weight: 700; margin: 14px 0 6px; max-width: 24ch; }
 .callout { margin-top: 18px; padding: 16px 18px; border-radius: 14px; background: var(--tint); }
 .callout .lab { font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
 .callout p { font-size: 17.5px; line-height: 1.45; font-weight: 550; margin-top: 6px; letter-spacing: -0.005em; }
@@ -589,7 +592,7 @@ a.fname:hover { text-decoration: underline; }
 /* ───────────── refinement: depth from surface, not outlines ───────────── */
 .ocard h3 { letter-spacing: -0.015em; }
 .tile .k { letter-spacing: 0.01em; }
-.tile .v { font-weight: 750; letter-spacing: -0.035em; }
+.tile .v { font-weight: 700; letter-spacing: -0.035em; }
 .meter { background: color-mix(in srgb, var(--good) 14%, transparent); }
 .bl-track { background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .nav a.active { box-shadow: var(--shadow-1); }
@@ -610,3 +613,11 @@ select.field { appearance: none; -webkit-appearance: none; padding-right: 34px; 
 .hero-meta .refresh { display: contents; }
 .hero-meta .refresh > .small { flex: 1 1 240px; }
 .hero-meta .refresh > .card { flex: 1 1 100%; max-width: 560px; order: 5; margin-top: 4px !important; }
+/* Inter runs a little wider than the old face: keep header links on one line and let heads wrap instead of squeezing */
+.section-head { flex-wrap: wrap; }
+.section-head .link, .link { white-space: nowrap; }
+@media (max-width: 940px) {
+  .nav a { padding: 8px 6px; font-size: 13px; }
+  .header-actions { gap: 6px; }
+  .header-row { gap: 6px; }
+}
