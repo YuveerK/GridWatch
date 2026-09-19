@@ -76,7 +76,11 @@ export async function processPost(postId) {
     if (faults.length >= 2 || (faults.length === 1 && extraction.relevance === 'SDC_SUMMARY')) return processFaults({ postRow, extraction, faults });
     const facts = await learnFromExtraction(extraction, postRow.publishedAt);
     const decision = await linkPost({ postRow, extraction, facts });
-    await setStatus(postId, decision.outcome === 'NEEDS_REVIEW' ? 'NEEDS_REVIEW' : STATUS_BY_RELEVANCE[extraction.relevance]);
+    const noPlace = decision.outcome === 'NEEDS_REVIEW' && /no infrastructure or locality/.test(decision.reason ?? '');
+    // "Reminder of upcoming planned maintenance" with no place named has nothing to attach to: a notice, not a to-do.
+    // An outage report with no place is different (someone may be without power), so that one stays flagged.
+    const harmless = noPlace && ['PLANNED_OUTAGE', 'UPDATE', 'RESTORATION'].includes(extraction.relevance);
+    await setStatus(postId, harmless ? 'GENERAL_NOTICE' : decision.outcome === 'NEEDS_REVIEW' ? 'NEEDS_REVIEW' : STATUS_BY_RELEVANCE[extraction.relevance]);
     const outage = decision.outageId ? await prisma.outage.findUnique({ where: { id: decision.outageId }, select: { title: true, status: true, _count: { select: { posts: true } } } }) : null;
     return {
       postId,

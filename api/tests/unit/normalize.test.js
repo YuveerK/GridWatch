@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { differsByLabel, infraKey, isNotSuburbName, localityKey, similarity } from '../../src/lib/normalize.js';
+import { tailPlace, differsByLabel, infraKey, isNotSuburbName, localityKey, similarity } from '../../src/lib/normalize.js';
 
 describe('normalize', () => {
   it('strips type words from infrastructure names', () => {
@@ -33,5 +33,11 @@ describe('normalize', () => {
     for (const good of ['Westdene', 'Houghton', 'Bryanston', 'Northcliff', 'Randjiespark', 'Kya Sand', 'Orange Grove East', 'Lenasia Extension 3', 'Bird Haven']) {
       expect(isNotSuburbName(good), good).toBe(false);
     }
+  });
+
+  it('finds the suburb after "in" in a street phrase', () => {
+    expect(tailPlace('12th Avenue in Parktown North')).toBe('Parktown North');
+    expect(tailPlace('Westdene')).toBeNull();
+    expect(tailPlace('customers in')).toBeNull();
   });
 });

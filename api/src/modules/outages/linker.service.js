@@ -2,6 +2,7 @@ import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { generateJson } from '../ai/gemini.client.js';
+import { tailPlace } from '../../lib/normalize.js';
 import { parseSchedule } from '../../lib/schedule.js';
 import { scoreCandidate } from './scoring.js';
 import { cachedVerdict, storeVerdict } from './tiebreak-cache.js';
@@ -158,7 +159,8 @@ const short = (s) => (s.length > 32 ? `${s.slice(0, 30).trim()}…` : s);
 
 function titleFor(facts, extraction) {
   const specific = [...facts.nodes].reverse().find((n) => !GENERIC_NODE.test(n.name));
-  const areas = extraction.result.localities.filter((l) => !STREETY.test(l.name)).slice(0, 2).map((l) => short(l.name));
+  // "12th Avenue in Parktown North" -> "Parktown North"; pure street names are left out of titles
+  const areas = extraction.result.localities.map((l) => tailPlace(l.name) ?? l.name).filter((n) => !STREETY.test(n)).slice(0, 2).map(short);
   const useAreas = areas.length && (!specific || facts.nodes.length >= 5);
   const head = useAreas ? areas.join(', ') : specific?.name;
   const tail = !useAreas && specific && areas.length ? ` (${areas.join(', ')})` : '';

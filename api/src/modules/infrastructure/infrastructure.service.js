@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../../db/prisma.js';
-import { differsByLabel, infraKey, isNotSuburbName, localityKey, similarity } from '../../lib/normalize.js';
+import { differsByLabel, infraKey, isNotSuburbName, localityKey, similarity, tailPlace } from '../../lib/normalize.js';
 
 const FUZZY_NODE = 0.9;
 const FUZZY_LOCALITY = 0.92;
@@ -204,7 +204,8 @@ export async function learnFromExtraction(extraction, at) {
   const restoredLocalityIds = [];
   const unmatched = [];
   for (const l of result.localities) {
-    const loc = (await resolveLocality(l.name, preferIds)) ?? (await learnLocality(l.name));
+    let loc = (await resolveLocality(l.name, preferIds)) ?? (await learnLocality(l.name));
+    if (!loc && tailPlace(l.name)) loc = (await resolveLocality(tailPlace(l.name), preferIds)) ?? (await learnLocality(tailPlace(l.name)));
     if (!loc) {
       unmatched.push(l.name);
       continue;

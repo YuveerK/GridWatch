@@ -49,6 +49,12 @@ export function differsByLabel(a, b) {
   return odd.some((t) => t.length <= 2 || /\d/.test(t));
 }
 
+/** "12th Avenue in Parktown North" -> "Parktown North" (the place after "in"), or null when there is no such tail. */
+export function tailPlace(name) {
+  const m = /\s+in\s+([A-Za-z][A-Za-z .'-]{2,})$/i.exec(String(name ?? '').trim());
+  return m ? m[1].trim() : null;
+}
+
 const STREET_WORDS = /\b(street|st|str|road|rd|avenue|ave|drive|dr|lane|ln|close|crescent|cres|boulevard|way|highway|between)\b/i;
 const FACILITY_WORDS = /\b(centre|center|clinic|hospital|school|college|university|campus|stadium|mall|shopping|station|hotel|police|laboratory|wastewater|treatment|golf|shooting range|old age|church|mosque|water|standby|feederboard|substation|transformer|kiosk)\b/i;
 const ORG_WORDS = /\b(transnet|eskom|absa|sabc|standard bank|nedbank|fnb|coca-?cola|rand daily mail|city power|johannesburg water|telkom)\b/i;
