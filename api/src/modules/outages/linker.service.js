@@ -2,6 +2,7 @@ import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { generateJson } from '../ai/gemini.client.js';
+import { parseSchedule } from '../../lib/schedule.js';
 import { scoreCandidate } from './scoring.js';
 import { cachedVerdict, storeVerdict } from './tiebreak-cache.js';
 
@@ -313,5 +314,21 @@ export async function sweepStaleOutages(now = new Date()) {
     prisma.outage.updateMany({ where: { lastUpdateAt: { lt: cutoff }, status: { in: ['RESTORED', 'CANCELLED'] } }, data: { status: 'CLOSED' } }),
     prisma.outage.updateMany({ where: { lastUpdateAt: { lt: plannedCutoff }, status: 'PLANNED' }, data: { status: 'CLOSED' } }),
   ]);
-  return { stale: stale.count, closed: closed.count + closedPlanned.count };
+  // Planned work whose announced date is well past has finished, whether or not City Power said so.
+  const yesterday = new Date(now.getTime() - 24 * HOUR).toISOString().slice(0, 10);
+  const planned = await prisma.outage.findMany({
+    where: { status: 'PLANNED' },
+    select: { id: true, posts: { orderBy: { postedAt: 'desc' }, take: 6, select: { post: { select: { text: true, noteTweetText: true, publishedAt: true } } } } },
+  });
+  const pastIds = planned
+    .filter((o) => {
+      for (const p of o.posts) {
+        const s = parseSchedule(p.post.noteTweetText || p.post.text, p.post.publishedAt);
+        if (s) return s.date < yesterday;
+      }
+      return false;
+    })
+    .map((o) => o.id);
+  const closedPast = pastIds.length ? await prisma.outage.updateMany({ where: { id: { in: pastIds } }, data: { status: 'CLOSED' } }) : { count: 0 };
+  return { stale: stale.count, closed: closed.count + closedPlanned.count + closedPast.count };
 }

@@ -82,11 +82,12 @@ async function learnLocality(name) {
 }
 
 /** Find or create a node; bumps evidence and promotes to CONFIRMED. */
-const JUNK_NAME = /^(affected|unknown|customers?|areas?|surrounding( areas)?|n\/a|none|the|a|an|feeder|line|cable|mini[- ]?substation|substation|distributor)$/i;
+const JUNK_NAME = /^(affected|unspecified|unspecific|unnamed|tbc|unknown|customers?|areas?|surrounding( areas)?|n\/a|none|the|a|an|feeder|line|cable|mini[- ]?substation|substation|distributor)$/i;
 
 export async function resolveNode({ type, name, at }) {
   if (!name || JUNK_NAME.test(name.trim())) return null;
-  const key = type === 'SDC' ? infraKey(name).replace(/\s+/g, '') : infraKey(name);
+  // "Inner City", "InnerCity" and "InnerCitySDC" are one service delivery centre
+  const key = type === 'SDC' ? infraKey(name).replace(/\s+/g, '').replace(/sdc$/, '') : infraKey(name);
   if (!key) return null;
   let node = await prisma.infraNode.findUnique({ where: { type_normalizedKey: { type, normalizedKey: key } } });
   // "X Substation" and "X Switching Station" are written interchangeably for the same site.
