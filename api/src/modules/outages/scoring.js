@@ -64,11 +64,13 @@ export function scoreCandidate(post, outage) {
   if (outage.status === 'RESTORED') {
     const sinceRestore = (post.postedAt - (outage.restoredAt ?? outage.lastUpdateAt)) / HOUR;
     if (post.relevance === 'RESTORATION' || post.relevance === 'UPDATE') {
-      if (sinceRestore > 6) {
-        score -= 0.3;
+      // A second "restored" (or a further update) many hours after full restoration is a different event.
+      if (sinceRestore > 6) return { score: 0, reasons: ['already restored more than 6h earlier'] };
+      if (sinceRestore > 3) {
+        score -= post.relevance === 'RESTORATION' ? 0.6 : 0.3;
         reasons.push('restoration/update long after restore');
       }
-    } else if (sinceRestore > 0.5) {
+    } else if (sinceRestore > 0.5 && !(post.kind === 'PLANNED' && post.relevance === 'PLANNED_OUTAGE')) {
       score -= 0.5;
       reasons.push('new fault after restoration');
     }

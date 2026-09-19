@@ -94,6 +94,12 @@ export async function resolveNode({ type, name, at }) {
   if (!node && STATION_TYPES.includes(type)) {
     node = await prisma.infraNode.findFirst({ where: { normalizedKey: key, type: { in: STATION_TYPES } }, orderBy: { evidenceCount: 'desc' } });
   }
+  // "Roosevelt Park" and "Roosevelt" (one plain-word suffix) are the same substation.
+  if (!node && STATION_TYPES.includes(type) && key.length >= 4) {
+    const stations = await prisma.infraNode.findMany({ where: { type: { in: STATION_TYPES } }, orderBy: [{ evidenceCount: 'desc' }, { normalizedKey: 'asc' }] });
+    const plainSuffix = (long, short) => long.startsWith(`${short} `) && /^[a-z]+$/.test(long.slice(short.length + 1));
+    node = stations.find((n) => plainSuffix(n.normalizedKey, key) || plainSuffix(key, n.normalizedKey)) ?? null;
+  }
   if (!node) {
     const alias = await prisma.nodeAlias.findFirst({ where: { normalizedKey: key, node: { type } }, include: { node: true } });
     node = alias?.node ?? null;
@@ -156,7 +162,15 @@ export async function learnFromExtraction(extraction, at) {
   const sdcName = result.sdc ?? result.entities.find((e) => e.type === 'SDC')?.name ?? null;
   const sdcNode = sdcName ? await resolveNode({ type: 'SDC', name: sdcName, at }) : null;
 
-  const entities = result.entities.filter((e) => e.type !== 'SDC');
+  // A bare line/feeder label ("A", "D", "1B") is only meaningful with its station: "Tshepisong A".
+  const stationNames = result.entities.filter((e) => ['SUBSTATION', 'SWITCHING_STATION'].includes(e.type)).map((e) => e.name);
+  const entities = result.entities
+    .filter((e) => e.type !== 'SDC')
+    .map((e) => {
+      if (!/^[A-Za-z0-9]{1,2}$/.test(e.name.trim())) return e;
+      const station = e.parent_name ?? (stationNames.length === 1 ? stationNames[0] : null);
+      return station ? { ...e, name: `${station} ${e.name.trim()}`, parent_name: e.parent_name ?? station } : e;
+    });
   const resolved = new Map(); // infraKey → node
   for (const e of entities) {
     const node = await resolveNode({ type: e.type, name: e.name, at });

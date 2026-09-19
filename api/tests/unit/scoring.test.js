@@ -66,6 +66,11 @@ describe('scoreCandidate', () => {
     expect(r.score).toBeLessThan(0.7);
   });
 
+  it('never attaches a restoration to an outage restored more than 6h earlier', () => {
+    const restored = outage({ status: 'RESTORED', restoredAt: hoursLater(1), lastUpdateAt: hoursLater(1) });
+    expect(scoreCandidate(post({ relevance: 'RESTORATION', postedAt: hoursLater(9) }), restored).score).toBe(0);
+  });
+
   it('attaches a repeated cancellation to the cancelled outage but not other posts', () => {
     const cancelled = outage({ status: 'CANCELLED' });
     expect(scoreCandidate(post({ status: 'CANCELLED', relevance: 'PLANNED_OUTAGE' }), cancelled).score).toBeGreaterThanOrEqual(0.7);

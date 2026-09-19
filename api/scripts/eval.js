@@ -10,20 +10,20 @@ const to = arg('to') ? new Date(arg('to')) : null;
 
 const posts = await prisma.sourcePost.findMany({
   where: { OR: Object.keys(golden).map((s) => ({ externalId: { endsWith: s } })) },
-  select: { externalId: true, publishedAt: true, outagePost: { select: { outageId: true } }, text: true },
+  select: { externalId: true, publishedAt: true, outagePosts: { select: { outageId: true } }, text: true },
 });
 
 const items = [];
 for (const p of posts) {
   if ((from && p.publishedAt < from) || (to && p.publishedAt >= to)) continue;
   const key = Object.keys(golden).find((k) => p.externalId.endsWith(k));
-  items.push({ key, truth: golden[key], predicted: p.outagePost?.outageId ?? null, text: p.text.replace(/\s+/g, ' ').slice(0, 80) });
+  items.push({ key, truth: golden[key], predicted: new Set(p.outagePosts.map((o) => o.outageId)), text: p.text.replace(/\s+/g, ' ').slice(0, 80) });
 }
 const missing = Object.keys(golden).filter((k) => !items.some((i) => i.key === k));
 
 // Non-outage posts: correct only when not attached to any outage.
 const none = items.filter((i) => i.truth === 'NONE');
-const wrongNone = none.filter((i) => i.predicted);
+const wrongNone = none.filter((i) => i.predicted.size > 0);
 const labelled = items.filter((i) => i.truth !== 'NONE');
 
 let tp = 0, fp = 0, fn = 0;
@@ -33,7 +33,7 @@ for (let a = 0; a < labelled.length; a++) {
   for (let b = a + 1; b < labelled.length; b++) {
     const A = labelled[a], B = labelled[b];
     const sameTruth = A.truth === B.truth;
-    const samePred = A.predicted && A.predicted === B.predicted;
+    const samePred = [...A.predicted].some((o) => B.predicted.has(o));
     if (sameTruth && samePred) tp++;
     else if (!sameTruth && samePred) { fp++; mergedPairs.push([A, B]); }
     else if (sameTruth && !samePred) { fn++; splitPairs.push([A, B]); }

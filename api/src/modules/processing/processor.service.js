@@ -16,6 +16,38 @@ const STATUS_BY_RELEVANCE = {
 
 const setStatus = (id, processingStatus) => prisma.sourcePost.update({ where: { id }, data: { processingStatus } });
 
+const RELEVANCE_BY_STATUS = { RESTORED: 'RESTORATION', PLANNED: 'PLANNED_OUTAGE', CANCELLED: 'PLANNED_OUTAGE', PARTIALLY_RESTORED: 'UPDATE' };
+
+/** A graphic reporting several separate faults: learn and link each fault as its own mini-post. */
+async function processFaults({ postRow, extraction, faults }) {
+  const sdc = extraction.result.sdc;
+  const outcomes = [];
+  for (const [i, f] of faults.entries()) {
+    const synthetic = {
+      ...extraction,
+      relevance: RELEVANCE_BY_STATUS[f.status] ?? 'OUTAGE',
+      result: {
+        ...extraction.result,
+        status: f.status,
+        cause: f.cause,
+        eta_text: f.eta_text,
+        restoration_percent: f.restoration_percent,
+        entities: [...(sdc ? [{ type: 'SDC', name: sdc, parent_name: null }] : []), ...f.equipment],
+        localities: f.localities,
+        faults: [],
+      },
+    };
+    const facts = { ...(await learnFromExtraction(synthetic, postRow.publishedAt)), fromDigest: true };
+    if (!facts.nodes.length && !facts.localityIds.length) continue;
+    const decision = await linkPost({ postRow, extraction: synthetic, facts, faultIndex: i });
+    outcomes.push(decision.outcome);
+  }
+  const anyLinked = outcomes.length > 0;
+  await setStatus(postRow.id, 'RELEVANT');
+  if (!anyLinked) await prisma.linkDecision.create({ data: { postId: postRow.id, outcome: 'NEW', reason: 'digest post: no fault with equipment or suburbs' } });
+  return { postId: postRow.id, outcome: outcomes.includes('LINKED') ? 'LINKED' : 'NEW', detail: { fresh: false, tokens: '-', relevance: extraction.relevance, status: 'MULTI', sdc, nodes: [], localities: 0, matchedLocalities: 0, usedLlm: false, topScore: null, reason: `${faults.length} faults split (${outcomes.join(',')})`, outageTitle: null, outageStatus: null, outagePosts: null } };
+}
+
 /** extract → learn infrastructure → link/open outage for one post. */
 export async function processPost(postId) {
   const postRow = await prisma.sourcePost.findUniqueOrThrow({ where: { id: postId } });
@@ -33,11 +65,14 @@ export async function processPost(postId) {
       await setStatus(postId, extraction.status === 'FAILED' ? 'PROCESSING_ERROR' : 'NEEDS_REVIEW');
       return { postId, outcome: extraction.status };
     }
-    const alreadyLinked = await prisma.linkDecision.findUnique({ where: { postId } });
+    const alreadyLinked = await prisma.linkDecision.findFirst({ where: { postId } });
     if (alreadyLinked) {
       await setStatus(postId, STATUS_BY_RELEVANCE[extraction.relevance]);
       return { postId, outcome: 'ALREADY_LINKED' };
     }
+    const faults = extraction.result.faults ?? [];
+    // several faults, or a call-count summary that still names one concrete fault: link each fault separately
+    if (faults.length >= 2 || (faults.length === 1 && extraction.relevance === 'SDC_SUMMARY')) return processFaults({ postRow, extraction, faults });
     const facts = await learnFromExtraction(extraction, postRow.publishedAt);
     const decision = await linkPost({ postRow, extraction, facts });
     await setStatus(postId, decision.outcome === 'NEEDS_REVIEW' ? 'NEEDS_REVIEW' : STATUS_BY_RELEVANCE[extraction.relevance]);
@@ -75,7 +110,7 @@ export async function processPost(postId) {
 export async function processPending({ limit, onPost, from, to } = {}) {
   const posts = await prisma.sourcePost.findMany({
     where: {
-      linkDecision: null,
+      linkDecisions: { none: {} },
       processingStatus: { notIn: ['NEEDS_REVIEW'] },
       ...(from || to ? { publishedAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } } : {}),
     },

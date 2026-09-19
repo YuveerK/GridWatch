@@ -8,8 +8,9 @@ import { cachedVerdict, storeVerdict } from './tiebreak-cache.js';
 const LINKABLE = new Set(['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE']);
 const HOUR = 3_600_000;
 const DIGEST_NODES = 5;
+const PLANNED_WINDOW_HOURS = 240;
 const DIGEST_ROOTS = 2;
-const isDigest = (facts) => facts.rootCount >= 3 || (facts.rootCount >= DIGEST_ROOTS && facts.nodes.length >= 4);
+const isDigest = (facts) => !facts.fromDigest && facts.rootCount >= 3 || (facts.rootCount >= DIGEST_ROOTS && facts.nodes.length >= 4);
 
 const PLANNED_TEXT = /planned (maintenance|power interruption|interruption|outage)|scheduled (maintenance|interruption|outage)/i;
 
@@ -30,7 +31,11 @@ const tieBreakSchema = {
 async function loadCandidates(post) {
   const since = new Date(post.postedAt.getTime() - env.OUTAGE_WINDOW_HOURS * HOUR);
   const outages = await prisma.outage.findMany({
-    where: { lastUpdateAt: { gte: since }, status: { not: 'CLOSED' } },
+    where: {
+      status: { not: 'CLOSED' },
+      // planned work (reminders days ahead, multi-day isolations) stays linkable much longer than a fault
+      OR: [{ kind: 'UNPLANNED', lastUpdateAt: { gte: since } }, { kind: 'PLANNED', lastUpdateAt: { gte: new Date(post.postedAt.getTime() - PLANNED_WINDOW_HOURS * HOUR) } }],
+    },
     orderBy: [{ startedAt: 'asc' }, { title: 'asc' }],
     include: {
       nodes: { include: { node: { select: { name: true, type: true } } } },
@@ -189,11 +194,16 @@ async function applyPost({ post, extraction, facts, outageId, score, reasons, is
       });
     }
     // A digest post (many nodes) must not smear its nodes across an existing single-fault outage.
-    for (const n of isNew || !isDigest(facts) ? facts.nodes : []) {
+    const mayExpand = isNew || !(isDigest(facts) || facts.fromDigest);
+    for (const n of mayExpand ? facts.nodes : []) {
       await tx.outageNode.upsert({ where: { outageId_nodeId: { outageId: id, nodeId: n.id } }, create: { outageId: id, nodeId: n.id }, update: {} });
     }
     for (const localityId of facts.localityIds) {
       const restored = status === 'RESTORED' || facts.restoredLocalityIds.includes(localityId);
+      if (!mayExpand) {
+        if (restored) await tx.outageLocality.updateMany({ where: { outageId: id, localityId }, data: { restored } });
+        continue;
+      }
       await tx.outageLocality.upsert({
         where: { outageId_localityId: { outageId: id, localityId } },
         create: { outageId: id, localityId, restored },
@@ -201,16 +211,19 @@ async function applyPost({ post, extraction, facts, outageId, score, reasons, is
       });
     }
     if (status === 'RESTORED') await tx.outageLocality.updateMany({ where: { outageId: id }, data: { restored: true } });
-    await tx.outagePost.create({
-      data: { outageId: id, postId: post.id, role: roleFor(extraction, isNew && !retroactive), score, reasons, postedAt: post.postedAt },
+    const opData = { role: roleFor(extraction, isNew && !retroactive), score, reasons, postedAt: post.postedAt };
+    await tx.outagePost.upsert({
+      where: { outageId_postId: { outageId: id, postId: post.id } },
+      create: { outageId: id, postId: post.id, ...opData },
+      update: {},
     });
     return id;
   });
 }
 
 /** Link (or open) an outage for one extracted post. Idempotent per post. */
-export async function linkPost({ postRow, extraction, facts }) {
-  const existing = await prisma.linkDecision.findUnique({ where: { postId: postRow.id } });
+export async function linkPost({ postRow, extraction, facts, faultIndex = 0 }) {
+  const existing = await prisma.linkDecision.findUnique({ where: { postId_faultIndex: { postId: postRow.id, faultIndex } } });
   if (existing) return existing;
 
   const post = {
@@ -227,7 +240,7 @@ export async function linkPost({ postRow, extraction, facts }) {
   };
   post.relatedNodeIds = await relatedNodeIds(post.nodeIds);
 
-  const decide = (data) => prisma.linkDecision.create({ data: { postId: post.id, ...data } });
+  const decide = (data) => prisma.linkDecision.create({ data: { postId: post.id, faultIndex, ...data } });
 
   if (!LINKABLE.has(extraction.relevance)) return decide({ outcome: 'NEW', reason: `not linkable (${extraction.relevance})` });
 

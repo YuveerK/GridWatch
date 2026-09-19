@@ -63,8 +63,8 @@ model SourcePost {
   IngestionRunPost IngestionRunPost[]
   PostMedia        PostMedia[]
   extractions      PostExtraction[]
-  outagePost       OutagePost?
-  linkDecision     LinkDecision?
+  outagePosts      OutagePost[]
+  linkDecisions    LinkDecision[]
 
   @@unique([platform, externalId])
   @@index([processingStatus, publishedAt])
@@ -370,7 +370,7 @@ model OutageLocality {
 
 model OutagePost {
   outageId String
-  postId   String         @unique
+  postId   String
   role     OutagePostRole
   score    Float?
   reasons  Json?
@@ -380,11 +380,13 @@ model OutagePost {
 
   @@id([outageId, postId])
   @@index([outageId, postedAt])
+  @@index([postId])
 }
 
 model LinkDecision {
   id         String      @id @default(cuid())
-  postId     String      @unique
+  postId     String
+  faultIndex Int         @default(0)
   outcome    LinkOutcome
   outageId   String?
   topScore   Float?
@@ -394,4 +396,6 @@ model LinkDecision {
   createdAt  DateTime    @default(now())
   post       SourcePost  @relation(fields: [postId], references: [id], onDelete: Cascade)
   outage     Outage?     @relation(fields: [outageId], references: [id], onDelete: SetNull)
+
+  @@unique([postId, faultIndex])
 }

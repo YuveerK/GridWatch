@@ -129,7 +129,7 @@ router.get('/admin/review-queue', wrap(async (_req, res) => {
     where: { processingStatus: { in: ['NEEDS_REVIEW', 'PROCESSING_ERROR'] } },
     orderBy: { publishedAt: 'desc' },
     take: 100,
-    select: { id: true, externalId: true, text: true, publishedAt: true, processingStatus: true, linkDecision: true, extractions: { select: { status: true, error: true } } },
+    select: { id: true, externalId: true, text: true, publishedAt: true, processingStatus: true, linkDecisions: true, extractions: { select: { status: true, error: true } } },
   });
   res.json({ data: posts });
 }));
