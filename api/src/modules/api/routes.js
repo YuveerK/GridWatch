@@ -16,7 +16,7 @@ const HOUR = 3_600_000;
 const todaySAST = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Johannesburg' }).format(new Date());
 
 const outageInclude = {
-  localities: { include: { locality: { select: { id: true, canonicalName: true, Region: { select: { code: true, name: true } } } } } },
+  localities: { include: { locality: { select: { id: true, canonicalName: true, lat: true, lon: true, Region: { select: { code: true, name: true } } } } } },
   nodes: { include: { node: { select: { id: true, type: true, name: true, lifecycle: true } } } },
   _count: { select: { posts: true } },
 };
@@ -27,19 +27,19 @@ async function withLikelyAreas(outages) {
   if (!bare.length) return outages;
   const nodeIds = [...new Set(bare.flatMap((o) => o.nodes.map((n) => n.nodeId)))];
   const [learned, nodes] = await Promise.all([
-    prisma.nodeLocality.findMany({ where: { nodeId: { in: nodeIds }, evidenceCount: { gte: 3 } }, include: { locality: { select: { id: true, canonicalName: true } } }, orderBy: { evidenceCount: 'desc' } }),
+    prisma.nodeLocality.findMany({ where: { nodeId: { in: nodeIds }, evidenceCount: { gte: 3 } }, include: { locality: { select: { id: true, canonicalName: true, lat: true, lon: true } } }, orderBy: { evidenceCount: 'desc' } }),
     prisma.infraNode.findMany({ where: { id: { in: nodeIds } }, select: { id: true, normalizedKey: true } }),
   ]);
   // a station named after a suburb ("Tshepisong Switching Station") is a decent hint for that suburb
-  const sameName = await prisma.locality.findMany({ where: { normalizedName: { in: nodes.map((n) => n.normalizedKey) } }, select: { id: true, canonicalName: true, normalizedName: true } });
+  const sameName = await prisma.locality.findMany({ where: { normalizedName: { in: nodes.map((n) => n.normalizedKey) } }, select: { id: true, canonicalName: true, normalizedName: true, lat: true, lon: true } });
   const keyById = new Map(nodes.map((n) => [n.id, n.normalizedKey]));
   for (const o of bare) {
     const seen = new Map();
     for (const n of o.nodes) {
-      for (const l of learned.filter((x) => x.nodeId === n.nodeId)) seen.set(l.locality.id, l.locality.canonicalName);
-      for (const l of sameName.filter((x) => x.normalizedName === keyById.get(n.nodeId))) seen.set(l.id, l.canonicalName);
+      for (const l of learned.filter((x) => x.nodeId === n.nodeId)) seen.set(l.locality.id, l.locality);
+      for (const l of sameName.filter((x) => x.normalizedName === keyById.get(n.nodeId))) seen.set(l.id, l);
     }
-    o.likelyAreas = [...seen].slice(0, 8).map(([id, canonicalName]) => ({ id, canonicalName }));
+    o.likelyAreas = [...seen.values()].slice(0, 8).map((l) => ({ id: l.id, canonicalName: l.canonicalName, lat: l.lat ?? null, lon: l.lon ?? null }));
   }
   return outages;
 }
@@ -278,7 +278,7 @@ router.get('/v1/localities/:id/outages', wrap(async (req, res) => {
     where: {
       localities: { none: {} },
       status: { in: ['ACTIVE', 'PARTIALLY_RESTORED', 'PLANNED', 'STALE'] },
-      nodes: { some: { node: { OR: [{ localities: { some: { localityId: req.params.id, evidenceCount: { gte: 3 } } } }, { normalizedKey: loc?.normalizedName ?? ' ' }] } } },
+      nodes: { some: { node: { OR: [{ localities: { some: { localityId: req.params.id, evidenceCount: { gte: 3 } } } }, { normalizedKey: loc?.normalizedName ?? '__no_match__' }] } } },
     },
     include: outageInclude,
     orderBy: { lastUpdateAt: 'desc' },
@@ -302,6 +302,56 @@ router.get('/v1/network/sdcs', wrap(async (_req, res) => {
       const n = (st) => mine.filter((r) => r.status === st).reduce((a, r) => a + r._count, 0);
       return { id: s.id, name: s.name, equipment: kids.get(s.id) ?? 0, live: n('ACTIVE'), partial: n('PARTIALLY_RESTORED'), planned: n('PLANNED'), lastSeenAt: s.lastSeenAt };
     }),
+  });
+}));
+
+// ───────────── map ─────────────
+
+const place = (l, extra = {}) => ({ id: l.id, name: l.canonicalName, lat: l.lat, lon: l.lon, ...extra });
+
+/** Live outages with the approximate position of each affected suburb. Suburbs we could not place are only counted. */
+router.get('/v1/map', wrap(async (_req, res) => {
+  const rows = await prisma.outage.findMany({ where: { status: { in: LIVE } }, include: outageInclude, orderBy: { lastUpdateAt: 'desc' }, take: 100 });
+  const outages = await shapeMany(rows);
+  res.json({
+    data: outages.map((o) => {
+      const named = o.localities.map((l) => place(l, { restored: l.restored, inferred: false }));
+      const all = named.length ? named : o.likelyAreas.map((l) => place({ ...l, canonicalName: l.canonicalName }, { restored: false, inferred: true }));
+      return {
+        id: o.id, title: o.title, status: o.status, restorationPercent: o.restorationPercent, sdc: o.sdc, lastUpdateAt: o.lastUpdateAt, latest: o.latest?.summary ?? null,
+        places: all.filter((p) => p.lat != null && p.lon != null),
+        unplaced: all.filter((p) => p.lat == null || p.lon == null).length,
+      };
+    }),
+  });
+}));
+
+/** The suburbs a piece of equipment is known to reach, including everything downstream of it. Approximate: it is what posts have named. */
+router.get('/v1/map/node/:id', wrap(async (req, res) => {
+  const root = await prisma.infraNode.findUnique({ where: { id: req.params.id }, select: { id: true, name: true, type: true } });
+  if (!root) return res.status(404).json({ error: 'not_found' });
+  const ids = new Set([root.id]);
+  let frontier = [root.id];
+  for (let depth = 0; depth < 4 && frontier.length; depth++) {
+    const edges = await prisma.infraEdge.findMany({ where: { parentId: { in: frontier } }, select: { childId: true } });
+    frontier = edges.map((e) => e.childId).filter((c) => !ids.has(c));
+    frontier.forEach((c) => ids.add(c));
+  }
+  const rows = await prisma.nodeLocality.findMany({ where: { nodeId: { in: [...ids] } }, include: { locality: { select: { id: true, canonicalName: true, lat: true, lon: true } } } });
+  const byLoc = new Map();
+  for (const r of rows) {
+    const cur = byLoc.get(r.localityId) ?? { ...r.locality, evidence: 0 };
+    cur.evidence += r.evidenceCount;
+    byLoc.set(r.localityId, cur);
+  }
+  const all = [...byLoc.values()].sort((a, b) => b.evidence - a.evidence);
+  const liveRows = await prisma.outageNode.findMany({ where: { nodeId: { in: [...ids] }, outage: { status: { in: LIVE } } }, select: { outage: { select: { localities: { select: { localityId: true } } } } } });
+  const affected = new Set(liveRows.flatMap((r) => r.outage.localities.map((l) => l.localityId)));
+  res.json({
+    node: root,
+    places: all.filter((l) => l.lat != null).slice(0, 120).map((l) => place(l, { evidence: l.evidence, live: affected.has(l.id) })),
+    unplaced: all.filter((l) => l.lat == null).length,
+    total: all.length,
   });
 }));
 

@@ -9,6 +9,7 @@ import { useTheme } from './lib/hooks.js';
 import About from './views/About.jsx';
 import Activity from './views/Activity.jsx';
 import Network from './views/Network.jsx';
+import MapPage from './views/MapPage.jsx';
 import NodeDetail from './views/NodeDetail.jsx';
 import OutageDetail from './views/OutageDetail.jsx';
 import Outages from './views/Outages.jsx';
@@ -21,6 +22,7 @@ const NAV = [
   ['/outages', 'Outages', 'list'],
   ['/planned', 'Planned', 'calendar'],
   ['/activity', 'Activity', 'refresh', false, true],
+  ['/map', 'Map', 'map'],
   ['/network', 'Network', 'network'],
   ['/about', 'About', 'info'],
 ];
@@ -107,6 +109,7 @@ export default function Root() {
           <Route path="/planned" element={<Planned />} />
           <Route path="/activity" element={<Activity />} />
           <Route path="/suburb/:id" element={<Suburb />} />
+          <Route path="/map" element={<MapPage />} />
           <Route path="/network" element={<Network />} />
           <Route path="/network/:id" element={<NodeDetail />} />
           <Route path="/about" element={<About />} />

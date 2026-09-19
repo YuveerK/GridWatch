@@ -29,3 +29,16 @@ It is an operator tool for now. Settings in `api/.env`:
 To use the scheduler instead, start the API without `SCHEDULER=off`; it runs the same single-flight cycle every few minutes.
 
 X fetches leave out replies by default (`X_INCLUDE_REPLIES=off`). They are City Power answering individual customers, which is never outage news, and X charges per post returned.
+
+## The map
+
+The Map page and the "Where it reaches" panel on equipment pages show suburbs as dots at their centre. They are approximate: City Power names suburbs, not streets or cable routes, so the map says "roughly here".
+
+Suburb positions come from free OpenStreetMap data (suburb areas first, then the Nominatim geocoder) and are stored on each suburb. New suburbs appear as posts are read, so run this now and then (it only places suburbs that have no position yet, about 1 request a second):
+
+```
+cd api
+npm run geocode
+```
+
+Suburbs that fail (typos in City Power's posts, private complexes) stay off the map and are counted as "could not be placed". Map tiles come from OpenFreeMap, which is free and needs no key.

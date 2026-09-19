@@ -14,6 +14,7 @@
     "process": "node scripts/process.js",
     "relink": "node scripts/relink.js",
     "eval": "node scripts/eval.js",
+    "geocode": "node scripts/geocode-localities.js",
     "audit": "node scripts/audit.js",
     "batch": "node scripts/batch-report.js"
   },

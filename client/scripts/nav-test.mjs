@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 const base = process.argv[2] ?? 'http://localhost:5173';
 const EDGE = process.env.BROWSER ?? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const port = 9340 + Math.floor(Math.random() * 50);
-const proc = spawn(EDGE, ['--headless=new', '--disable-gpu', `--remote-debugging-port=${port}`, '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
+const proc = spawn(EDGE, ['--headless=new', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', `--remote-debugging-port=${port}`, '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let targets;
@@ -49,7 +49,7 @@ await sleep(3500);
 results.push({ label: 'load /', blank: !((await evaluate('document.getElementById("root")?.innerText?.trim().length ?? 0')) > 40), chars: await evaluate('document.getElementById("root").innerText.length'), newErrors: [...errors] });
 
 const click = (href) => evaluate(`(() => { const a = document.querySelector('.nav a[href="${href}"]'); if (!a) return 'missing'; a.click(); return 'clicked'; })()`);
-for (const href of ['/outages', '/planned', '/activity', '/network', '/about', '/']) await step(`click nav ${href}`, () => click(href));
+for (const href of ['/outages', '/planned', '/activity', '/map', '/network', '/about', '/']) await step(`click nav ${href}`, () => click(href));
 // into a detail page and back through the browser history
 await step('open first outage card', () => evaluate(`(() => { document.querySelector('a[href^="/outages/"]')?.click(); })()`));
 await step('history back', () => evaluate('history.back()'));

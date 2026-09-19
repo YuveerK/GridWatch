@@ -1,5 +1,6 @@
 import { Link, useParams } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
+import NodeReach from '../components/NodeReach.jsx';
 import OutageCard from '../components/OutageCard.jsx';
 import { Chip, Crumbs, ErrorState, SectionHead, Skeleton } from '../components/ui.jsx';
 import { fmtDay, nice, plural, prettySdc, typeLabel, useApi } from '../lib/api.js';
@@ -76,6 +77,8 @@ export default function NodeDetail() {
           </div>
         </section>
       )}
+
+      <NodeReach id={n.id} />
 
       {n.localities.length > 0 && (
         <section className="section">
