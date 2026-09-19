@@ -1,5 +1,6 @@
 import { Link, useParams } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
+import FeedFlow from '../components/FeedFlow.jsx';
 import NodeReach from '../components/NodeReach.jsx';
 import OutageCard from '../components/OutageCard.jsx';
 import { Chip, Crumbs, ErrorState, SectionHead, Skeleton } from '../components/ui.jsx';
@@ -49,6 +50,11 @@ export default function NodeDetail() {
         <div className="card card-pad"><div className="small muted">First seen</div><div style={{ fontSize: 22, fontWeight: 750 }}>{fmtDay(n.firstSeenAt)}</div></div>
         <div className="card card-pad"><div className="small muted">Last seen</div><div style={{ fontSize: 22, fontWeight: 750 }}>{fmtDay(n.lastSeenAt)}</div></div>
       </div>
+
+      <section className="section" aria-labelledby="flow-h">
+        <SectionHead id="flow-h" title="How power flows here" sub="The route from the service centre down to suburbs, as far as City Power's posts have shown" />
+        <FeedFlow node={n} />
+      </section>
 
       {live.length > 0 && (
         <section className="section">
