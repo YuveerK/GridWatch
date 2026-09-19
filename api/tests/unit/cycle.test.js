@@ -54,6 +54,19 @@ describe('refresh cycle', () => {
     expect(cycle.status().result).toMatchObject({ processed: 2, failed: 1 });
   });
 
+  it('pins new suburbs after reading, and a failure there never breaks the fetch', async () => {
+    const ok = make({ place: async () => ({ osm: 2, geocoder: 1 }) });
+    ok.cycle.start('manual');
+    await ok.cycle.whenIdle();
+    expect(ok.cycle.status()).toMatchObject({ state: 'done', result: { placed: 3 } });
+
+    const broken = make({ place: async () => { throw new Error('nominatim down'); } });
+    broken.cycle.start('manual');
+    await broken.cycle.whenIdle();
+    expect(broken.cycle.status()).toMatchObject({ state: 'done', result: { placed: 0, newPosts: 9 } });
+    expect(broken.calls.sweep).toBe(1);
+  });
+
   it('never runs two cycles at once', async () => {
     const gate = deferred();
     const { cycle, calls } = make({ ingest: async () => (await gate.promise, { status: 'SUCCEEDED' }) });

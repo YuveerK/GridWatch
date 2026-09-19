@@ -3,6 +3,7 @@ import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { ingestNewPosts } from '../ingestion/ingestion.service.js';
 import { sweepStaleOutages } from '../outages/linker.service.js';
+import { placeLocalities } from '../geo/geocode.service.js';
 import { processPending } from './processor.service.js';
 
 function friendly(err) {
@@ -17,7 +18,7 @@ function friendly(err) {
  * Single-flight (never two at once), with a cooldown on manual runs and a cap on posts read per run, because
  * every run spends money at X and at the AI provider. Dependencies are injected so it can be tested without either.
  */
-export function createCycle({ ingest, process, sweep, counts, now = () => Date.now(), cooldownMs = 90_000, maxPosts = 200 }) {
+export function createCycle({ ingest, process, sweep, place, counts, now = () => Date.now(), cooldownMs = 90_000, maxPosts = 200 }) {
   let state = { state: 'idle', trigger: null, step: null, startedAt: null, finishedAt: null, progress: null, found: null, result: null, error: null };
   let lastManualAt = 0;
   let current = Promise.resolve();
@@ -40,6 +41,14 @@ export function createCycle({ ingest, process, sweep, counts, now = () => Date.n
         onPost: (_res, done, total) => { state.progress = { done, total }; },
       });
       state.step = 'tidying';
+      // pin any suburbs learned from these posts on the map; capped and failure-proof, it can never hold up or break a fetch
+      let placed = 0;
+      try {
+        const g = await place?.();
+        placed = (g?.osm ?? 0) + (g?.geocoder ?? 0);
+      } catch (err) {
+        logger.warn({ err: err?.message }, 'placing new suburbs on the map failed; will retry next fetch');
+      }
       await sweep();
       const after = await counts();
       state = {
@@ -54,6 +63,7 @@ export function createCycle({ ingest, process, sweep, counts, now = () => Date.n
           newOutages: Math.max(0, after.outages - before.outages),
           updates: Math.max(0, after.outagePosts - before.outagePosts),
           capped: (proc?.total ?? 0) >= maxPosts,
+          placed,
           failed: proc?.tally?.ERROR ?? 0, // posts that could not be processed; they are retried on the next fetch
         },
       };
@@ -92,6 +102,7 @@ export const cycle = createCycle({
   ingest: ingestNewPosts,
   process: processPending,
   sweep: sweepStaleOutages,
+  place: () => placeLocalities({ max: 8, budgetMs: 20_000 }),
   counts: async () => ({ outages: await prisma.outage.count(), outagePosts: await prisma.outagePost.count() }),
   cooldownMs: env.REFRESH_COOLDOWN_SECONDS * 1000,
   maxPosts: env.REFRESH_MAX_POSTS,
