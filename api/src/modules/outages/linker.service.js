@@ -275,7 +275,8 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0 }) {
   if (top && top.score >= env.LINK_HIGH_SCORE) {
     outageId = top.id;
     reason = top.reasons.join(', ');
-  } else if (top && top.score >= env.LINK_LOW_SCORE && !isDigest(facts)) {
+  } else if (top && top.score >= env.LINK_LOW_SCORE && (!isDigest(facts) || !(extraction.result.faults?.length >= 2))) {
+    // a prose update about one incident that names many substations is not a multi-fault graphic: let the tie-break decide
     usedLlm = true;
     try {
       const verdict = await askLlm(post, extraction, candidates);
