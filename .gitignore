@@ -1,2 +1,3 @@
 .env
 api/data/cache/
+api/data/backups/

@@ -2,6 +2,7 @@
 // Run: npm run audit      Exit code 1 if any check finds problems.
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/db/prisma.js';
+import { isStale } from '../src/modules/ai/extraction.service.js';
 
 const HOUR = 3_600_000;
 const now = Date.now();
@@ -82,6 +83,9 @@ for (const c of checks) {
   console.log(`${n === 0 ? 'OK  ' : c.informational ? 'INFO' : 'FAIL'}  ${c.name}: ${n}   (${c.why})`);
   for (const o of c.hits.slice(0, 4)) console.log(`        - ${o.title} [${o.status}] last update ${o.lastUpdateAt.toISOString().slice(0, 16)} | ${short(o.posts.at(-1)?.post.noteTweetText || o.posts.at(-1)?.post.text)}`);
 }
-console.log(`\nPosts needing review/errored: ${review}   Unprocessed posts: ${unprocessed}`);
+const readings = await prisma.postExtraction.findMany({ where: { promptVersion: env.AI_PROMPT_VERSION }, select: { model: true, result: true } });
+const stale = readings.filter(isStale).length;
+console.log(`\n${stale === 0 ? 'OK  ' : 'WARN'}  Readings made with older instructions or another model: ${stale} of ${readings.length}${stale ? '   (run: npm run reread)' : ''}`);
+console.log(`Posts needing review/errored: ${review}   Unprocessed posts: ${unprocessed}`);
 await prisma.$disconnect();
 process.exit(problems ? 1 : 0);

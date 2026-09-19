@@ -135,6 +135,9 @@ function roleFor(extraction, isFirst) {
   return extraction.relevance === 'RESTORATION' || extraction.result.status === 'RESTORED' ? 'RESTORATION' : 'UPDATE';
 }
 
+/** A restoration post with no outage to attach to opens a restored outage, unless the post itself says restoration is only partial. */
+export const initialStatus = (retroactive, status) => (retroactive && status !== 'PARTIALLY_RESTORED' ? 'RESTORED' : status);
+
 export function statusFor(extraction, current) {
   const { status: s, localities = [], restoration_percent: pct } = extraction.result;
   // "restored to 48 percent" is partial no matter how the suburbs were tagged
@@ -179,7 +182,7 @@ async function applyPost({ post, extraction, facts, outageId, score, reasons, is
       const created = await tx.outage.create({
         data: {
           kind,
-          status: retroactive ? 'RESTORED' : status,
+          status: initialStatus(retroactive, status),
           title: titleFor(facts, extraction),
           sdcName: facts.sdcNode?.name ?? null,
           cause: r.cause,

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
@@ -7,6 +8,17 @@ import { extractionJsonSchema, extractionSchema } from './extraction.schema.js';
 import { SYSTEM_PROMPT, buildUserText } from './prompt.js';
 
 const MAX_IMAGES = 4;
+
+/**
+ * Fingerprint of what produces a reading: the instructions, the output schema and the model.
+ * It is stored with every reading, so editing the instructions makes older readings show up as stale
+ * (npm run audit) and `npm run reread` refreshes exactly those.
+ */
+export function readingStamp() {
+  const prompt = createHash('sha1').update(SYSTEM_PROMPT).update(JSON.stringify(extractionJsonSchema)).digest('hex').slice(0, 10);
+  return { prompt, model: env.GEMINI_MODEL };
+}
+export const isStale = (row) => row?.result?.__reading?.prompt !== readingStamp().prompt || row?.model !== env.GEMINI_MODEL;
 
 export function postText(post) {
   return post.noteTweetText || post.text;
@@ -59,7 +71,7 @@ export async function extractPost(postId, { force = false } = {}) {
         hasImages: imageParts.length > 0,
       });
       usage = { inputTokens: (usage.inputTokens ?? 0) + (out.inputTokens ?? 0), outputTokens: (usage.outputTokens ?? 0) + (out.outputTokens ?? 0) };
-      result = extractionSchema.parse(JSON.parse(out.text));
+      result = { ...extractionSchema.parse(JSON.parse(out.text)), __reading: readingStamp() };
       error = null;
     } catch (err) {
       error = err.message;

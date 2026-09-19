@@ -42,3 +42,16 @@ npm run geocode
 ```
 
 Suburbs that fail (typos in City Power's posts, private complexes) stay off the map and are counted as "could not be placed". Map tiles come from OpenFreeMap, which is free and needs no key.
+
+## Keeping readings fresh
+
+Every post is read once by Gemini and the result is stored. Each stored reading remembers which instructions (`prompt.js`) and model produced it. If you edit the instructions or change the model, `npm run audit` shows how many readings are now out of date, and this re-reads only those (with a backup, a spend cap and progress; a failed re-read keeps the old reading):
+
+```
+cd api
+npm run reread            # re-read stale posts only (about $0.002 per post)
+node scripts/process.js --reset   # then rebuild the outages from the fresh readings
+npm run geocode           # place any newly learned suburbs on the map
+```
+
+Backups are written to `api/data/backups/` (not committed). To undo a re-read: `npm run reread -- --restore=data/backups/<file>.json`, then rebuild.

@@ -16,6 +16,7 @@
     "eval": "node scripts/eval.js",
     "geocode": "node scripts/geocode-localities.js",
     "audit": "node scripts/audit.js",
+    "reread": "node scripts/reread.js",
     "batch": "node scripts/batch-report.js"
   },
   "engines": {

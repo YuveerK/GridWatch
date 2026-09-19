@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { linkedToPost, statusFor } from '../../src/modules/outages/linker.service.js';
+import { initialStatus, linkedToPost, statusFor } from '../../src/modules/outages/linker.service.js';
 
 const ex = (status, states) => ({ result: { status, localities: states.map((state) => ({ name: 'x', state })) } });
 
@@ -41,5 +41,12 @@ describe('faults from one graphic', () => {
   it('an outage already holding this post (linked by a sibling fault) is not a candidate for the next fault', () => {
     expect(linkedToPost(outage('p1', 'p2'), 'p2')).toBe(true);
     expect(linkedToPost(outage('p1'), 'p2')).toBe(false);
+  });
+
+  it('a restoration post with no outage to join opens a restored outage, unless it says restoration is only partial', () => {
+    expect(initialStatus(true, 'RESTORED')).toBe('RESTORED');
+    expect(initialStatus(true, 'ACTIVE')).toBe('RESTORED');
+    expect(initialStatus(true, 'PARTIALLY_RESTORED')).toBe('PARTIALLY_RESTORED');
+    expect(initialStatus(false, 'ACTIVE')).toBe('ACTIVE');
   });
 });
