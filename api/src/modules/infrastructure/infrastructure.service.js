@@ -5,6 +5,7 @@ import { infraKey, localityKey, similarity } from '../../lib/normalize.js';
 const FUZZY_NODE = 0.9;
 const FUZZY_LOCALITY = 0.92;
 const CONFIRM_AT = 2;
+const STATION_TYPES = ['SUBSTATION', 'SWITCHING_STATION'];
 
 let localityIndex = null;
 
@@ -15,8 +16,8 @@ const NOT_A_SUBURB = /((street|st|road|rd|avenue|ave|drive|dr|lane|centre|cente
 async function getLocalityIndex() {
   if (localityIndex) return localityIndex;
   const [locs, aliases] = await Promise.all([
-    prisma.locality.findMany({ where: { active: true }, include: { Region: true } }),
-    prisma.localityAlias.findMany({ where: { status: { not: 'REJECTED' } } }),
+    prisma.locality.findMany({ where: { active: true }, include: { Region: true }, orderBy: [{ canonicalName: 'asc' }, { regionId: 'asc' }, { sourceLine: 'asc' }] }),
+    prisma.localityAlias.findMany({ where: { status: { not: 'REJECTED' } }, orderBy: [{ normalizedAlias: 'asc' }, { alias: 'asc' }] }),
   ]);
   const byId = new Map(locs.map((l) => [l.id, l]));
   const map = new Map();
@@ -89,12 +90,16 @@ export async function resolveNode({ type, name, at }) {
   const key = type === 'SDC' ? infraKey(name).replace(/\s+/g, '') : infraKey(name);
   if (!key) return null;
   let node = await prisma.infraNode.findUnique({ where: { type_normalizedKey: { type, normalizedKey: key } } });
+  // "X Substation" and "X Switching Station" are written interchangeably for the same site.
+  if (!node && STATION_TYPES.includes(type)) {
+    node = await prisma.infraNode.findFirst({ where: { normalizedKey: key, type: { in: STATION_TYPES } }, orderBy: { evidenceCount: 'desc' } });
+  }
   if (!node) {
     const alias = await prisma.nodeAlias.findFirst({ where: { normalizedKey: key, node: { type } }, include: { node: true } });
     node = alias?.node ?? null;
   }
   if (!node && key.length >= 5) {
-    const peers = await prisma.infraNode.findMany({ where: { type }, select: { id: true, normalizedKey: true } });
+    const peers = await prisma.infraNode.findMany({ where: { type }, select: { id: true, normalizedKey: true }, orderBy: { normalizedKey: 'asc' } });
     let best = null;
     let bestScore = 0;
     for (const p of peers) {

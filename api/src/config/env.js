@@ -6,7 +6,7 @@ const schema = z.object({
   PORT: z.coerce.number().default(4000),
   DATABASE_URL: z.string().min(1),
   GEMINI_API_KEY: z.string().min(1),
-  GEMINI_MODEL: z.string().default('gemini-3.1-flash-lite'),
+  GEMINI_MODEL: z.string().default('gemini-3.5-flash-lite'),
   AI_PROMPT_VERSION: z.string().default('outage-extraction.v1'),
   X_API_BEARER_TOKEN: z.string().optional(),
   X_SOURCE_ACCOUNT_ID: z.string().default('337882328'),

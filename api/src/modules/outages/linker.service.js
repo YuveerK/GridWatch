@@ -3,12 +3,13 @@ import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { generateJson } from '../ai/gemini.client.js';
 import { scoreCandidate } from './scoring.js';
+import { cachedVerdict, storeVerdict } from './tiebreak-cache.js';
 
 const LINKABLE = new Set(['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE']);
 const HOUR = 3_600_000;
 const DIGEST_NODES = 5;
-const DIGEST_ROOTS = 3;
-const isDigest = (facts) => facts.nodes.length >= DIGEST_NODES || facts.rootCount >= DIGEST_ROOTS;
+const DIGEST_ROOTS = 2;
+const isDigest = (facts) => facts.rootCount >= 3 || (facts.rootCount >= DIGEST_ROOTS && facts.nodes.length >= 4);
 
 const PLANNED_TEXT = /planned (maintenance|power interruption|interruption|outage)|scheduled (maintenance|interruption|outage)/i;
 
@@ -30,11 +31,17 @@ async function loadCandidates(post) {
   const since = new Date(post.postedAt.getTime() - env.OUTAGE_WINDOW_HOURS * HOUR);
   const outages = await prisma.outage.findMany({
     where: { lastUpdateAt: { gte: since }, status: { not: 'CLOSED' } },
-    include: { nodes: true, localities: true, posts: { include: { post: { select: { conversationId: true, externalId: true } } } } },
+    orderBy: [{ startedAt: 'asc' }, { title: 'asc' }],
+    include: {
+      nodes: { include: { node: { select: { name: true, type: true } } } },
+      localities: { include: { locality: { select: { canonicalName: true } } } },
+      posts: { orderBy: { postedAt: 'asc' }, include: { post: { select: { conversationId: true, externalId: true, text: true, noteTweetText: true } } } },
+    },
   });
   return outages.map((o) => ({
     raw: o,
     id: o.id,
+    stableId: o.posts.reduce((a, p) => (!a || p.postedAt < a.postedAt ? p : a), null)?.postId ?? o.id,
     kind: o.kind,
     status: o.status,
     sdcName: o.sdcName,
@@ -63,24 +70,53 @@ async function relatedNodeIds(nodeIds) {
 }
 
 async function askLlm(post, extraction, ranked) {
-  const summaries = ranked.slice(0, 3).map((c) => ({
-    outage_id: c.id,
-    status: c.status,
-    title: c.raw.title,
-    cause: c.raw.cause,
-    last_update: c.lastUpdateAt.toISOString(),
-    score: c.score,
-    reasons: c.reasons,
-  }));
+  const clip = (t) => (t ?? '').replace(/#\w+/g, '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, 220);
+  const summaries = ranked.slice(0, 3).map((c) => {
+    const first = c.raw.posts[0]?.post;
+    const last = c.raw.posts.at(-1)?.post;
+    return {
+      outage_id: c.id,
+      kind: c.kind,
+      status: c.status,
+      cause: c.raw.cause,
+      equipment: c.raw.nodes.map((n) => `${n.node.type.toLowerCase()} ${n.node.name}`).slice(0, 8),
+      suburbs: c.raw.localities.map((l) => l.locality.canonicalName).slice(0, 8),
+      posts_so_far: c.raw.posts.length,
+      first_post: clip(first?.noteTweetText || first?.text),
+      latest_post: last === first ? undefined : clip(last?.noteTweetText || last?.text),
+      hours_since_last_update: Number(((post.postedAt - c.lastUpdateAt) / HOUR).toFixed(1)),
+      match_score: c.score,
+      match_reasons: c.reasons,
+    };
+  });
+  const r = extraction.result;
+  const newPost = {
+    posted_at: post.postedAt.toISOString(),
+    kind: post.kind,
+    type: r.relevance,
+    status: r.status,
+    cause: r.cause,
+    equipment: r.entities.filter((e) => e.type !== 'SDC').map((e) => `${e.type.toLowerCase()} ${e.name}`).slice(0, 12),
+    suburbs: r.localities.map((l) => l.name).slice(0, 12),
+    text: clip(post.text),
+  };
+  const shortlist = ranked.slice(0, 3);
+  const key = `v3|${post.id}|${shortlist.map((c) => c.stableId).sort().join(',')}`;
+  const hit = cachedVerdict(key);
+  if (hit !== undefined) {
+    const chosen = hit.stableId ? shortlist.find((c) => c.stableId === hit.stableId) : null;
+    return { outageId: chosen?.id ?? null, reason: `${hit.reason} (cached)` };
+  }
   const out = await generateJson({
     systemInstruction:
-      'Decide whether a new City Power post belongs to one of the existing outages (same fault/area, continued or restored) or is a different, new outage. Answer outage_id = null when it is a new outage. Prefer null when unsure.',
-    parts: [{ text: JSON.stringify({ post_time: post.postedAt.toISOString(), post: extraction.result, candidates: summaries }) }],
+      'Decide whether a new City Power post is about the SAME fault as one of the candidate outages (same equipment failing, continued repairs, or its restoration) or a DIFFERENT fault. Sharing a suburb alone is not enough when BOTH sides name different equipment: two faults at different equipment are different outages, even nearby. But if a candidate outage names no equipment (it was first reported only by suburb) and the new post is about the same suburbs within a few hours, treat it as the same fault. Planned maintenance and unplanned faults are never the same. A restoration post belongs to the outage it restores. Answer outage_id = null for a different fault.',
+    parts: [{ text: JSON.stringify({ new_post: newPost, candidate_outages: summaries }) }],
     jsonSchema: tieBreakSchema,
   });
   const parsed = JSON.parse(out.text);
-  const valid = summaries.some((s) => s.outage_id === parsed.outage_id);
-  return { outageId: valid ? parsed.outage_id : null, reason: parsed.reason };
+  const chosen = shortlist.find((c) => c.id === parsed.outage_id) ?? null;
+  storeVerdict(key, { stableId: chosen?.stableId ?? null, reason: parsed.reason });
+  return { outageId: chosen?.id ?? null, reason: parsed.reason };
 }
 
 function roleFor(extraction, isFirst) {
@@ -181,6 +217,7 @@ export async function linkPost({ postRow, extraction, facts }) {
     id: postRow.id,
     postedAt: postRow.publishedAt,
     conversationId: postRow.conversationId,
+    text: postRow.noteTweetText || postRow.text,
     relevance: extraction.relevance,
     status: extraction.result.status,
     kind: isPlanned(extraction, postRow.noteTweetText || postRow.text) ? 'PLANNED' : 'UNPLANNED',
@@ -196,7 +233,7 @@ export async function linkPost({ postRow, extraction, facts }) {
 
   const candidates = (await loadCandidates(post))
     .map((c) => ({ ...c, ...scoreCandidate(post, c) }))
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => b.score - a.score || String(a.stableId).localeCompare(String(b.stableId)));
   const top = candidates[0];
   const summary = candidates.slice(0, 5).map((c) => ({ id: c.id, score: c.score, reasons: c.reasons }));
 
@@ -206,7 +243,7 @@ export async function linkPost({ postRow, extraction, facts }) {
   if (top && top.score >= env.LINK_HIGH_SCORE) {
     outageId = top.id;
     reason = top.reasons.join(', ');
-  } else if (top && top.score >= env.LINK_LOW_SCORE) {
+  } else if (top && top.score >= env.LINK_LOW_SCORE && !isDigest(facts)) {
     usedLlm = true;
     try {
       const verdict = await askLlm(post, extraction, candidates);
@@ -222,6 +259,11 @@ export async function linkPost({ postRow, extraction, facts }) {
 
   if (!outageId && !post.nodeIds.size && !post.localityIds.size) {
     return decide({ outcome: 'NEEDS_REVIEW', topScore: top?.score ?? null, reason: 'no infrastructure or locality identified', candidates: summary });
+  }
+
+  // A multi-fault digest graphic must not open an umbrella outage; it may only join one on a strong match.
+  if (!outageId && isDigest(facts)) {
+    return decide({ outcome: 'NEW', topScore: top?.score ?? null, reason: 'digest post covering several faults: no outage created', candidates: summary });
   }
 
   const linkedTop = outageId && top?.id === outageId ? top : null;

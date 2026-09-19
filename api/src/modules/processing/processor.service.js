@@ -79,7 +79,7 @@ export async function processPending({ limit, onPost, from, to } = {}) {
       processingStatus: { notIn: ['NEEDS_REVIEW'] },
       ...(from || to ? { publishedAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } } : {}),
     },
-    orderBy: { publishedAt: 'asc' },
+    orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }],
     select: { id: true },
     ...(limit ? { take: limit } : {}),
   });

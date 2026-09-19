@@ -23,8 +23,11 @@ export function scoreCandidate(post, outage) {
   if (sharedNodes.length) {
     // A post naming one node should not glue itself to a sprawling multi-node outage.
     const jaccard = sharedNodes.length / new Set([...post.nodeIds, ...outage.nodeIds]).size;
-    score += 0.5 * (0.4 + 0.6 * jaccard);
-    reasons.push(`shared node x${sharedNodes.length} (jaccard ${jaccard.toFixed(2)})`);
+    // A post whose equipment is all inside the outage (e.g. "Central" for a Central-substation fire) is a strong match.
+    const containment = sharedNodes.length / post.nodeIds.size;
+    const overlap = Math.max(jaccard, 0.8 * containment);
+    score += 0.5 * (0.4 + 0.6 * overlap);
+    reasons.push(`shared node x${sharedNodes.length} (overlap ${overlap.toFixed(2)})`);
   } else if (intersect(post.relatedNodeIds, outage.nodeIds).length) {
     score += 0.3;
     reasons.push('adjacent node in graph');
