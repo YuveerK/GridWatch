@@ -40,6 +40,7 @@ const backup = {
   outageNodes: await prisma.outageNode.findMany(),
   outageLocalities: await prisma.outageLocality.findMany(),
   linkDecisions: await prisma.linkDecision.findMany(),
+  linkOverrides: await prisma.linkOverride.findMany(),
   infraNodes: await prisma.infraNode.findMany(),
   infraEdges: await prisma.infraEdge.findMany(),
   nodeLocalities: await prisma.nodeLocality.findMany(),

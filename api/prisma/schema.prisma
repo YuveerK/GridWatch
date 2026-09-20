@@ -65,6 +65,8 @@ model SourcePost {
   extractions      PostExtraction[]
   outagePosts      OutagePost[]
   linkDecisions    LinkDecision[]
+  overrides        LinkOverride[]         @relation("OverridePost")
+  anchoredBy       LinkOverride[]         @relation("OverrideAnchor")
   summaries        PostSummary[]
   evidence         EvidenceContribution[]
 
@@ -378,17 +380,17 @@ model OutageLocality {
 }
 
 model OutagePost {
-  outageId String
-  postId   String
-  role     OutagePostRole
-  score    Float?
-  reasons  Json?
-  faultIndex Int          @default(0)
-  postedAt DateTime
+  outageId   String
+  postId     String
+  role       OutagePostRole
+  score      Float?
+  reasons    Json?
+  faultIndex Int            @default(0)
+  postedAt   DateTime
   // what this fault said about the outage (status inputs, percent, cause, eta, equipment, suburbs); current state is folded from these in time order
-  effect   Json?
-  outage   Outage         @relation(fields: [outageId], references: [id], onDelete: Cascade)
-  post     SourcePost     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  effect     Json?
+  outage     Outage         @relation(fields: [outageId], references: [id], onDelete: Cascade)
+  post       SourcePost     @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@id([outageId, postId])
   @@index([outageId, postedAt])
@@ -398,13 +400,13 @@ model OutagePost {
 // One-sentence resident-friendly summary of a post (or of one fault inside a multi-fault graphic).
 // Kept apart from outage links so it survives replays of the engine.
 model PostSummary {
-  postId     String
-  faultIndex Int      @default(0)
-  summary    String
-  model      String
+  postId        String
+  faultIndex    Int        @default(0)
+  summary       String
+  model         String
   promptVersion String?
-  createdAt  DateTime @default(now())
-  post       SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt     DateTime   @default(now())
+  post          SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@id([postId, faultIndex])
 }
@@ -461,4 +463,20 @@ model EvidenceContribution {
 
   @@id([postId, faultIndex, kind, refA, refB])
   @@index([postId])
+}
+
+/// A person's correction of where one post (fault) belongs: SPLIT = its own new outage; JOIN = the outage that the anchor post is in.
+/// Applied by the linker on every (re)link, so it survives rebuilds. Anchors are posts, never outage ids (those change on a rebuild).
+model LinkOverride {
+  postId           String
+  faultIndex       Int         @default(0)
+  action           String
+  anchorPostId     String?
+  anchorFaultIndex Int         @default(0)
+  note             String?
+  createdAt        DateTime    @default(now())
+  post             SourcePost  @relation("OverridePost", fields: [postId], references: [id], onDelete: Cascade)
+  anchor           SourcePost? @relation("OverrideAnchor", fields: [anchorPostId], references: [id], onDelete: Cascade)
+
+  @@id([postId, faultIndex])
 }

@@ -7,6 +7,7 @@ import { tailPlace } from '../../lib/normalize.js';
 import { scheduleWindow } from '../../lib/schedule.js';
 import { assertLeaseInTx, exclusive } from '../coordination/lease.js';
 import { buildEffect, initialStatus, refoldOutage, statusFor } from './outage-state.js';
+import { resolveOverride } from './overrides.js';
 import { scoreCandidate } from './scoring.js';
 import { cachedVerdict, storeVerdict } from './tiebreak-cache.js';
 
@@ -201,7 +202,7 @@ export class StaleCandidateError extends Error {}
  * whole decision exists or none of it does, so a crash or a lost race can never leave a change without its marker.
  * Nothing slow (AI, network) happens in here: the candidates and verdict were settled before.
  */
-async function commitLink({ ctx, post, extraction, facts, outageId, isNew, retroactive, score, reasons, decision }) {
+async function commitLink({ ctx, post, extraction, facts, outageId, isNew, retroactive, score, reasons, decision, manual = false }) {
   return prisma.$transaction(
     async (tx) => {
       await assertLeaseInTx(tx, ctx);
@@ -226,7 +227,7 @@ async function commitLink({ ctx, post, extraction, facts, outageId, isNew, retro
       } else {
         // serialise with any other change to this outage and make sure it is still there and still open to news
         const locked = await tx.$queryRaw`SELECT status FROM "Outage" WHERE id = ${id} FOR UPDATE`;
-        if (!locked.length || locked[0].status === 'CLOSED') throw new StaleCandidateError(`outage ${id} changed while the post was being linked`);
+        if (!locked.length || (locked[0].status === 'CLOSED' && !manual)) throw new StaleCandidateError(`outage ${id} changed while the post was being linked`);
       }
       // A digest post (many nodes) must not smear its nodes across an existing single-fault outage.
       const expand = isNew || !(isDigest(facts) || facts.fromDigest);
@@ -328,11 +329,16 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
   let outageId = null;
   let usedLlm = false;
   let reason;
+  // a person's correction (scripts/correct-link.js) beats every rule
+  const manual = await resolveOverride(post.id, faultIndex);
   // A fresh "outage reported / investigating" post while the best match is only PARTLY restored is either the fault that is still
   // being fixed or a NEW fault in the same streets (Newtown, 15 Sept: a Bree cable fault while the John Ware one sat at 98%).
   // A high score alone cannot tell them apart, so the tie-break decides (unless it is the same conversation thread).
   const maybeNewFault = mayBeNewFault(post, top);
-  if (top && top.score >= env.LINK_HIGH_SCORE && !maybeNewFault) {
+  if (manual) {
+    outageId = manual.action === 'JOIN' ? manual.outageId : null;
+    reason = `manual: ${manual.action === 'JOIN' ? 'joined the outage of the anchor post' : 'kept as its own outage'}${manual.note ? ` (${manual.note})` : ''}`;
+  } else if (top && top.score >= env.LINK_HIGH_SCORE && !maybeNewFault) {
     outageId = top.id;
     reason = top.reasons.join(', ');
   } else if (top && top.score >= env.LINK_LOW_SCORE && (!isDigest(facts) || !(extraction.result.faults?.length >= 2))) {
@@ -350,12 +356,12 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     reason = top ? `best candidate ${top.score} below threshold` : 'no open candidates';
   }
 
-  if (!outageId && !post.nodeIds.size && !post.localityIds.size) {
+  if (!manual && !outageId && !post.nodeIds.size && !post.localityIds.size) {
     return decide({ outcome: 'NEEDS_REVIEW', topScore: top?.score ?? null, reason: 'no infrastructure or locality identified', candidates: summary });
   }
 
   // A multi-fault digest graphic must not open an umbrella outage; it may only join one on a strong match.
-  if (!outageId && isDigest(facts)) {
+  if (!manual && !outageId && isDigest(facts)) {
     return decide({ outcome: 'NEW', topScore: top?.score ?? null, reason: 'digest post covering several faults: no outage created', candidates: summary });
   }
 
@@ -370,6 +376,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     retroactive: !outageId && extraction.relevance === 'RESTORATION',
     score: linkedTop?.score ?? null,
     reasons: linkedTop?.reasons ?? null,
+    manual: Boolean(manual),
     decision: { outcome: outageId ? 'LINKED' : 'NEW', topScore: top?.score ?? null, usedLlm, reason, candidates: summary },
   });
 }

@@ -328,3 +328,47 @@ describe('A20: cached tie-breaks keep pointing at the same outage', () => {
   });
 });
 
+
+describe('a person\'s correction of a link', () => {
+  it('a split keeps a post out of an outage the rules would join, and survives a full rebuild', async () => {
+    const { setOverride } = await import('../../src/modules/outages/overrides.js');
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    const b = await addPost(30, 'Update at Alpha', reading('UPDATE', 'CREW_ON_SITE', ['Alpha']));
+    await processPending();
+    expect(await outages()).toHaveLength(1); // the rules join them
+
+    await setOverride({ postId: b, action: 'SPLIT', note: 'a different fault' });
+    await reprocessPost(b);
+    const split = await outages();
+    expect(split).toHaveLength(2);
+    expect((await prisma.linkDecision.findFirst({ where: { postId: b } })).reason).toMatch(/manual/);
+
+    // a rebuild from scratch applies the same correction
+    const { resetLearnedState } = await import('../../src/modules/processing/processor.service.js');
+    await resetLearnedState();
+    await processPending();
+    expect(await outages()).toHaveLength(2);
+    expect(a).toBeTruthy();
+  });
+
+  it('a join puts a post into the outage of the anchor post, even when the rules would open a new one', async () => {
+    const { setOverride } = await import('../../src/modules/outages/overrides.js');
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    const c = await addPost(20, 'Power out at Zulu', reading('OUTAGE', 'INVESTIGATING', ['Zulu']));
+    await processPending();
+    expect(await outages()).toHaveLength(2);
+
+    await setOverride({ postId: c, action: 'JOIN', anchorPostId: a });
+    await reprocessPost(c);
+    const after = await outages();
+    expect(after.filter((o) => o.posts.length)).toHaveLength(1);
+    expect(after[0].posts.map((p) => p.postId).sort()).toEqual([a, c].sort());
+  });
+
+  it('refuses a post joining itself and an unknown action', async () => {
+    const { setOverride } = await import('../../src/modules/outages/overrides.js');
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    await expect(setOverride({ postId: a, action: 'JOIN', anchorPostId: a })).rejects.toThrow(/itself/);
+    await expect(setOverride({ postId: a, action: 'MOVE' })).rejects.toThrow(/SPLIT or JOIN/);
+  });
+});
