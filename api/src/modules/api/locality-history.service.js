@@ -1,5 +1,6 @@
 import { prisma } from '../../db/prisma.js';
 import { categorize, categoryLabel } from '../../lib/fault-category.js';
+import { isLong } from '../../lib/durations.js';
 
 const HOUR = 3_600_000;
 const MIN_FOR_TYPICAL = 3; // fewer restored outages than this is too few to call anything "typical"
@@ -36,7 +37,9 @@ export function buildLocalityHistory({ outages, days, now = new Date(), earliest
     });
 
   const faults = rows.filter((r) => r.kind === 'UNPLANNED');
-  const restoredHours = faults.map((r) => r.durationHours).filter((h) => h != null);
+  const restoredAll = faults.map((r) => r.durationHours).filter((h) => h != null);
+  const restoredHours = restoredAll.filter((h) => !isLong(h)); // long repair sagas are not what is typical
+  const longCount = restoredAll.length - restoredHours.length;
   const tally = (list) => {
     const m = new Map();
     for (const x of list) m.set(x, (m.get(x) ?? 0) + 1);
@@ -47,7 +50,7 @@ export function buildLocalityHistory({ outages, days, now = new Date(), earliest
 
   const byCause = [...new Set(faults.map((r) => r.category))]
     .map((id) => {
-      const hours = faults.filter((r) => r.category === id).map((r) => r.durationHours).filter((h) => h != null);
+      const hours = faults.filter((r) => r.category === id).map((r) => r.durationHours).filter((h) => h != null && !isLong(h));
       return { id, label: categoryLabel(id), outages: faults.filter((r) => r.category === id).length, restored: hours.length, medianHours: hours.length >= MIN_FOR_TYPICAL ? round1(median(hours)) : null };
     })
     .sort((a, b) => b.outages - a.outages);
@@ -61,6 +64,7 @@ export function buildLocalityHistory({ outages, days, now = new Date(), earliest
     typical: {
       minimum: MIN_FOR_TYPICAL,
       restored: restoredHours.length,
+      longExcluded: longCount,
       medianHours: restoredHours.length >= MIN_FOR_TYPICAL ? round1(median(restoredHours)) : null,
       topCause: topCause ? { id: topCause[0], label: categoryLabel(topCause[0]), count: topCause[1] } : null,
       topEquipment: topEquipment ? { name: topEquipment[0], count: topEquipment[1] } : null,

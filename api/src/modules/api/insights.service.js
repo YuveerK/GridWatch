@@ -1,5 +1,6 @@
 import { prisma } from '../../db/prisma.js';
 import { ALL_CATEGORIES, categorize, categoryLabel } from '../../lib/fault-category.js';
+import { isLong } from '../../lib/durations.js';
 
 const HOUR = 3_600_000;
 const MIN_FOR_MEDIAN = 3; // fewer than this is too few to call anything "typical"
@@ -79,7 +80,8 @@ export function buildInsights({ outages: everything, equipment = [], days, now =
 
   // how long it took to get power back, by cause and by area (only outages with a recorded restoration)
   const hours = (o) => (new Date(o.restoredAt) - new Date(o.startedAt)) / HOUR;
-  const restored = outages.filter((o) => o.restoredAt && hours(o) >= 0);
+  const restored = outages.filter((o) => o.restoredAt && hours(o) >= 0 && !isLong(hours(o))); // long repair sagas are not what is typical
+  const longExcluded = outages.filter((o) => o.restoredAt && isLong(hours(o))).length;
   const speed = (group) => {
     const xs = group.map(hours);
     return { n: xs.length, medianHours: xs.length >= MIN_FOR_MEDIAN ? Number(median(xs).toFixed(1)) : null };
@@ -138,7 +140,7 @@ export function buildInsights({ outages: everything, equipment = [], days, now =
     causes,
     trend,
     byArea,
-    restore: { minimum: MIN_FOR_MEDIAN, byCause: restoreByCause, byArea: restoreByArea },
+    restore: { minimum: MIN_FOR_MEDIAN, longExcluded, byCause: restoreByCause, byArea: restoreByArea },
     repeat,
   };
 }

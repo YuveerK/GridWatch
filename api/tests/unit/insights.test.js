@@ -57,6 +57,11 @@ describe('buildInsights', () => {
     const few = buildInsights({ outages: [o('x', 'cable fault', 'A', 10, 5)], days: 3, now });
     expect(few.restore.byCause[0]).toMatchObject({ n: 1, medianHours: null });
   });
+  it('a long repair saga (over 3 days) is not part of the typical time, and is counted', () => {
+    const long = buildInsights({ outages: [o('a', 'cable fault', 'A', 10, 8), o('b', 'cable fault', 'A', 20, 16), o('c', 'cable fault', 'A', 30, 24), o('d', 'cable fault', 'A', 300, 30)], days: 30, now });
+    expect(long.restore.byCause.find((c) => c.id === 'CABLE')).toMatchObject({ n: 3, medianHours: 4 });
+    expect(long.restore.longExcluded).toBe(1);
+  });
   it('equipment that failed more than once', () => {
     expect(r.repeat).toEqual([{ id: 'n1', name: 'Hub', type: 'SUBSTATION', sdc: 'Roodepoort', count: 2, causes: [{ id: 'CABLE', label: 'Cable fault', count: 2 }] }]);
   });

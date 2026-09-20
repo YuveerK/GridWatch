@@ -22,7 +22,7 @@ function History({ data, loading }) {
         <div>
           <dt>Usually back on within</dt>
           <dd className="num">{t.medianHours != null ? hoursLabel(t.medianHours) : '–'}</dd>
-          <span>{t.medianHours != null ? `typical, from ${plural(t.restored, 'restored fault')}` : `too few restored faults to say (needs ${t.minimum})`}</span>
+          <span>{t.medianHours != null ? `typical, from ${plural(t.restored, 'restored fault')}${t.longExcluded ? `; ${plural(t.longExcluded, 'outage')} over 3 days not counted` : ''}` : `too few restored faults to say (needs ${t.minimum})`}</span>
         </div>
         <div>
           <dt>Usual cause</dt>

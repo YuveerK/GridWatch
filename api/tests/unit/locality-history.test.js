@@ -46,3 +46,16 @@ describe('a suburb\'s outage history', () => {
     expect(e.typical.topCause).toBeNull();
   });
 });
+
+describe('long repair sagas', () => {
+  it('are listed but left out of the typical time, and counted', () => {
+    const r = buildLocalityHistory({ outages: [o('a', 'cable fault', 100, 96), o('b', 'cable fault', 60, 50), o('c', 'cable fault', 30, 20), o('saga', 'cable fault', 300, 30)], days: 90, now });
+    expect(r.rows.find((x) => x.id === 'saga').durationHours).toBe(270);
+    expect(r.typical).toMatchObject({ restored: 3, medianHours: 10, longExcluded: 1 });
+  });
+  it('do not count towards "enough cases to call it typical"', () => {
+    const r = buildLocalityHistory({ outages: [o('a', 'cable fault', 100, 96), o('b', 'cable fault', 300, 30), o('c', 'cable fault', 400, 30)], days: 90, now });
+    expect(r.typical.medianHours).toBeNull();
+    expect(r.typical.longExcluded).toBe(2);
+  });
+});
