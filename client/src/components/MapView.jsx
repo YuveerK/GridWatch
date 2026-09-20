@@ -18,7 +18,7 @@ const EMPTY = { type: 'FeatureCollection', features: [] };
 function useIsDark() {
   const read = () => {
     const t = document.documentElement.dataset.theme;
-    return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+    return t ? t === 'dark' : true;
   };
   const [dark, setDark] = useState(read);
   useEffect(() => {

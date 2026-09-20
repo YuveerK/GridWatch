@@ -56,7 +56,7 @@ function label(s, wait) {
 }
 
 /** Operator sign-in: paste the operator token once; the server keeps you signed in with a cookie. */
-function SignIn({ compact }) {
+export function OperatorSignIn({ compact }) {
   const [open, setOpen] = useState(false);
   const [token, setToken] = useState('');
   const [message, setMessage] = useState('');
@@ -95,7 +95,7 @@ export default function RefreshButton({ compact }) {
     if (s.state === 'running') setOpen(false);
   }, [s.state]);
   if (!s.loaded || s.enabled === false) return null;
-  if (!s.operator) return s.signInAvailable ? <SignIn compact={compact} /> : null; // nothing to offer visitors
+  if (!s.operator) return null; // visitors see no operator controls; operators sign in from the footer
 
   const running = s.state === 'running';
   const wait = cooldownSeconds(s);
@@ -109,7 +109,7 @@ export default function RefreshButton({ compact }) {
 
   if (compact) {
     return (
-      <button className="icon-btn" onClick={startRefresh} disabled={disabled} aria-label={text} title={outcome?.msg ?? 'Fetch the newest posts from City Power on X and update the site'}>
+      <button className="icon-btn icon-only" onClick={startRefresh} disabled={disabled} aria-label={text} title={outcome?.msg ?? 'Fetch the newest posts from City Power on X and update the site'}>
         <Icon name="refresh" className={running ? 'spin' : ''} />
         <span className="label">{running ? text : wait > 0 ? text : 'Refresh'}</span>
       </button>

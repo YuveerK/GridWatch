@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import OutageCard from '../components/OutageCard.jsx';
+import { OutageRow } from '../components/OutageCard.jsx';
 import { CardSkeleton, EmptyState, ErrorState } from '../components/ui.jsx';
 import { prettySdc, plural, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
@@ -80,7 +80,7 @@ export default function Outages() {
               {tab.id === 'live' ? 'There are no live outages that match. That is good news, or try another filter.' : 'Try a different status or clear the filters.'}
             </EmptyState>
           ) : (
-            <div className="grid-cards">{data.data.map((o) => <OutageCard key={o.id} outage={o} />)}</div>
+            <ul className="ledger">{data.data.map((o) => <OutageRow key={o.id} outage={o} />)}</ul>
           )}
           {data.data.length < data.total && (
             <div style={{ textAlign: 'center', marginTop: 24 }}>

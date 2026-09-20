@@ -45,6 +45,22 @@ function TimelineItem({ t, last }) {
   );
 }
 
+/** Reported, then being restored, then restored: where this outage is in its life. */
+function Progression({ status }) {
+  const at = status === 'ACTIVE' || status === 'STALE' ? 0 : status === 'PARTIALLY_RESTORED' ? 1 : 2;
+  const steps = [['Reported', 'live'], ['Being restored', 'partial'], ['Restored', 'good']];
+  return (
+    <ol className="progress" aria-label="Progress of this outage">
+      {steps.map(([label, tone], i) => (
+        <li key={label} className={`${i < at ? 'done' : i === at ? 'now' : 'todo'}${i <= at ? ` reached tone-${tone}` : ''}`} aria-current={i === at ? 'step' : undefined}>
+          <i aria-hidden="true" />
+          <span>{label}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export default function OutageDetail() {
   const { id } = useParams();
   const { data: o, error, loading } = useApi(`/v1/outages/${id}`, { refreshMs: 60_000 });
@@ -81,6 +97,7 @@ export default function OutageDetail() {
           </div>
           <span className="small faint">Last update {timeAgo(o.lastUpdateAt)}</span>
         </div>
+        {!isPlanned && ['ACTIVE', 'PARTIALLY_RESTORED', 'RESTORED', 'CLOSED', 'STALE'].includes(o.status) && <Progression status={o.status} />}
         <h1>{nice(o.title)}</h1>
         {o.sdc && <div className="muted small">Reported by the {prettySdc(o.sdc)} service centre</div>}
 

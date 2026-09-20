@@ -50,10 +50,9 @@ export function useTheme() {
     if (t === 'light' || t === 'dark') setTheme(t);
   }, [setTheme]);
   useEffect(() => {
-    if (theme) document.documentElement.dataset.theme = theme;
-    else delete document.documentElement.dataset.theme;
+    document.documentElement.dataset.theme = theme ?? 'dark'; // the operations-room look is dark by default
   }, [theme]);
-  const dark = theme ? theme === 'dark' : typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches;
+  const dark = (theme ?? 'dark') === 'dark';
   return { theme, dark, toggle: () => setTheme(dark ? 'light' : 'dark') };
 }
 

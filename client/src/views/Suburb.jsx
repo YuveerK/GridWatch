@@ -4,15 +4,65 @@ import Icon from '../components/Icon.jsx';
 import OutageCard from '../components/OutageCard.jsx';
 import SearchBox from '../components/SearchBox.jsx';
 import { CardSkeleton, Chip, Crumbs, EmptyState, ErrorState, SectionHead, Skeleton, StatusBadge } from '../components/ui.jsx';
-import { fmtDay, nice, prettySdc, timeAgo, typeLabel, useApi } from '../lib/api.js';
+import { fmtDay, nice, plural, prettySdc, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle, useMyArea } from '../lib/hooks.js';
 
 const LIVE = new Set(['ACTIVE', 'PARTIALLY_RESTORED', 'PLANNED']);
+
+const hoursLabel = (h) => (h == null ? '–' : h < 1 ? `${Math.max(1, Math.round(h * 60))} min` : h < 48 ? `${h < 10 ? h.toFixed(1).replace(/\.0$/, '') : Math.round(h)} h` : `${Math.round(h / 24)} d`);
+
+/** What is usual for this suburb, then every outage as a table row. */
+function History({ data, loading }) {
+  if (loading) return <Skeleton h={200} />;
+  if (!data || data.total === 0) return <EmptyState icon="archive" title="No history yet">GridWatch has been watching for {plural(data?.dataDays ?? 0, 'day')} and hasn't seen an outage here.</EmptyState>;
+  const t = data.typical;
+  return (
+    <>
+      <dl className="typical">
+        <div>
+          <dt>Usually back on within</dt>
+          <dd className="num">{t.medianHours != null ? hoursLabel(t.medianHours) : '–'}</dd>
+          <span>{t.medianHours != null ? `typical, from ${plural(t.restored, 'restored fault')}` : `too few restored faults to say (needs ${t.minimum})`}</span>
+        </div>
+        <div>
+          <dt>Usual cause</dt>
+          <dd>{t.topCause ? t.topCause.label : '–'}</dd>
+          <span>{t.topCause ? `${plural(t.topCause.count, 'outage')} of ${data.faults}` : 'no cause stated yet'}</span>
+        </div>
+        <div>
+          <dt>Equipment that keeps appearing</dt>
+          <dd>{t.topEquipment ? nice(t.topEquipment.name) : '–'}</dd>
+          <span>{t.topEquipment ? `in ${plural(t.topEquipment.count, 'outage')}` : 'nothing repeats yet'}</span>
+        </div>
+      </dl>
+      <div className="matrix-wrap">
+        <table className="matrix history-table">
+          <thead>
+            <tr><th scope="col">Date</th><th scope="col" className="num-col">Lasted</th><th scope="col">Equipment</th><th scope="col">Cause</th><th scope="col">Also affected</th></tr>
+          </thead>
+          <tbody>
+            {data.rows.map((o) => (
+              <tr key={o.id}>
+                <th scope="row"><Link to={`/outages/${o.id}`}>{fmtDay(o.startedAt)}</Link></th>
+                <td className="num-col num">{o.kind === 'PLANNED' ? 'planned' : o.durationHours != null ? hoursLabel(o.durationHours) : <span className="faint" title={o.retroactive ? 'GridWatch only saw the "power restored" post, so the start is unknown' : undefined}>{o.retroactive ? 'restored' : o.status === 'ACTIVE' || o.status === 'PARTIALLY_RESTORED' ? 'ongoing' : '–'}</span>}</td>
+                <td>{o.equipment.length ? o.equipment.map(nice).join(', ') : <span className="faint">–</span>}</td>
+                <td>{o.cause ? nice(o.cause) : <span className="faint">not stated</span>}</td>
+                <td className="small muted">{o.alsoAffected.map(nice).join(', ') || '–'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="history-note">Based on {plural(data.dataDays, 'day')} of collected posts. How long an outage "lasted" runs from the first post to the post saying power is back, so it can be a little longer than the fault itself.</p>
+    </>
+  );
+}
 
 export default function Suburb() {
   const { id } = useParams();
   const suburb = useApi(`/v1/localities/${id}`);
   const outages = useApi(`/v1/localities/${id}/outages`, { refreshMs: 60_000 });
+  const hist = useApi(`/v1/localities/${id}/history`);
   const { area, setArea, clear } = useMyArea();
   useDocumentTitle(suburb.data?.name);
 
@@ -69,25 +119,8 @@ export default function Suburb() {
       )}
 
       <section className="section" aria-labelledby="his-h">
-        <SectionHead id="his-h" title="Recent history" sub="Finished outages in this suburb" />
-        {history.length ? (
-          <div className="card">
-            <ul className="rows">
-              {history.map((o) => (
-                <li key={o.id}>
-                  <div className="grow">
-                    <Link to={`/outages/${o.id}`} className="t">{nice(o.title)}</Link>
-                    <div className="small muted">{fmtDay(o.startedAt)}{o.cause ? ` · ${o.cause}` : ''}{o.sdc ? ` · ${prettySdc(o.sdc)}` : ''}</div>
-                  </div>
-                  <StatusBadge status={o.status} kind={o.kind} />
-                  <span className="small faint" style={{ minWidth: 76, textAlign: 'right' }}>{timeAgo(o.lastUpdateAt)}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : (
-          <EmptyState icon="archive" title="No history yet">GridWatch has been watching for about ten days and hasn't seen an outage here.</EmptyState>
-        )}
+        <SectionHead id="his-h" title={`Outage history for ${s.name}`} sub="Every outage that has affected this suburb, and what is usual here" />
+        <History data={hist.data} loading={hist.loading && !hist.data} />
       </section>
 
       {s.infrastructure.length > 0 && (
