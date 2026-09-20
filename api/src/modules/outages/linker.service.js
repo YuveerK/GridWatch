@@ -7,6 +7,7 @@ import { tailPlace } from '../../lib/normalize.js';
 import { scheduleWindow } from '../../lib/schedule.js';
 import { assertLeaseInTx, exclusive } from '../coordination/lease.js';
 import { buildEffect, initialStatus, refoldOutage, statusFor } from './outage-state.js';
+import { headlineNode, pickHeadlineMatch } from './headline.js';
 import { resolveOverride } from './overrides.js';
 import { scoreCandidate } from './scoring.js';
 import { cachedVerdict, storeVerdict } from './tiebreak-cache.js';
@@ -358,6 +359,32 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
 
   if (!manual && !outageId && !post.nodeIds.size && !post.localityIds.size) {
     return decide({ outcome: 'NEEDS_REVIEW', topScore: top?.score ?? null, reason: 'no infrastructure or locality identified', candidates: summary });
+  }
+
+  // A summary picture that opens with one piece of equipment is an update about THAT equipment's outage (plus mentions of others):
+  // judge it on the headline alone. It may join an existing outage only, never open one, and only when clearly ahead.
+  if (!manual && !outageId && isDigest(facts) && !facts.fromDigest) {
+    const head = headlineNode(post.text, facts.nodes);
+    if (head) {
+      const narrow = { ...post, nodeIds: new Set([head.id]), localityIds: new Set() };
+      narrow.relatedNodeIds = await relatedNodeIds(narrow.nodeIds);
+      const ranked = candidates.map((c) => ({ ...c, ...scoreCandidate(narrow, c) })).sort((a, b) => b.score - a.score || String(a.stableId).localeCompare(String(b.stableId)));
+      const match = pickHeadlineMatch(ranked);
+      if (match) {
+        return commitLink({
+          ctx,
+          post,
+          extraction: { ...extraction, result: { ...extraction.result, localities: [] } },
+          facts: { ...facts, nodes: [head], rootCount: 1, localityIds: [], restoredLocalityIds: [] },
+          outageId: match.id,
+          isNew: false,
+          retroactive: false,
+          score: match.score,
+          reasons: [`headline: ${head.name}`, ...match.reasons],
+          decision: { outcome: 'LINKED', topScore: match.score, usedLlm: false, reason: `summary post: joined on its headline (${head.name}); ${match.reasons.join(', ')}`, candidates: summary },
+        });
+      }
+    }
   }
 
   // A multi-fault digest graphic must not open an umbrella outage; it may only join one on a strong match.

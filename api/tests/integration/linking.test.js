@@ -372,3 +372,22 @@ describe('a person\'s correction of a link', () => {
     await expect(setOverride({ postId: a, action: 'MOVE' })).rejects.toThrow(/SPLIT or JOIN/);
   });
 });
+
+describe('a summary picture that opens with one piece of equipment', () => {
+  it('joins that equipment\'s outage on its headline, and never opens an outage of its own', async () => {
+    await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    const summary = await addPost(720, 'Alpha Substation 90% restored as Beta Substation repairs continue', reading('UPDATE', 'PARTIALLY_RESTORED', ['Alpha', 'Beta', 'Gamma', 'Delta', 'Eta', 'Zeta', 'Theta', 'Iota']));
+    await processPending();
+    const all = await outages();
+    expect(all).toHaveLength(1);
+    expect(all[0].posts.map((p) => p.postId)).toContain(summary);
+    expect((await prisma.linkDecision.findFirst({ where: { postId: summary } })).reason).toMatch(/joined on its headline \(Alpha\)/);
+  });
+
+  it('a summary whose headline matches nothing open is left alone (no outage opened)', async () => {
+    const summary = await addPost(0, 'Alpha Substation 90% restored as Beta Substation repairs continue', reading('UPDATE', 'PARTIALLY_RESTORED', ['Alpha', 'Beta', 'Gamma', 'Delta', 'Eta', 'Zeta', 'Theta', 'Iota']));
+    await processPending();
+    expect(await outages()).toHaveLength(0);
+    expect(summary).toBeTruthy();
+  });
+});
