@@ -183,14 +183,17 @@ export { initialStatus, statusFor };
 
 const GENERIC_NODE = /^(pole[- ]mounted|mini[- ]?substations?|ring main units?|transformers?|cables?|lines?|feederboard.*|standby.*)$/i;
 const STREETY = /\b(street|st|road|rd|avenue|ave|drive|dr|lane|between|to)\b|^\d/i;
-const short = (s) => (s.length > 32 ? `${s.slice(0, 30).trim()}…` : s);
+const short = (s, max = 32) => (s.length > max ? `${s.slice(0, max - 2).trim()}…` : s);
 
-function titleFor(facts, extraction) {
-  const specific = [...facts.nodes].reverse().find((n) => !GENERIC_NODE.test(n.name));
+// a cable or a loose piece of kit is often named with a whole sentence: name the outage after the station or distributor when there is one
+const NAMING_LAST = new Set(['CABLE', 'LINE', 'OTHER']);
+export function titleFor(facts, extraction) {
+  const named = [...facts.nodes].reverse().filter((n) => !GENERIC_NODE.test(n.name));
+  const specific = named.find((n) => !NAMING_LAST.has(n.type)) ?? named[0];
   // "12th Avenue in Parktown North" -> "Parktown North"; pure street names are left out of titles
-  const areas = extraction.result.localities.map((l) => tailPlace(l.name) ?? l.name).filter((n) => !STREETY.test(n)).slice(0, 2).map(short);
+  const areas = extraction.result.localities.map((l) => tailPlace(l.name) ?? l.name).filter((n) => !STREETY.test(n)).slice(0, 2).map((n) => short(n));
   const useAreas = areas.length && (!specific || facts.nodes.length >= 5);
-  const head = useAreas ? areas.join(', ') : specific?.name;
+  const head = useAreas ? areas.join(', ') : specific && short(specific.name, 40);
   const tail = !useAreas && specific && areas.length ? ` (${areas.join(', ')})` : '';
   return `${head ?? facts.sdcNode?.name ?? 'Unknown location'}${tail}`;
 }
