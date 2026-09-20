@@ -214,3 +214,123 @@ describe('A19: map state per suburb', () => {
     expect(await state()).toEqual({ la: 'out', lb: 'out' });
   });
 });
+
+describe('overview history strips', () => {
+  it('reports 14 zero-filled days per service centre', async () => {
+    const t = new Date(Date.now() - 2 * 3_600_000);
+    await prisma.outage.create({ data: { id: 'h1', title: 'H', status: 'ACTIVE', sdcName: 'Alexandra', startedAt: t, lastUpdateAt: t } });
+    const res = await (await call('/v1/overview')).json();
+    const row = res.history.find((h) => h.sdc === 'Alexandra');
+    expect(row.days).toHaveLength(14);
+    expect(row.days.reduce((n, d) => n + d.count, 0)).toBe(1);
+    expect(new Set(res.history.map((h) => h.days.length))).toEqual(new Set([14]));
+  });
+});
+
+describe('insights', () => {
+  it('validates the window and reports causes for recent unplanned outages', async () => {
+    expect((await call('/v1/insights?days=0')).status).toBe(400);
+    expect((await call('/v1/insights?days=500')).status).toBe(400);
+    const t = new Date(Date.now() - 3_600_000);
+    await prisma.outage.create({ data: { id: 'i1', title: 'A', status: 'ACTIVE', sdcName: 'Lenasia', cause: 'faulty cable', startedAt: t, lastUpdateAt: t } });
+    await prisma.outage.create({ data: { id: 'i2', title: 'B', status: 'ACTIVE', sdcName: 'Lenasia', cause: null, startedAt: t, lastUpdateAt: t } });
+    await prisma.outage.create({ data: { id: 'i3', title: 'C', kind: 'PLANNED', status: 'PLANNED', sdcName: 'Lenasia', cause: 'planned maintenance', startedAt: t, lastUpdateAt: t } });
+    const r = await (await call('/v1/insights?days=7')).json();
+    expect(r.total).toBe(2); // planned work is not a fault
+    expect(r.causes.map((c) => c.id)).toEqual(['CABLE', 'UNKNOWN']);
+    expect(r.window.days).toBe(7);
+    expect(r.trend[0].days).toHaveLength(7);
+  });
+});
+
+describe('/v1/updates: the news, not every post', () => {
+  it('leaves out repeats, and can be limited to outages in one suburb', async () => {
+    const now = Date.now();
+    const at = (min) => new Date(now - min * 60_000);
+    await prisma.locality.create({ data: { id: 'ul', canonicalName: 'Alpha', normalizedName: 'alpha', active: true, sourceLine: 1, sourceLabel: 't', updatedAt: at(0) } });
+    await prisma.outage.create({ data: { id: 'u1', title: 'One', status: 'ACTIVE', sdcName: 'X', startedAt: at(100), lastUpdateAt: at(10) } });
+    await prisma.outage.create({ data: { id: 'u2', title: 'Two', status: 'ACTIVE', sdcName: 'X', startedAt: at(100), lastUpdateAt: at(10) } });
+    await prisma.outageLocality.create({ data: { outageId: 'u1', localityId: 'ul', restored: false } });
+    let n = 0;
+    const post = async (outageId, min, role, effect) => {
+      n += 1;
+      await prisma.sourcePost.create({ data: { id: `up${n}`, platform: 'X', sourceAccount: 'a', externalId: `ue${n}`, text: 't', publishedAt: at(min), updatedAt: at(min) } });
+      await prisma.outagePost.create({ data: { outageId, postId: `up${n}`, role, postedAt: at(min), effect } });
+      await prisma.postSummary.create({ data: { postId: `up${n}`, faultIndex: 0, summary: `s${n}`, model: 'm' } });
+    };
+    await post('u1', 90, 'OPENED', { status: 'INVESTIGATING', pct: null, eta: null });
+    await post('u1', 60, 'UPDATE', { status: 'INVESTIGATING', pct: null, eta: null }); // nothing new
+    await post('u1', 30, 'UPDATE', { status: 'REPAIRING', pct: null, eta: 'ETA 6pm' }); // new status
+    await post('u2', 20, 'OPENED', { status: 'INVESTIGATING', pct: null, eta: null });
+    const all = (await (await call('/v1/updates')).json()).data;
+    expect(all.map((u) => `${u.outageId}:${u.kind}`)).toEqual(['u2:opened', 'u1:status', 'u1:opened']);
+    const mine = (await (await call('/v1/updates?locality=ul')).json()).data;
+    expect(mine.map((u) => u.outageId)).toEqual(['u1', 'u1']);
+    expect((await call('/v1/updates?limit=0')).status).toBe(400);
+  });
+});
+
+describe('/v1/updates on outages from before effects were stored', () => {
+  it('compares old posts using their stored readings, so a repeat is dropped and real progress is kept', async () => {
+    const now = Date.now();
+    const at = (min) => new Date(now - min * 60_000);
+    await prisma.outage.create({ data: { id: 'l1', title: 'Old', status: 'ACTIVE', sdcName: 'X', startedAt: at(100), lastUpdateAt: at(10) } });
+    let n = 0;
+    const post = async (min, role, reading) => {
+      n += 1;
+      await prisma.sourcePost.create({ data: { id: `lp${n}`, platform: 'X', sourceAccount: 'a', externalId: `le${n}`, text: 't', publishedAt: at(min), updatedAt: at(min) } });
+      await prisma.outagePost.create({ data: { outageId: 'l1', postId: `lp${n}`, role, postedAt: at(min) } }); // no effect: a legacy row
+      await prisma.postExtraction.create({ data: { postId: `lp${n}`, promptVersion: 'v', model: 'm', status: 'SUCCEEDED', relevance: 'UPDATE', result: reading } });
+    };
+    const base = { faults: [], relevance: 'UPDATE', eta_text: null, restoration_percent: null };
+    await post(90, 'OPENED', { ...base, status: 'INVESTIGATING' });
+    await post(60, 'UPDATE', { ...base, status: 'INVESTIGATING' }); // says nothing new
+    await post(30, 'UPDATE', { ...base, status: 'PARTIALLY_RESTORED', restoration_percent: 48 });
+    const r = (await (await call('/v1/updates')).json()).data;
+    expect(r.map((u) => u.kind)).toEqual(['progress', 'opened']);
+  });
+});
+
+describe('/v1/updates includes planned maintenance announcements', () => {
+  it('shows a planned interruption notice, and its reminder, as planned maintenance', async () => {
+    const at = (min) => new Date(Date.now() - min * 60_000);
+    await prisma.outage.create({ data: { id: 'pl1', kind: 'PLANNED', title: 'Planned', status: 'PLANNED', sdcName: 'Midrand', startedAt: at(60), lastUpdateAt: at(10) } });
+    for (const [i, min] of [[1, 60], [2, 10]]) {
+      await prisma.sourcePost.create({ data: { id: `pp${i}`, platform: 'X', sourceAccount: 'a', externalId: `pe${i}`, text: 't', publishedAt: at(min), updatedAt: at(min) } });
+      await prisma.outagePost.create({ data: { outageId: 'pl1', postId: `pp${i}`, role: i === 1 ? 'OPENED' : 'UPDATE', postedAt: at(min), effect: { status: 'PLANNED', pct: null, eta: null } } });
+    }
+    const r = (await (await call('/v1/updates')).json()).data;
+    expect(r.map((u) => u.kind)).toEqual(['planned', 'planned']);
+  });
+});
+
+describe('/v1/sync', () => {
+  it('reports the last successful check, the latest attempt, and that automatic checks are off outside the server', async () => {
+    const at = (m) => new Date(Date.now() - m * 60_000);
+    await prisma.sourceAccount.upsert({ where: { externalId: 'acct1' }, create: { id: 'acct1', platform: 'X', externalId: 'acct1', displayName: 'a', updatedAt: at(0) }, update: {} });
+    await prisma.ingestionRun.create({ data: { id: 'r1', sourceAccountId: 'acct1', status: 'SUCCEEDED', startedAt: at(20), completedAt: at(19) } });
+    await prisma.ingestionRun.create({ data: { id: 'r2', sourceAccountId: 'acct1', status: 'FAILED', startedAt: at(5), completedAt: at(4) } });
+    const r = await (await call('/v1/sync')).json();
+    expect(new Date(r.lastSyncAt).getTime()).toBeCloseTo(at(19).getTime(), -4);
+    expect(r.latestStatus).toBe('FAILED');
+    expect(r.automatic).toBe(false);
+    expect(r.nextRunAt).toBeNull();
+    expect(r.running).toBe(false);
+  });
+});
+
+describe('/v1/localities/:id/history', () => {
+  it('lists a suburb\'s outages with durations, and 404s an unknown suburb', async () => {
+    const at = (h) => new Date(Date.now() - h * 3_600_000);
+    await prisma.locality.create({ data: { id: 'hl', canonicalName: 'Alpha', normalizedName: 'alpha', active: true, sourceLine: 1, sourceLabel: 't', updatedAt: at(0) } });
+    await prisma.locality.create({ data: { id: 'hl2', canonicalName: 'Beta', normalizedName: 'beta', active: true, sourceLine: 2, sourceLabel: 't', updatedAt: at(0) } });
+    await prisma.outage.create({ data: { id: 'h1', title: 'One', status: 'RESTORED', cause: 'cable fault', startedAt: at(30), lastUpdateAt: at(26), restoredAt: at(26) } });
+    await prisma.outageLocality.create({ data: { outageId: 'h1', localityId: 'hl', restored: true } });
+    await prisma.outageLocality.create({ data: { outageId: 'h1', localityId: 'hl2', restored: true } });
+    const r = await (await call('/v1/localities/hl/history')).json();
+    expect(r.total).toBe(1);
+    expect(r.rows[0]).toMatchObject({ id: 'h1', durationHours: 4, category: 'CABLE', alsoAffected: ['Beta'] });
+    expect((await call('/v1/localities/nope/history')).status).toBe(404);
+    expect((await call('/v1/localities/hl/history?days=0')).status).toBe(400);
+  });
+});

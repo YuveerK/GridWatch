@@ -115,3 +115,13 @@ describe('graph evidence is idempotent per source', () => {
     expect((await counts()).nodes.Hub).toBe(1);
   });
 });
+
+describe('a mistyped suburb is the suburb, not a new one', () => {
+  it('"Develand" resolves to the existing "Devland" instead of creating an unplaced duplicate', async () => {
+    await prisma.locality.create({ data: { id: 'devl', canonicalName: 'Devland', normalizedName: 'devland', active: true, sourceLine: 1, sourceLabel: 'Devland', updatedAt: at } });
+    resetLocalityIndex();
+    const r = await learnFromExtraction(extraction([{ type: 'SUBSTATION', name: 'Hub', parent_name: null }], [{ name: 'Develand', state: 'AFFECTED' }], 'Lenasia'), at);
+    expect(r.localityIds).toEqual(['devl']);
+    expect(await prisma.locality.count({ where: { normalizedName: 'develand' } })).toBe(0);
+  });
+});

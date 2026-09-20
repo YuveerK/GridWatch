@@ -20,6 +20,8 @@ export const stripDirection = (s) => s.replace(/\s+(north|south|east|west|centra
 /** "OrlandoEkhaya" -> "Orlando Ekhaya": City Power often runs two words together. */
 export const splitRunTogether = (s) => s.replace(/([a-z])([A-Z])/g, '$1 $2');
 
+import { REGION_TOWN, isPlausible } from './plausible.js';
+
 class RateLimited extends Error {}
 
 /** Suburb positions from OpenStreetMap. Downloaded at most once a month, and only when asked to (a fetch never downloads). */
@@ -64,8 +66,12 @@ export async function placeLocalities({ all = false, retry = false, max = Infini
   const started = Date.now();
   const rows = await prisma.locality.findMany({
     where: all ? {} : { OR: [{ outages: { some: {} } }, { nodes: { some: {} } }] },
-    include: { outages: { select: { outage: { select: { status: true } } } } },
+    include: { outages: { select: { outage: { select: { status: true } } } }, Region: { select: { code: true } } },
   });
+  // where each region's already-placed suburbs are: a lookup that lands far from them is the wrong place with the right name
+  const placed = await prisma.locality.findMany({ where: { lat: { not: null } }, select: { lat: true, lon: true, Region: { select: { code: true } } } });
+  const regionPoints = new Map();
+  for (const p of placed) regionPoints.set(p.Region?.code, [...(regionPoints.get(p.Region?.code) ?? []), { lat: p.lat, lon: p.lon }]);
   const isLive = (l) => l.outages.some((o) => ['ACTIVE', 'PARTIALLY_RESTORED'].includes(o.outage.status));
   const todo = rows
     .filter((l) => l.lat == null && (retry || l.geoSource !== 'none'))
@@ -116,10 +122,14 @@ export async function placeLocalities({ all = false, retry = false, max = Infini
         const name = stripExt(l.canonicalName);
         const exact = [...new Set([name, splitRunTogether(name)])];
         const parents = [...new Set(exact.map(stripDirection))].filter((b) => b && !exact.includes(b));
-        for (const [n, q] of [...exact, ...parents].entries()) {
+        const region = regionPoints.get(l.Region?.code);
+        const town = REGION_TOWN[l.Region?.code];
+        // the plain name first; if it lands away from the rest of its region, the same name with the region's town
+        const queries = [...exact.map((q) => [q, 'nominatim']), ...parents.map((q) => [q, 'nominatim-parent']), ...(town ? [...exact, ...parents].map((q) => [`${q}, ${town}`, 'nominatim-town']) : [])];
+        for (const [q, source] of queries) {
           const g = await nominatim(q, { patient });
-          if (g && inBox(g.lat, g.lon)) {
-            pos = { ...g, source: n < exact.length ? 'nominatim' : 'nominatim-parent' };
+          if (g && inBox(g.lat, g.lon) && isPlausible(g, region)) {
+            pos = { ...g, source };
             break;
           }
           await sleep(1100);

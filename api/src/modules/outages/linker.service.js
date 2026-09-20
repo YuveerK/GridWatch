@@ -17,6 +17,10 @@ const PLANNED_WINDOW_HOURS = 240;
 const DIGEST_ROOTS = 2;
 const isDigest = (facts) => !facts.fromDigest && facts.rootCount >= 3 || (facts.rootCount >= DIGEST_ROOTS && facts.nodes.length >= 4);
 
+/** A fresh report while the best match is only partly restored: the remaining fault, or a new one? Not for a score alone to say. */
+export const mayBeNewFault = (post, top) =>
+  Boolean(top && post.relevance === 'OUTAGE' && post.status === 'INVESTIGATING' && top.raw.status === 'PARTIALLY_RESTORED' && !top.reasons.includes('same thread'));
+
 /** Separate faults reported in one graphic are different outages by definition. */
 export const linkedToPost = (candidate, postId) => candidate.raw.posts.some((p) => p.postId === postId);
 
@@ -105,8 +109,8 @@ async function askLlm(post, extraction, ranked, { fromDigest = false } = {}) {
       kind: c.kind,
       status: c.status,
       cause: c.raw.cause,
-      equipment: c.raw.nodes.map((n) => `${n.node.type.toLowerCase()} ${n.node.name}`).slice(0, 8),
-      suburbs: c.raw.localities.map((l) => l.locality.canonicalName).slice(0, 8),
+      equipment: c.raw.nodes.map((n) => `${n.node.type.toLowerCase()} ${n.node.name}`).sort().slice(0, 8), // sorted: the database's row order must not change the question (and so the cached answer)
+      suburbs: c.raw.localities.map((l) => l.locality.canonicalName).sort().slice(0, 8),
       posts_so_far: c.raw.posts.length,
       first_post: clip(first?.noteTweetText || first?.text),
       latest_post: last === first ? undefined : clip(last?.noteTweetText || last?.text),
@@ -160,6 +164,7 @@ async function askLlm(post, extraction, ranked, { fromDigest = false } = {}) {
       'Decide whether a new City Power post is about the SAME fault as one of the candidate outages (same equipment failing, continued repairs, or its restoration) or a DIFFERENT fault. Sharing a suburb alone is not enough when BOTH sides name different equipment: two faults at different equipment are different outages, even nearby. But if a candidate outage names no equipment (it was first reported only by suburb) and the new post is about the same suburbs within a few hours, treat it as the same fault. Planned maintenance and unplanned faults are never the same. A restoration post belongs to the outage it restores. Answer outage_id = null for a different fault.' + (post.amended ? AMENDED_NOTE : ''),
     parts: [{ text: JSON.stringify({ new_post: newPost, candidate_outages: summaries }) }],
     jsonSchema: tieBreakSchema,
+    purpose: 'tiebreak',
   });
   const parsed = JSON.parse(out.text);
   const chosen = shortlist.find((c) => c.id === parsed.outage_id) ?? null;
@@ -253,6 +258,8 @@ async function applyLegacy(tx, { id, post, extraction, facts, effect, expand }) 
       ...(newest && status === 'RESTORED' ? { restorationPercent: 100 } : newest && r.restoration_percent != null ? { restorationPercent: r.restoration_percent } : {}),
       restoredAt: status === 'RESTORED' ? o.restoredAt ?? post.postedAt : null,
       ...(facts.sdcNode ? { sdcName: facts.sdcNode.name } : {}),
+      // the announced window of planned work follows the newest post that states one
+      ...(newest && effect.schedule?.start ? { scheduledStart: new Date(effect.schedule.start), scheduledEnd: new Date(effect.schedule.end) } : {}),
     },
   });
   if (expand) {
@@ -288,6 +295,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
   if (existing) return existing;
 
   const text = facts.fromDigest ? '' : postRow.noteTweetText || postRow.text;
+  const postKind = isPlanned(extraction, text) ? 'PLANNED' : 'UNPLANNED';
   const post = {
     id: postRow.id,
     postedAt: postRow.publishedAt,
@@ -296,13 +304,13 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     faultIndex,
     relevance: extraction.relevance,
     status: extraction.result.status,
-    kind: isPlanned(extraction, text) ? 'PLANNED' : 'UNPLANNED',
+    kind: postKind,
     sdcName: facts.sdcNode?.name ?? null,
     nodeIds: new Set(facts.nodes.map((n) => n.id)),
     localityIds: new Set(facts.localityIds),
     // "[AMENDED UPDATE]" / "*Amended*" in the opening words: a correction of an earlier post (not judged for one fault inside a graphic)
     amended: !facts.fromDigest && AMENDED.test((postRow.noteTweetText || postRow.text || '').slice(0, 90)),
-    schedule: scheduleFor(extraction, postRow, facts),
+    schedule: postKind === 'PLANNED' ? scheduleFor(extraction, postRow, facts) : null, // an unplanned fault has no announced window
   };
   post.relatedNodeIds = await relatedNodeIds(post.nodeIds);
 
@@ -320,7 +328,11 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
   let outageId = null;
   let usedLlm = false;
   let reason;
-  if (top && top.score >= env.LINK_HIGH_SCORE) {
+  // A fresh "outage reported / investigating" post while the best match is only PARTLY restored is either the fault that is still
+  // being fixed or a NEW fault in the same streets (Newtown, 15 Sept: a Bree cable fault while the John Ware one sat at 98%).
+  // A high score alone cannot tell them apart, so the tie-break decides (unless it is the same conversation thread).
+  const maybeNewFault = mayBeNewFault(post, top);
+  if (top && top.score >= env.LINK_HIGH_SCORE && !maybeNewFault) {
     outageId = top.id;
     reason = top.reasons.join(', ');
   } else if (top && top.score >= env.LINK_LOW_SCORE && (!isDigest(facts) || !(extraction.result.faults?.length >= 2))) {

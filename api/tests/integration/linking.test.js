@@ -327,3 +327,4 @@ describe('A20: cached tie-breaks keep pointing at the same outage', () => {
     expect(tieBreaks.calls).toBe(2); // the fingerprint changed, so the old verdict was not reused
   });
 });
+

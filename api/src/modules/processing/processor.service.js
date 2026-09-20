@@ -6,6 +6,7 @@ import { LeaseLostError, assertLeaseInTx, exclusive, recoverStaleWork } from '..
 import { learnFromExtraction, removeContributions } from '../infrastructure/infrastructure.service.js';
 import { linkPost, recordDecision } from '../outages/linker.service.js';
 import { refoldOutage } from '../outages/outage-state.js';
+import { markRestoredPlaces } from '../../lib/restored-places.js';
 
 const STATUS_BY_RELEVANCE = {
   OUTAGE: 'RELEVANT',
@@ -81,6 +82,8 @@ async function processLocked(postId, ctx, { force = false } = {}) {
     }
     const cached = await prisma.postExtraction.findFirst({ where: { postId, status: 'SUCCEEDED' }, select: { id: true } });
     const extraction = await extractPost(postId, { force, signal: ctx?.signal });
+    // "restored to X" in the post's own words settles X, whatever the reading listed (free, deterministic)
+    if (extraction.result) extraction.result = markRestoredPlaces(extraction.result, postRow.noteTweetText || postRow.text);
     if (extraction.status !== 'SUCCEEDED') {
       await setStatus(postId, extraction.status === 'FAILED' ? 'PROCESSING_ERROR' : 'NEEDS_REVIEW');
       return { postId, outcome: extraction.status };

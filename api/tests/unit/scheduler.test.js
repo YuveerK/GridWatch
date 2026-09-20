@@ -53,3 +53,21 @@ describe('elapsed-interval scheduler', () => {
     vi.useRealTimers();
   });
 });
+
+describe('scheduler reports when it will next run', () => {
+  it('knows the due time while waiting, and none while running or stopped', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-20T10:00:00Z'));
+    let during = 'unset';
+    const s = createScheduler({ intervalMs: 300_000, tick: async () => { during = s.nextAt; } });
+    expect(s.nextAt).toBeNull();
+    s.start();
+    expect(s.nextAt).toBe(new Date('2026-09-20T10:05:00Z').getTime());
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(during).toBeNull(); // while a tick runs nothing is "next"
+    expect(s.nextAt).toBe(new Date('2026-09-20T10:10:00Z').getTime()); // rescheduled after it finished
+    await s.stop();
+    expect(s.nextAt).toBeNull();
+    vi.useRealTimers();
+  });
+});

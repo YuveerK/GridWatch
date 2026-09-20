@@ -16,6 +16,8 @@ const require = createRequire(import.meta.url);
 const { PrismaClient } = require('@prisma/client');
 const API = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const keep = process.argv.includes('--keep');
+// --tiebreaks lets the replay pay for the small "same fault or not?" questions it has no cached answer for (never post readings; at most 80 calls).
+const tiebreaks = process.argv.includes('--tiebreaks');
 const source = process.env.DATABASE_URL;
 if (!source) throw new Error('DATABASE_URL is not set');
 
@@ -28,7 +30,7 @@ const withDatabase = (url, name) => {
 const name = `gridwatch_replay_${Date.now()}_${randomBytes(3).toString('hex')}`;
 const target = withDatabase(source, name);
 const admin = new PrismaClient({ datasourceUrl: withDatabase(source, 'postgres') });
-const run = (args, extraEnv = {}) => spawnSync(process.execPath, args, { cwd: API, env: { ...process.env, DATABASE_URL: target, GRIDWATCH_NO_AI: '1', SCHEDULER: 'off', LOG_LEVEL: 'silent', ...extraEnv }, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+const run = (args, extraEnv = {}) => spawnSync(process.execPath, args, { cwd: API, env: { ...process.env, DATABASE_URL: target, ...(tiebreaks ? { GRIDWATCH_NO_AI: '', GRIDWATCH_AI_ONLY: 'tiebreak', GRIDWATCH_AI_MAX_CALLS: process.env.GRIDWATCH_AI_MAX_CALLS || '80' } : { GRIDWATCH_NO_AI: '1' }), SCHEDULER: 'off', LOG_LEVEL: 'silent', ...extraEnv }, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
 try {
   await admin.$executeRawUnsafe(`CREATE DATABASE "${name}"`);

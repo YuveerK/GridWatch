@@ -58,3 +58,19 @@ describe('faults from one graphic', () => {
     expect(r('scheduled maintenance is complete')).toBe(true);
   });
 });
+
+import { mayBeNewFault } from '../../src/modules/outages/linker.service.js';
+
+describe('a fresh report while the best match is only partly restored', () => {
+  const partly = { raw: { status: 'PARTIALLY_RESTORED' }, reasons: ['shared node x1'] };
+  const report = { relevance: 'OUTAGE', status: 'INVESTIGATING' };
+  it('is asked about, because it may be a new fault (Newtown, 15 Sept)', () => {
+    expect(mayBeNewFault(report, partly)).toBe(true);
+  });
+  it('is not, when it is the same conversation thread, or an ordinary update, or the match is fully live or restored', () => {
+    expect(mayBeNewFault(report, { ...partly, reasons: ['same thread'] })).toBe(false);
+    expect(mayBeNewFault({ relevance: 'UPDATE', status: 'REPAIRING' }, partly)).toBe(false);
+    expect(mayBeNewFault(report, { raw: { status: 'ACTIVE' }, reasons: [] })).toBe(false);
+    expect(mayBeNewFault(report, undefined)).toBe(false);
+  });
+});

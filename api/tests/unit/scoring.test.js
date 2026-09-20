@@ -101,3 +101,18 @@ describe('scoreCandidate', () => {
     expect(r.score).toBeGreaterThanOrEqual(0.7);
   });
 });
+
+describe('a restoration that names different equipment but all the same suburbs', () => {
+  it('reaches the tie-break instead of opening a duplicate outage (the Weltevredenpark case)', () => {
+    const o = outage({ nodeIds: new Set(['other-station']), localityIds: new Set(['a', 'b', 'c', 'd']) });
+    const p = post({ nodeIds: new Set(['jg-strydom']), localityIds: new Set(['a', 'b']), relevance: 'RESTORATION', status: 'RESTORED', postedAt: hoursLater(1) });
+    const { score } = scoreCandidate(p, o);
+    expect(score).toBeGreaterThanOrEqual(0.35);
+    expect(score).toBeLessThan(0.7); // still decided by the tie-break, never linked blindly
+  });
+  it('a post naming only one shared suburb with different equipment still scores low', () => {
+    const o = outage({ nodeIds: new Set(['other-station']), localityIds: new Set(['a', 'b']) });
+    const p = post({ nodeIds: new Set(['jg-strydom']), localityIds: new Set(['a']), postedAt: hoursLater(30) });
+    expect(scoreCandidate(p, o).score).toBeLessThan(0.35);
+  });
+});

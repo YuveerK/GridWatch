@@ -5,6 +5,7 @@ import { logger } from './lib/logger.js';
 import { createScheduler } from './lib/scheduler.js';
 import { sweepStaleOutages } from './modules/outages/linker.service.js';
 import { cycle } from './modules/processing/cycle.js';
+import { scheduleState } from './modules/processing/schedule-state.js';
 
 const server = createApp().listen(env.PORT, () => logger.info(`GridWatch API listening on :${env.PORT}`));
 
@@ -28,6 +29,9 @@ async function tick() {
 }
 const fetchSchedule = createScheduler({ intervalMs: env.X_POLL_INTERVAL_MINUTES * 60_000, tick, onError: (err) => logger.error({ err: err.message }, 'scheduled tick failed') });
 if (!schedulerOff) fetchSchedule.start();
+scheduleState.enabled = !schedulerOff;
+scheduleState.intervalMs = env.X_POLL_INTERVAL_MINUTES * 60_000;
+scheduleState.nextRunAt = () => fetchSchedule.nextAt;
 
 // Graceful shutdown: stop taking requests and new ticks, let the run in progress reach a safe point (its lease is released
 // in its own finally), then close the database. A second signal, or 30 seconds, forces the exit.

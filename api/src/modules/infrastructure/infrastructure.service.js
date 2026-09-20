@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../../db/prisma.js';
-import { differsByLabel, infraKey, isNotSuburbName, localityKey, similarity, tailPlace } from '../../lib/normalize.js';
+import { differsByLabel, infraKey, isNotSuburbName, localityKey, similarity, tailPlace, oneEditApart } from '../../lib/normalize.js';
 
 const FUZZY_NODE = 0.9;
 const FUZZY_LOCALITY = 0.92;
@@ -108,6 +108,11 @@ export async function resolveLocality(name, preferIds = new Set()) {
       if (s > bestScore) [best, bestScore] = [k, s];
     }
     if (bestScore >= FUZZY_LOCALITY) candidates = map.get(best);
+  }
+  // a single mistyped letter ("Develand" for "Devland") is the same suburb: without this the typo became a new, unplaced suburb
+  if (!candidates && key.length >= 6 && !/\d/.test(key)) {
+    const near = keys.filter((k) => k[0] === key[0] && oneEditApart(key, k));
+    if (near.length === 1) candidates = map.get(near[0]);
   }
   if (!candidates?.length) return null;
   return candidates.find((c) => preferIds.has(c.id)) ?? candidates[0];

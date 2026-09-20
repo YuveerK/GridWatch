@@ -8,11 +8,14 @@ export function createScheduler({ intervalMs, tick, onError = () => {}, setTimer
   let timer = null;
   let running = null;
   let stopped = true;
+  let nextAt = null; // when the pending tick is due (ms since epoch), or null when none is waiting
 
   const schedule = (delay) => {
     if (stopped) return;
+    nextAt = Date.now() + delay;
     timer = setTimer(async () => {
       timer = null;
+      nextAt = null; // running now
       running = (async () => {
         try {
           await tick();
@@ -37,7 +40,11 @@ export function createScheduler({ intervalMs, tick, onError = () => {}, setTimer
       stopped = true;
       if (timer) clearTimer(timer);
       timer = null;
+      nextAt = null;
       await running;
+    },
+    get nextAt() {
+      return nextAt;
     },
     get active() {
       return !stopped;

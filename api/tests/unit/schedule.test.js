@@ -46,3 +46,25 @@ describe('scheduleWindow (A09): the announced window as UTC instants, Johannesbu
     expect(w('See the graphic', { imageText: 'Planned outage 20 September 2026 08:00-16:00' })).toEqual({ start: '2026-09-20T06:00:00.000Z', end: '2026-09-20T14:00:00.000Z' });
   });
 });
+
+describe('a planned window with the date in one place and the hours in another (Greenstone Hill)', () => {
+  it('takes the date from the post text and the hours from the estimate', () => {
+    const w = scheduleWindow({ result: { eta_text: '09h00 until 17h00' } }, 'planned power interruption which is scheduled to take place on Monday, 21 September 2026.', new Date('2026-09-20T06:00:00Z'));
+    expect(w).toEqual({ start: '2026-09-21T07:00:00.000Z', end: '2026-09-21T15:00:00.000Z' });
+  });
+});
+
+describe('a date range (Klipfontein: 22 and 23 September)', () => {
+  const ref = new Date('2026-09-19T08:00:00Z');
+  it('starts on the first day and ends on the last, at the daily hours', () => {
+    expect(parseSchedule('rescheduled for Tuesday and Wednesday, 22 and 23 September 2026 from 09h00 until 17h00.', ref)).toMatchObject({ date: '2026-09-22', endDate: '2026-09-23', from: '09:00', to: '17:00' });
+    expect(scheduleWindow(null, 'rescheduled for September 22-23, 2026, from 09h00 until 17h00.', ref)).toBeNull(); // month before the day is a format we do not read: no guess
+    expect(scheduleWindow(null, 'rescheduled for 22 and 23 September 2026 from 09h00 until 17h00.', ref)).toEqual({ start: '2026-09-22T07:00:00.000Z', end: '2026-09-23T15:00:00.000Z' });
+  });
+  it('an ordinary single date is unchanged', () => {
+    expect(parseSchedule('take place on 16 September 2026, from 09:00-17:00', ref)).toEqual({ date: '2026-09-16', from: '09:00', to: '17:00' });
+  });
+  it('an invalid range keeps the single last date', () => {
+    expect(parseSchedule('planned for 31 and 32 September 2026', ref)?.endDate).toBeUndefined();
+  });
+});

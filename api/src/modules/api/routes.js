@@ -6,9 +6,13 @@ import { z } from 'zod';
 import { ingestNewPosts } from '../ingestion/ingestion.service.js';
 import { env } from '../../config/env.js';
 import { cycle } from '../processing/cycle.js';
+import { scheduleState } from '../processing/schedule-state.js';
 import { processPending, reprocessPost } from '../processing/processor.service.js';
 import { authorize, checkToken, isSameOrigin, allowedOrigins, loginAllowed, recordLoginFailure, requireOperator, resetLoginFailures, sessionCookie } from './operator-auth.js';
 import { equipmentFlow, equipmentHubs } from '../geo/equipment-map.service.js';
+import { insights } from './insights.service.js';
+import { latestUpdates } from './updates.service.js';
+import { localityHistory } from './locality-history.service.js';
 
 export const router = Router();
 
@@ -194,7 +198,7 @@ router.get('/v1/outages/:id', wrap(async (req, res) => {
 
 router.get('/v1/overview', wrap(async (_req, res) => {
   const now = new Date();
-  const [byStatus, liveRows, bySdcRows, dailyRows, restored24, lastPost, updates, plannedRows, plannedTotal] = await Promise.all([
+  const [byStatus, liveRows, bySdcRows, dailyRows, restored24, lastPost, updates, plannedRows, plannedTotal, sdcDailyRows] = await Promise.all([
     prisma.outage.groupBy({ by: ['status'], _count: true }),
     prisma.outage.findMany({ where: { status: { in: LIVE } }, include: outageInclude, orderBy: { lastUpdateAt: 'desc' }, take: 8 }),
     prisma.outage.groupBy({ by: ['sdcName', 'status'], where: { status: { in: [...LIVE, 'PLANNED'] } }, _count: true }),
@@ -216,6 +220,11 @@ router.get('/v1/overview', wrap(async (_req, res) => {
     // announced work that has not finished, soonest first; an outage whose window is unknown stays in until the sweep closes it
     prisma.outage.findMany({ where: { status: 'PLANNED', OR: [{ scheduledEnd: null }, { scheduledEnd: { gte: now } }] }, include: outageInclude, orderBy: [{ scheduledStart: { sort: 'asc', nulls: 'last' } }, { lastUpdateAt: 'desc' }, { id: 'asc' }], take: 60 }),
     prisma.outage.count({ where: { status: 'PLANNED', OR: [{ scheduledEnd: null }, { scheduledEnd: { gte: now } }] } }),
+    // unplanned outages that started each day (Johannesburg time), per service centre: the history strips
+    prisma.$queryRaw`
+      SELECT "sdcName" AS sdc, to_char((("startedAt" AT TIME ZONE 'UTC') AT TIME ZONE 'Africa/Johannesburg')::date, 'YYYY-MM-DD') AS day, COUNT(*)::int AS n
+      FROM "Outage" WHERE kind = 'UNPLANNED' AND "sdcName" IS NOT NULL AND "startedAt" >= (now() AT TIME ZONE 'UTC') - interval '15 days'
+      GROUP BY 1, 2`,
   ]);
 
   const counts = Object.fromEntries(byStatus.map((s) => [s.status, s._count]));
@@ -237,6 +246,13 @@ router.get('/v1/overview', wrap(async (_req, res) => {
     daily.push({ date, count: dayCount.get(date) ?? 0 });
   }
 
+  // last 14 days per service centre, oldest first, zero-filled
+  const days14 = Array.from({ length: 14 }, (_, k) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Johannesburg' }).format(new Date(now - (13 - k) * 24 * HOUR)));
+  const bySdcDay = new Map();
+  for (const r of sdcDailyRows) bySdcDay.set(`${r.sdc}|${r.day}`, r.n);
+  const sdcNames = [...new Set(sdcDailyRows.map((r) => r.sdc))].sort();
+  const history = sdcNames.map((sdc) => ({ sdc, days: days14.map((date) => ({ date, count: bySdcDay.get(`${sdc}|${date}`) ?? 0 })) }));
+
   const planned = await shapeMany(plannedRows);
   const upcoming = planned
     .filter((o) => (o.scheduled ? new Date(o.scheduled.end) >= now : true))
@@ -256,6 +272,7 @@ router.get('/v1/overview', wrap(async (_req, res) => {
     latestUpdates: updates,
     bySdc: [...sdcMap.values()].sort((a, b) => b.live + b.partial - (a.live + a.partial) || a.sdc.localeCompare(b.sdc)),
     daily,
+    history,
     planned: upcoming.slice(0, 6),
   });
 }));
@@ -323,6 +340,15 @@ router.get('/v1/localities/:id/outages', wrap(async (req, res) => {
   res.json({ data: await shapeMany(outages), possible: await shapeMany(possible) });
 }));
 
+/** A suburb's outage history and what is typical for it (how long power takes to come back, the usual cause, repeat equipment). */
+router.get('/v1/localities/:id/history', wrap(async (req, res) => {
+  if (!id.safeParse(req.params.id).success) return res.status(400).json({ error: 'invalid_request' });
+  const q = parse(z.object({ days: intParam(1, 365, 90) }), req.query, res);
+  if (!q) return;
+  if (!(await prisma.locality.findUnique({ where: { id: req.params.id }, select: { id: true } }))) return res.status(404).json({ error: 'not_found' });
+  res.json(await localityHistory({ localityId: req.params.id, days: q.days }));
+}));
+
 // ───────────── network (equipment) ─────────────
 
 router.get('/v1/network/sdcs', wrap(async (_req, res) => {
@@ -366,7 +392,7 @@ router.get('/v1/map', wrap(async (_req, res) => {
       const named = o.localities.map((l) => place(l, { restored: l.restored, inferred: false }));
       const all = named.length ? named : o.likelyAreas.map((l) => place({ ...l, canonicalName: l.canonicalName }, { restored: false, inferred: true }));
       return {
-        id: o.id, title: o.title, status: o.status, restorationPercent: o.restorationPercent, sdc: o.sdc, lastUpdateAt: o.lastUpdateAt, latest: o.latest?.summary ?? null,
+        id: o.id, title: o.title, status: o.status, restorationPercent: o.restorationPercent, sdc: o.sdc, startedAt: o.startedAt, lastUpdateAt: o.lastUpdateAt, latest: o.latest?.summary ?? null, latestIngestedAt: o.latest?.ingestedAt ?? null,
         equipment: (o.infrastructure ?? []).filter((n) => ['SUBSTATION', 'SWITCHING_STATION', 'DISTRIBUTOR'].includes(n.type)).map((n) => ({ id: n.id, name: n.name, type: n.type })),
         places: all.filter((p) => p.lat != null && p.lon != null),
         unplaced: all.filter((p) => p.lat == null || p.lon == null).length,
@@ -473,6 +499,25 @@ router.get('/v1/infrastructure', wrap(async (req, res) => {
 // ───────────── manual refresh (fetch latest posts, read them, update outages) ─────────────
 
 const refreshEnabled = () => env.REFRESH_BUTTON === 'on';
+
+/** When the site last checked City Power, and when the automatic check will run again. Public: it is what makes "is this current?" answerable. */
+router.get('/v1/sync', wrap(async (_req, res) => {
+  const [ok, latest] = await Promise.all([
+    prisma.ingestionRun.findFirst({ where: { status: 'SUCCEEDED', completedAt: { not: null } }, orderBy: { completedAt: 'desc' }, select: { completedAt: true } }),
+    prisma.ingestionRun.findFirst({ orderBy: { startedAt: 'desc' }, select: { status: true, startedAt: true, completedAt: true } }),
+  ]);
+  const next = scheduleState.enabled ? scheduleState.nextRunAt() : null;
+  res.json({
+    now: Date.now(),
+    lastSyncAt: ok?.completedAt ?? null,
+    latestStatus: latest?.status ?? null, // the most recent attempt, so a run of failures is not hidden behind an old success
+    latestAt: latest?.completedAt ?? latest?.startedAt ?? null,
+    running: cycle.status().state === 'running',
+    automatic: scheduleState.enabled,
+    intervalMs: scheduleState.enabled ? scheduleState.intervalMs : null,
+    nextRunAt: next,
+  });
+}));
 
 router.get('/v1/refresh', wrap(async (req, res) => {
   const lastBatch = await prisma.ingestionRun.findFirst({
@@ -585,6 +630,21 @@ router.get('/admin/review-queue', wrap(async (_req, res) => {
     select: { id: true, externalId: true, text: true, publishedAt: true, processingStatus: true, linkDecisions: true, extractions: { select: { status: true, error: true } } },
   });
   res.json({ data: posts });
+}));
+
+// ───────────── insights: what is causing the outages, and where ─────────────
+
+/** The latest news, not every post: new outages, restorations, progress and new estimates. ?locality= limits it to one suburb. */
+router.get('/v1/updates', wrap(async (req, res) => {
+  const q = parse(z.object({ limit: intParam(1, 100, 30), days: intParam(1, 30, 7), locality: id.optional() }), req.query, res);
+  if (!q) return;
+  res.json({ data: await latestUpdates({ limit: q.limit, days: q.days, localityId: q.locality ?? null }) });
+}));
+
+router.get('/v1/insights', wrap(async (req, res) => {
+  const q = parse(z.object({ days: intParam(1, 90, 14) }), req.query, res);
+  if (!q) return;
+  res.json(await insights({ days: q.days }));
 }));
 
 router.get('/v1/stats', wrap(async (_req, res) => {

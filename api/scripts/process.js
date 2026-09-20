@@ -43,4 +43,8 @@ const onPost = (res, n, total) => {
 
 const result = await processPending({ limit, onPost });
 console.log('\nFINISHED', result, `${freshCalls} fresh Gemini reads, ${((Date.now() - started) / 60000).toFixed(1)} min`);
+{
+  const { aiUsage } = await import('../src/modules/ai/gemini.client.js');
+  if (aiUsage.calls) console.log(`AI CALLS ${aiUsage.calls} (in ${aiUsage.inputTokens} / out ${aiUsage.outputTokens} tokens)`);
+}
 await prisma.$disconnect();
