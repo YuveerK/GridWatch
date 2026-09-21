@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
-import { exclusive, recoverStaleWork } from '../coordination/lease.js';
+import { assertLeaseInTx, exclusive, recoverStaleWork } from '../coordination/lease.js';
 import { XInvalidTokenError, XRateLimitError, fetchTimelinePage } from './x.client.js';
 
 // X returns a timeline newest first and we store each page as it arrives. The old code used "the highest stored id" as the
@@ -154,10 +154,13 @@ async function runIngestion(ctx, { maxPages, fetchPage }) {
           diag.tokenExpired = true;
           token = null;
           newest = null;
-          await prisma.ingestionState.upsert({
-            where: { accountId: env.X_SOURCE_ACCOUNT_ID },
-            create: { accountId: env.X_SOURCE_ACCOUNT_ID, completedHighWater: sinceId, incomplete: true },
-            update: { cursorToken: null, cursorSinceId: null, cursorNewest: null, incomplete: true },
+          await prisma.$transaction(async (tx) => {
+            await assertLeaseInTx(tx, ctx);
+            await tx.ingestionState.upsert({
+              where: { accountId: env.X_SOURCE_ACCOUNT_ID },
+              create: { accountId: env.X_SOURCE_ACCOUNT_ID, completedHighWater: sinceId, incomplete: true },
+              update: { cursorToken: null, cursorSinceId: null, cursorNewest: null, incomplete: true },
+            });
           });
           continue;
         }
@@ -171,7 +174,10 @@ async function runIngestion(ctx, { maxPages, fetchPage }) {
       const next = complete
         ? { completedHighWater: maxId(sinceId, newest), cursorToken: null, cursorSinceId: null, cursorNewest: null, incomplete: false, lastCompletedAt: new Date() }
         : { completedHighWater: sinceId, cursorToken: page.nextToken, cursorSinceId: sinceId, cursorNewest: newest, incomplete: true };
-      const saved = await prisma.$transaction((tx) => persistPage(tx, { run, page, state: next }), { timeout: 60_000 });
+      const saved = await prisma.$transaction(async (tx) => {
+        await assertLeaseInTx(tx, ctx); // the page and the checkpoint only commit while we still own the lease
+        return persistPage(tx, { run, page, state: next });
+      }, { timeout: 60_000 });
       stats.postsInserted += saved.inserted;
       stats.postsDeduplicated += saved.deduped;
       state = next;
@@ -180,7 +186,10 @@ async function runIngestion(ctx, { maxPages, fetchPage }) {
     }
     diag.complete = complete;
     if (!complete && !state?.incomplete) {
-      await prisma.ingestionState.upsert({ where: { accountId: env.X_SOURCE_ACCOUNT_ID }, create: { accountId: env.X_SOURCE_ACCOUNT_ID, completedHighWater: sinceId, incomplete: true }, update: { incomplete: true } });
+      await prisma.$transaction(async (tx) => {
+        await assertLeaseInTx(tx, ctx);
+        await tx.ingestionState.upsert({ where: { accountId: env.X_SOURCE_ACCOUNT_ID }, create: { accountId: env.X_SOURCE_ACCOUNT_ID, completedHighWater: sinceId, incomplete: true }, update: { incomplete: true } });
+      });
     }
   } catch (err) {
     status = err instanceof XRateLimitError ? 'RATE_LIMITED' : 'FAILED';

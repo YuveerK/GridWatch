@@ -41,3 +41,43 @@ describe('a one-letter typo', () => {
     ['abc', 'abd', true],
   ])('%s / %s -> %s', (a, b, expected) => expect(oneEditApart(a, b)).toBe(expected));
 });
+
+describe('E01: a promise, a condition or an impossibility is not a restoration', () => {
+  const affected = () => reading([{ name: 'Alpha', state: 'AFFECTED' }]);
+  it.each([
+    'Power will be restored to Alpha by 23h00.',
+    'Power cannot be restored to Alpha until repairs are complete.',
+    'Power can\'t be restored to Alpha yet.',
+    'Final tests will be run before supply can be restored to Alpha.',
+    'Supply is expected to be restored to Alpha this evening.',
+    'The team is working to restore supply; power is expected to be restored to Alpha at 20h00.',
+    'Operators are aiming to have power restored to Alpha tonight.',
+    'Once repairs are done, power will be restored in Alpha.',
+    'Power has not been restored to Alpha.',
+    'Power was not restored to Alpha as planned.',
+    'City Power said: "power will be restored to Alpha".',
+    'The ETR for power restored to Alpha is 22h00.',
+    'Alpha is being restored in stages.',
+  ])('leaves Alpha affected: %s', (text) => {
+    const input = affected();
+    expect(markRestoredPlaces(input, text)).toBe(input);
+  });
+  it.each([
+    'Power has been restored to Alpha.',
+    'Power has been partially restored to customers in Alpha.',
+    'Supply was restored in Alpha at 14h10.',
+    'Power restored to Alpha.',
+    'Full supply is restored for Alpha after the cable repair.',
+  ])('still marks Alpha restored: %s', (text) => {
+    expect(markRestoredPlaces(affected(), text).localities[0].state).toBe('RESTORED');
+  });
+  it('judges each part of a sentence on its own', () => {
+    const r = markRestoredPlaces(reading([{ name: 'Alpha', state: 'AFFECTED' }, { name: 'Beta', state: 'AFFECTED' }]), 'Power has been restored to Alpha; supply will be restored to Beta by 23h00.');
+    expect(r.localities.map((l) => l.state)).toEqual(['RESTORED', 'AFFECTED']);
+  });
+  it('a proposed restoration can no longer turn a REPAIRING outage into a RESTORED one', async () => {
+    const { statusFor } = await import('../../src/modules/outages/outage-state.js');
+    const result = markRestoredPlaces({ status: 'REPAIRING', restoration_percent: null, localities: [{ name: 'Alpha', state: 'AFFECTED' }] }, 'Power will be restored to Alpha by 23h00.');
+    expect(statusFor({ result }, 'ACTIVE')).toBe('ACTIVE');
+  });
+});

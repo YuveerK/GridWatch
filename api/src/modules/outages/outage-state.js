@@ -27,6 +27,19 @@ export function statusFor(extraction, current) {
 }
 
 /** A restoration post with no outage to attach to opens a restored outage, unless the post itself says restoration is only partial. */
+/**
+ * Is one suburb back on, given what the post said? An overall partial percentage ("restored to 75% of customers in X and Y") says not
+ * everyone is back, so when EVERY named suburb is tagged restored those tags contradict it and the percentage wins. When the tags are mixed
+ * ("Alpha restored, Beta still affected") they are explicit per-suburb statements and stay as stated, even alongside an overall percentage.
+ */
+export function suburbRestored({ status, partial, locs, restored }) {
+  if (status === 'RESTORED') return true;
+  if (!restored) return false;
+  if (!partial) return true;
+  const everyoneTagged = locs.length > 0 && locs.every((l) => l.restored);
+  return !everyoneTagged;
+}
+
 export const initialStatus = (retroactive, status) => (retroactive && status !== 'PARTIALLY_RESTORED' ? 'RESTORED' : status);
 
 /** What one fault said about its outage, in the shape stored on OutagePost.effect. */
@@ -87,7 +100,7 @@ export function foldEffects(posts) {
 
     const partial = e.pct != null && e.pct < 100 && status !== 'RESTORED';
     for (const l of e.locs ?? []) {
-      const restored = status === 'RESTORED' || (!partial && l.restored);
+      const restored = suburbRestored({ status, partial, locs: e.locs ?? [], restored: l.restored });
       if (e.expand) localities.set(l.id, restored);
       else if (restored && localities.has(l.id)) localities.set(l.id, true);
     }

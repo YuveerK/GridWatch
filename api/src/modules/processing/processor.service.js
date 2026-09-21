@@ -101,7 +101,7 @@ async function processLocked(postId, ctx, { force = false } = {}) {
     for (const item of todo) {
       ctx?.assertHeld();
       const source = { postId, faultIndex: item.faultIndex };
-      const facts = { ...(await learnFromExtraction(item.extraction, postRow.publishedAt, { source })), fromDigest: item.fromDigest };
+      const facts = { ...(await learnFromExtraction(item.extraction, postRow.publishedAt, { source, ctx })), fromDigest: item.fromDigest };
       if (item.fromDigest && !facts.nodes.length && !facts.localityIds.length) {
         await recordDecision(ctx, { id: postId, faultIndex: item.faultIndex }, { outcome: 'NEW', reason: 'fault names no equipment or suburbs' });
         continue;
@@ -230,7 +230,7 @@ export async function reprocessPost(postId, { ctx, reextract = false } = {}) {
     if (!post) return { postId, outcome: 'NOT_FOUND' };
 
     // Evidence counted before contributions were recorded is adopted first, so taking it back below is exact.
-    await adoptLegacyEvidence(postId);
+    await adoptLegacyEvidence(postId, held);
 
     const touched = await prisma.$transaction(async (tx) => {
       await assertLeaseInTx(tx, held);
@@ -244,7 +244,7 @@ export async function reprocessPost(postId, { ctx, reextract = false } = {}) {
       for (const id of outageIds) results[id] = await refoldOutage(tx, id);
       return results;
     });
-    await removeContributions(postId);
+    await removeContributions(postId, null, { ctx: held });
     const res = await processLocked(postId, held, { force: reextract });
     return { ...res, reprocessed: true, outagesRecomputed: Object.keys(touched).length, outagesDeleted: Object.values(touched).filter((v) => v === 'deleted').length };
   });
@@ -253,7 +253,7 @@ export async function reprocessPost(postId, { ctx, reextract = false } = {}) {
 
 
 /** Record (without counting) the graph evidence an already-processed post contributed before contributions were tracked. */
-async function adoptLegacyEvidence(postId) {
+async function adoptLegacyEvidence(postId, ctx) {
   if (await prisma.evidenceContribution.findFirst({ where: { postId }, select: { postId: true } })) return;
   if (!(await prisma.linkDecision.findFirst({ where: { postId }, select: { id: true } }))) return;
   const [row, extraction] = await Promise.all([
@@ -262,7 +262,7 @@ async function adoptLegacyEvidence(postId) {
   ]);
   if (!extraction) return;
   for (const item of faultItems(extraction)) {
-    await learnFromExtraction(item.extraction, row.publishedAt, { source: { postId, faultIndex: item.faultIndex }, mode: 'record-only' });
+    await learnFromExtraction(item.extraction, row.publishedAt, { source: { postId, faultIndex: item.faultIndex }, mode: 'record-only', ctx });
   }
 }
 

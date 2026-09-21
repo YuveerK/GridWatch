@@ -197,3 +197,18 @@ describe('refresh cycle', () => {
     await cycle.whenIdle();
   });
 });
+
+describe('a required stage that did not run is not reported as a clean success (E07)', () => {
+  it('a skipped sweep is listed as incomplete in the result', async () => {
+    const { cycle } = make({ sweep: async () => ({ skipped: true }) });
+    cycle.start('manual');
+    await cycle.whenIdle();
+    expect(cycle.status()).toMatchObject({ state: 'done', result: { incomplete: ['sweep'] } });
+  });
+  it('a sweep that ran leaves nothing incomplete', async () => {
+    const { cycle } = make({ sweep: async () => ({ stale: 0, closed: 0 }) });
+    cycle.start('manual');
+    await cycle.whenIdle();
+    expect(cycle.status().result.incomplete).toEqual([]);
+  });
+});

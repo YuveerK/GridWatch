@@ -50,3 +50,16 @@ describe('fetching a picture with retries', () => {
     expect(g.calls()).toBe(0);
   });
 });
+
+describe('only pictures served by X itself are fetched (E12)', () => {
+  it('accepts twimg.com and its real subdomains', async () => {
+    const { mediaUrl } = await import('../../src/modules/ai/extraction.service.js');
+    expect(mediaUrl('https://pbs.twimg.com/media/a.jpg')).toContain('pbs.twimg.com');
+    expect(mediaUrl('https://twimg.com/a.jpg')).toContain('twimg.com');
+    expect(mediaUrl('https://PBS.TWIMG.COM/a.jpg')).toContain('twimg.com');
+  });
+  it('rejects look-alike hosts, other schemes and lookalike paths', async () => {
+    const { mediaUrl } = await import('../../src/modules/ai/extraction.service.js');
+    for (const bad of ['https://not-twimg.com/a.jpg', 'https://twimg.com.evil.example/a.jpg', 'https://evil.example/twimg.com/a.jpg', 'https://xtwimg.com/a.jpg', 'http://pbs.twimg.com/a.jpg']) expect(() => mediaUrl(bad)).toThrow('untrusted image host');
+  });
+});

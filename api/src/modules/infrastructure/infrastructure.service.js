@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../../db/prisma.js';
+import { assertLeaseInTx } from '../coordination/lease.js';
 import { differsByLabel, infraKey, isNotSuburbName, likelyTypo, localityKey, similarity, tailPlace, oneEditApart } from '../../lib/normalize.js';
 
 const FUZZY_NODE = 0.9;
@@ -8,6 +9,14 @@ const CONFIRM_AT = 2;
 const STATION_TYPES = ['SUBSTATION', 'SWITCHING_STATION'];
 
 let localityIndex = null;
+
+// Every authoritative write to the graph runs in a transaction that first proves the caller still holds the pipeline lease (a worker that
+// lost it, and has not noticed yet, must not write). `ctx` is that lease; without one (scripts, tests) nothing is checked.
+const fenced = (ctx, fn) =>
+  prisma.$transaction(async (tx) => {
+    await assertLeaseInTx(tx, ctx);
+    return fn(tx);
+  });
 
 // ── idempotent evidence ──────────────────────────────────────────────────────────────────────
 // Each fact a post teaches the graph (this equipment exists, this feeds that, this serves that suburb) is recorded once per
@@ -23,11 +32,12 @@ async function shouldCount(db, source, kind, refA, refB = '', mode = 'count') {
 }
 
 /** Take back everything one source taught the graph (before it is learned again, or when it is removed). */
-export async function removeContributions(postId, faultIndex = null) {
+export async function removeContributions(postId, faultIndex = null, { ctx } = {}) {
   const where = { postId, ...(faultIndex == null ? {} : { faultIndex }) };
   const rows = await prisma.evidenceContribution.findMany({ where });
   if (!rows.length) return { removed: 0 };
   await prisma.$transaction(async (tx) => {
+    await assertLeaseInTx(tx, ctx);
     for (const r of rows) {
       if (r.kind === 'NODE') {
         const n = await tx.infraNode.findUnique({ where: { id: r.refA } });
@@ -119,15 +129,17 @@ export async function resolveLocality(name, preferIds = new Set()) {
 }
 
 /** Suburbs missing from the supplied list are learned as candidates (streets/facilities are ignored). */
-async function learnLocality(name) {
+async function learnLocality(name, ctx) {
   const clean = name.trim();
   const key = localityKey(clean);
   if (key.length < 3 || isNotSuburbName(clean)) return null;
   let loc = await prisma.locality.findFirst({ where: { normalizedName: key, regionId: null } });
   if (!loc) {
-    loc = await prisma.locality.create({
-      data: { id: randomUUID(), canonicalName: clean, normalizedName: key, sourceLabel: 'learned-from-posts', updatedAt: new Date() },
-    });
+    loc = await fenced(ctx, (tx) =>
+      tx.locality.create({
+        data: { id: randomUUID(), canonicalName: clean, normalizedName: key, sourceLabel: 'learned-from-posts', updatedAt: new Date() },
+      }),
+    );
   }
   resetLocalityIndex();
   return loc;
@@ -136,7 +148,7 @@ async function learnLocality(name) {
 /** Find or create a node; bumps evidence and promotes to CONFIRMED. */
 const JUNK_NAME = /^(affected|unspecified|unspecific|unnamed|tbc|unknown|customers?|areas?|surrounding( areas)?|n\/a|none|the|a|an|feeder|line|cable|mini[- ]?substation|substation|distributor)$/i;
 
-export async function resolveNode({ type, name, at, source = null, mode = 'count' }) {
+export async function resolveNode({ type, name, at, source = null, mode = 'count', ctx }) {
   if (!name || JUNK_NAME.test(name.trim())) return null;
   // "Inner City", "InnerCity" and "InnerCitySDC" are one service delivery centre
   const key = type === 'SDC' ? infraKey(name).replace(/\s+/g, '').replace(/sdc$/, '') : infraKey(name);
@@ -167,11 +179,13 @@ export async function resolveNode({ type, name, at, source = null, mode = 'count
     }
     if (best && bestScore >= FUZZY_NODE) {
       node = await prisma.infraNode.findUnique({ where: { id: best.id } });
-      await prisma.nodeAlias.upsert({
-        where: { nodeId_normalizedKey: { nodeId: node.id, normalizedKey: key } },
-        create: { nodeId: node.id, alias: name, normalizedKey: key },
-        update: {},
-      });
+      await fenced(ctx, (tx) =>
+        tx.nodeAlias.upsert({
+          where: { nodeId_normalizedKey: { nodeId: node.id, normalizedKey: key } },
+          create: { nodeId: node.id, alias: name, normalizedKey: key },
+          update: {},
+        }),
+      );
     }
   }
   // a station name that is one letter off, or the same letters scrambled, is a misspelling of a known station (only when exactly one fits)
@@ -180,30 +194,37 @@ export async function resolveNode({ type, name, at, source = null, mode = 'count
     const near = stations.filter((n) => !differsByLabel(key, n.normalizedKey) && likelyTypo(key, n.normalizedKey));
     if (near.length === 1) {
       node = await prisma.infraNode.findUnique({ where: { id: near[0].id } });
-      await prisma.nodeAlias.upsert({ where: { nodeId_normalizedKey: { nodeId: node.id, normalizedKey: key } }, create: { nodeId: node.id, alias: name, normalizedKey: key }, update: {} });
+      await fenced(ctx, (tx) => tx.nodeAlias.upsert({ where: { nodeId_normalizedKey: { nodeId: node.id, normalizedKey: key } }, create: { nodeId: node.id, alias: name, normalizedKey: key }, update: {} }));
     }
   }
+  // The contribution record and the counter move together or not at all: a failure between them used to leave the record written and the
+  // counter unmoved, so a retry saw "already counted" and the evidence was lost for good.
   if (node) {
-    const count = await shouldCount(prisma, source, 'NODE', node.id, '', mode);
-    const evidenceCount = node.evidenceCount + (count ? 1 : 0);
-    return prisma.infraNode.update({
-      where: { id: node.id },
-      data: {
-        evidenceCount,
-        lastSeenAt: at > node.lastSeenAt ? at : node.lastSeenAt,
-        firstSeenAt: at < node.firstSeenAt ? at : node.firstSeenAt,
-        lifecycle: node.lifecycle === 'CANDIDATE' && evidenceCount >= CONFIRM_AT ? 'CONFIRMED' : node.lifecycle,
-      },
+    return fenced(ctx, async (tx) => {
+      const count = await shouldCount(tx, source, 'NODE', node.id, '', mode);
+      const updated = await tx.infraNode.update({
+        where: { id: node.id },
+        data: {
+          ...(count ? { evidenceCount: { increment: 1 } } : {}),
+          lastSeenAt: at > node.lastSeenAt ? at : node.lastSeenAt,
+          firstSeenAt: at < node.firstSeenAt ? at : node.firstSeenAt,
+        },
+      });
+      if (updated.lifecycle === 'CANDIDATE' && updated.evidenceCount >= CONFIRM_AT) return tx.infraNode.update({ where: { id: node.id }, data: { lifecycle: 'CONFIRMED' } });
+      return updated;
     });
   }
-  const created = await prisma.infraNode.create({ data: { type, name: name.trim(), normalizedKey: key, firstSeenAt: at, lastSeenAt: at } });
-  await shouldCount(prisma, source, 'NODE', created.id, '', 'record-only'); // its first evidence is already the initial 1
-  return created;
+  return fenced(ctx, async (tx) => {
+    const created = await tx.infraNode.create({ data: { type, name: name.trim(), normalizedKey: key, firstSeenAt: at, lastSeenAt: at } });
+    await shouldCount(tx, source, 'NODE', created.id, '', 'record-only'); // its first evidence is already the initial 1
+    return created;
+  });
 }
 
-async function bumpEdge(parentId, childId, at, source, mode) {
+async function bumpEdge(parentId, childId, at, source, mode, ctx) {
   if (parentId === childId) return; // never a self-link
   await prisma.$transaction(async (tx) => {
+    await assertLeaseInTx(tx, ctx);
     const count = await shouldCount(tx, source, 'EDGE', parentId, childId, mode);
     await tx.infraEdge.upsert({
       where: { parentId_childId: { parentId, childId } },
@@ -213,8 +234,9 @@ async function bumpEdge(parentId, childId, at, source, mode) {
   });
 }
 
-async function bumpNodeLocality(nodeId, localityId, at, source, mode) {
+async function bumpNodeLocality(nodeId, localityId, at, source, mode, ctx) {
   await prisma.$transaction(async (tx) => {
+    await assertLeaseInTx(tx, ctx);
     const count = await shouldCount(tx, source, 'NODE_LOCALITY', nodeId, localityId, mode);
     await tx.nodeLocality.upsert({
       where: { nodeId_localityId: { nodeId, localityId } },
@@ -244,10 +266,10 @@ export function pickParent(node, candidates) {
  * Learn from one extraction. Returns the facts the linker needs:
  * { sdcNode, nodes: [InfraNode] (non-SDC, most specific last), localityIds: [], restoredLocalityIds: [], unmatched: [] }
  */
-export async function learnFromExtraction(extraction, at, { source = null, mode = 'count' } = {}) {
+export async function learnFromExtraction(extraction, at, { source = null, mode = 'count', ctx } = {}) {
   const result = extraction.result;
   const sdcName = result.sdc ?? result.entities.find((e) => e.type === 'SDC')?.name ?? null;
-  const sdcNode = sdcName ? await resolveNode({ type: 'SDC', name: sdcName, at, source, mode }) : null;
+  const sdcNode = sdcName ? await resolveNode({ type: 'SDC', name: sdcName, at, source, mode, ctx }) : null;
 
   // A bare line/feeder label ("A", "D", "1B") is only meaningful with its station: "Tshepisong A".
   const stationNames = result.entities.filter((e) => ['SUBSTATION', 'SWITCHING_STATION'].includes(e.type)).map((e) => e.name);
@@ -262,7 +284,7 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
   const resolved = new Map(); // node.id → { node, entities: [entity] }
   const byName = new Map(); // infraKey(name) → [{ node }]  (every node that name could mean)
   for (const e of entities) {
-    const node = await resolveNode({ type: e.type, name: e.name, at, source, mode });
+    const node = await resolveNode({ type: e.type, name: e.name, at, source, mode, ctx });
     if (!node) continue;
     const cur = resolved.get(node.id) ?? { node, entities: [] };
     cur.entities.push(e);
@@ -279,12 +301,12 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
     const named = es.find((x) => x.parent_name);
     const parent = named ? pickParent(node, byName.get(infraKey(named.parent_name)) ?? []) : null;
     if (parent) {
-      await bumpEdge(parent.node.id, node.id, at, source, mode);
+      await bumpEdge(parent.node.id, node.id, at, source, mode, ctx);
       children.add(parent.node.id);
       hasParent.add(node.id);
     } else if (sdcNode) {
       // no parent named, or a named parent that could not be resolved unambiguously: attach to the service centre rather than guess
-      await bumpEdge(sdcNode.id, node.id, at, source, mode);
+      await bumpEdge(sdcNode.id, node.id, at, source, mode, ctx);
     }
   }
 
@@ -301,15 +323,15 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
   const restoredLocalityIds = [];
   const unmatched = [];
   for (const l of result.localities) {
-    let loc = (await resolveLocality(l.name, preferIds)) ?? (await learnLocality(l.name));
-    if (!loc && tailPlace(l.name)) loc = (await resolveLocality(tailPlace(l.name), preferIds)) ?? (await learnLocality(tailPlace(l.name)));
+    let loc = (await resolveLocality(l.name, preferIds)) ?? (await learnLocality(l.name, ctx));
+    if (!loc && tailPlace(l.name)) loc = (await resolveLocality(tailPlace(l.name), preferIds)) ?? (await learnLocality(tailPlace(l.name), ctx));
     if (!loc) {
       unmatched.push(l.name);
       continue;
     }
     if (!localityIds.includes(loc.id)) localityIds.push(loc.id);
     if (l.state === 'RESTORED') restoredLocalityIds.push(loc.id);
-    for (const leaf of leaves) await bumpNodeLocality(leaf.id, loc.id, at, source, mode);
+    for (const leaf of leaves) await bumpNodeLocality(leaf.id, loc.id, at, source, mode, ctx);
   }
   // Independent branches: a normal substation → distributor chain is 1; a multi-fault digest image is 3+.
   const rootCount = nodes.filter((n) => !hasParent.has(n.id)).length;

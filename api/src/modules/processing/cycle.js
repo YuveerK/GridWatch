@@ -66,7 +66,13 @@ export function createCycle({ ingest, process, retry, sweep, place, counts, leas
     } catch (err) {
       logger.warn({ err: err?.message }, 'placing new suburbs on the map failed; will retry next fetch');
     }
-    await sweep({ ctx });
+    // a required stage that did not run is reported, never passed over as success
+    const incomplete = [];
+    const swept = await sweep({ ctx });
+    if (swept?.skipped) {
+      incomplete.push('sweep');
+      logger.warn('the cleanup sweep was skipped during a refresh');
+    }
     const after = await counts();
     const tally = proc?.tally ?? {};
     const failed = (tally.ERROR ?? 0) + (tally.FAILED ?? 0); // could not be processed; retried on the next run
@@ -87,6 +93,7 @@ export function createCycle({ ingest, process, retry, sweep, place, counts, leas
       capped: (proc?.remaining ?? 0) > 0,
       placed,
       retriedPictures: retried.tried,
+      incomplete,
     };
   }
 
@@ -128,12 +135,15 @@ export function createCycle({ ingest, process, retry, sweep, place, counts, leas
   };
 }
 
+/** The cleanup stage of a refresh: it runs under the refresh's own lease (its signature is (now, { ctx }), not ({ ctx })). */
+export const sweepStage = ({ ctx } = {}) => sweepStaleOutages(new Date(), { ctx });
+
 export const cycle = createCycle({
   ingest: ingestNewPosts,
   process: processPending,
   retry: retryImageFailures,
   lease: (fn) => withLease(PIPELINE, fn),
-  sweep: sweepStaleOutages,
+  sweep: sweepStage,
   place: () => placeLocalities({ max: 8, budgetMs: 20_000 }),
   counts: async () => ({ outages: await prisma.outage.count(), outagePosts: await prisma.outagePost.count() }),
   cooldownMs: env.REFRESH_COOLDOWN_SECONDS * 1000,

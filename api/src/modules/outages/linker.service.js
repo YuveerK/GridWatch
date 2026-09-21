@@ -6,7 +6,7 @@ import { generateJson } from '../ai/gemini.client.js';
 import { tailPlace } from '../../lib/normalize.js';
 import { scheduleWindow } from '../../lib/schedule.js';
 import { assertLeaseInTx, exclusive } from '../coordination/lease.js';
-import { buildEffect, initialStatus, refoldOutage, statusFor } from './outage-state.js';
+import { buildEffect, initialStatus, refoldOutage, statusFor, suburbRestored } from './outage-state.js';
 import { headlineNode, pickHeadlineMatch } from './headline.js';
 import { resolveOverride } from './overrides.js';
 import { applyRevivalRule, scoreCandidate } from './scoring.js';
@@ -17,7 +17,9 @@ const HOUR = 3_600_000;
 const DIGEST_NODES = 5;
 const PLANNED_WINDOW_HOURS = 240;
 const DIGEST_ROOTS = 2;
-const isDigest = (facts) => !facts.fromDigest && facts.rootCount >= 3 || (facts.rootCount >= DIGEST_ROOTS && facts.nodes.length >= 4);
+// An umbrella graphic naming many independent pieces of equipment. A fault already split out of a graphic (fromDigest) is one fault, whatever
+// equipment it names, and must never be discarded as a digest.
+export const isDigest = (facts) => !facts.fromDigest && (facts.rootCount >= 3 || (facts.rootCount >= DIGEST_ROOTS && facts.nodes.length >= 4));
 
 /** A fresh report while the best match is only partly restored: the remaining fault, or a new one? Not for a score alone to say. */
 export const mayBeNewFault = (post, top) =>
@@ -289,7 +291,7 @@ async function applyLegacy(tx, { id, post, extraction, facts, effect, expand }) 
   }
   const partial = r.restoration_percent != null && r.restoration_percent < 100 && status !== 'RESTORED';
   for (const l of effect.locs) {
-    const restored = status === 'RESTORED' || (!partial && l.restored);
+    const restored = suburbRestored({ status, partial, locs: effect.locs, restored: l.restored });
     if (expand) await tx.outageLocality.upsert({ where: { outageId_localityId: { outageId: id, localityId: l.id } }, create: { outageId: id, localityId: l.id, restored }, update: { restored } });
     else if (restored) await tx.outageLocality.updateMany({ where: { outageId: id, localityId: l.id }, data: { restored } });
   }

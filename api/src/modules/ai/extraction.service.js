@@ -30,11 +30,12 @@ function sast(date) {
 
 // Only images X itself serves are fetched (the URL came from a stored payload, so it is not blindly trusted), the size
 // limit is enforced while streaming so an oversized or endless body is never buffered, and the whole read has a deadline.
-const TRUSTED_MEDIA_HOST = /(^|.)twimg.com$/i;
+// The host must BE twimg.com or a real subdomain of it (a bare suffix test would let "not-twimg.com" through).
+const TRUSTED_MEDIA_HOST = { test: (host) => host === 'twimg.com' || host.endsWith('.twimg.com') };
 
 export function mediaUrl(raw) {
   const u = new URL(raw);
-  if (u.protocol !== 'https:' || !TRUSTED_MEDIA_HOST.test(u.hostname)) throw new Error('untrusted image host');
+  if (u.protocol !== 'https:' || !TRUSTED_MEDIA_HOST.test(u.hostname.toLowerCase())) throw new Error('untrusted image host');
   if (!u.searchParams.has('name')) u.searchParams.set('name', 'large'); // full-size render, without breaking an existing query
   return u.toString();
 }
