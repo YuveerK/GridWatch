@@ -623,6 +623,18 @@ router.post('/admin/reprocess/:postId', wrap(async (req, res) => {
   const r = await reprocessPost(req.params.postId, { reextract: q.reextract === 'true' });
   res.status(r.outcome === 'NOT_FOUND' ? 404 : r.outcome === 'BUSY' ? 409 : 200).json(r);
 }));
+// the saved quality result of each cycle (operator only: it names posts, faults and outages)
+router.get('/admin/quality/latest', wrap(async (_req, res) => {
+  const row = await prisma.cycleQuality.findFirst({ orderBy: { finishedAt: 'desc' } });
+  res.json({ data: row });
+}));
+router.get('/admin/quality', wrap(async (req, res) => {
+  const q = parse(z.object({ limit: intParam(1, 100, 20), status: z.enum(['COMPLETE', 'INCOMPLETE', 'NEEDS_REVIEW', 'FAILED']).optional() }), req.query, res);
+  if (!q) return;
+  const rows = await prisma.cycleQuality.findMany({ where: q.status ? { status: q.status } : {}, orderBy: { finishedAt: 'desc' }, take: q.limit, select: { id: true, trigger: true, status: true, startedAt: true, finishedAt: true, summary: true } });
+  res.json({ data: rows });
+}));
+
 router.get('/admin/review-queue', wrap(async (_req, res) => {
   const posts = await prisma.sourcePost.findMany({
     where: { processingStatus: { in: ['NEEDS_REVIEW', 'PROCESSING_ERROR'] } },
@@ -655,6 +667,12 @@ router.get('/v1/posts', wrap(async (req, res) => {
   const q = parse(z.object({ from: dayText.optional(), to: dayText.optional(), type: z.enum(CATEGORY_IDS).optional(), q: z.string().trim().max(100).optional(), limit: intParam(1, 100, 30), offset: intParam(0, 100_000, 0) }), req.query, res);
   if (!q) return;
   res.json(await listPosts({ from: q.from ?? null, to: q.to ?? null, type: q.type ?? null, q: q.q || null, limit: q.limit, offset: q.offset }));
+}));
+
+/** Did the last processing cycle complete, in one word (no post or outage details: those are operator-only). */
+router.get('/v1/quality/status', wrap(async (_req, res) => {
+  const row = await prisma.cycleQuality.findFirst({ orderBy: { finishedAt: 'desc' }, select: { status: true, finishedAt: true, summary: true } });
+  res.json({ data: row ? { status: row.status, finishedAt: row.finishedAt, posts: row.summary?.posts ?? 0, problems: row.summary?.problems ?? 0 } : null });
 }));
 
 router.get('/v1/insights', wrap(async (req, res) => {

@@ -66,3 +66,20 @@ describe('E11: stuck work and an unhealthy ingestion position', () => {
     expect(ingestionProblems({ incomplete: false, lastCompletedAt: null }, now)[0]).toMatch(/ever completed/);
   });
 });
+
+import { decideStatus } from '../../src/modules/processing/quality.js';
+
+describe('the verdict on a cycle', () => {
+  it('COMPLETE only when everything ran and every check passed', () => {
+    expect(decideStatus({})).toBe('COMPLETE');
+  });
+  it('FAILED beats everything; then INCOMPLETE (work missing); then NEEDS_REVIEW (a person is needed)', () => {
+    expect(decideStatus({ error: 'boom', problems: 3 })).toBe('FAILED');
+    expect(decideStatus({ incomplete: ['sweep'], problems: 3 })).toBe('INCOMPLETE');
+    expect(decideStatus({ backlog: 5 })).toBe('INCOMPLETE');
+    expect(decideStatus({ ingestionIncomplete: true })).toBe('INCOMPLETE');
+    expect(decideStatus({ stuck: 1 })).toBe('INCOMPLETE');
+    expect(decideStatus({ problems: 1 })).toBe('NEEDS_REVIEW');
+    expect(decideStatus({ needsReview: 2 })).toBe('NEEDS_REVIEW');
+  });
+});

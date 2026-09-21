@@ -18,6 +18,7 @@
     "audit": "node scripts/audit.js",
     "reread": "node scripts/reread.js",
     "batch": "node scripts/batch-report.js",
+    "quality": "node scripts/quality.js",
     "test:integration": "vitest run --config vitest.integration.config.js",
     "test:all": "vitest run && vitest run --config vitest.integration.config.js"
   },

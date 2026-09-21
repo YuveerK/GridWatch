@@ -67,6 +67,10 @@ model SourcePost {
   linkDecisions    LinkDecision[]
   notifications    NotificationEvent[]
   overrides        LinkOverride[]         @relation("OverridePost")
+  contrastedBy     LinkOverride[]         @relation("OverrideContrast")
+  retries          RetryAttempt[]
+  reviewItems      ReviewItem[]
+  readingRevisions ReadingRevision[]
   anchoredBy       LinkOverride[]         @relation("OverrideAnchor")
   summaries        PostSummary[]
   evidence         EvidenceContribution[]
@@ -476,7 +480,10 @@ model LinkOverride {
   anchorPostId     String?
   anchorFaultIndex Int         @default(0)
   note             String?
+  /// for a SPLIT: a post it must NOT end up in the same outage as (so the correction can be turned into a test)
+  contrastPostId   String?
   createdAt        DateTime    @default(now())
+  contrast         SourcePost? @relation("OverrideContrast", fields: [contrastPostId], references: [id], onDelete: Cascade)
   post             SourcePost  @relation("OverridePost", fields: [postId], references: [id], onDelete: Cascade)
   anchor           SourcePost? @relation("OverrideAnchor", fields: [anchorPostId], references: [id], onDelete: Cascade)
 
@@ -522,4 +529,68 @@ model NotificationEvent {
 
   @@id([postId, faultIndex])
   @@index([outageId, createdAt])
+}
+
+/// One row per processing cycle: did the work COMPLETE, and exactly which posts/faults, dispositions, readings and outages did it cover?
+model CycleQuality {
+  id               String   @id @default(cuid())
+  trigger          String
+  status           String
+  startedAt        DateTime
+  finishedAt       DateTime @default(now())
+  ingestionRunId   String?
+  summary          Json
+  problems         Json
+  posts            Json
+  changedOutageIds Json
+
+  @@index([finishedAt])
+}
+
+/// A transient failure (a tie-break the AI provider could not answer) that is tried again later, with a bounded number of attempts.
+model RetryAttempt {
+  postId      String
+  faultIndex  Int        @default(0)
+  kind        String
+  attempts    Int        @default(1)
+  lastError   String?
+  nextRetryAt DateTime
+  createdAt   DateTime   @default(now())
+  post        SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([postId, faultIndex, kind])
+  @@index([nextRetryAt])
+}
+
+/// A change that looks suspicious, queued for a person (and optionally an independent check). Never changes an outage by itself.
+model ReviewItem {
+  id         String     @id @default(cuid())
+  postId     String
+  faultIndex Int        @default(0)
+  reasons    Json
+  priority   Int
+  status     String     @default("OPEN")
+  sampled    Boolean    @default(false)
+  verifier   Json?
+  resolution String?
+  createdAt  DateTime   @default(now())
+  resolvedAt DateTime?
+  post       SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, faultIndex])
+  @@index([status, priority])
+}
+
+/// A reading that a later, accepted re-read replaced. Kept so a repair can be undone.
+model ReadingRevision {
+  id            String     @id @default(cuid())
+  postId        String
+  promptVersion String
+  revision      String?
+  model         String?
+  result        Json
+  replacedAt    DateTime   @default(now())
+  post          SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
 }

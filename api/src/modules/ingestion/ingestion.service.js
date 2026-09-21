@@ -206,5 +206,5 @@ async function runIngestion(ctx, { maxPages, fetchPage }) {
       logger.error({ err: err.message }, 'could not record the ingestion run; the lease is still released');
     }
   }
-  return { status, ...stats, checkpointBefore: sinceId, complete: diag.complete, incomplete: !diag.complete, resumedFromCursor: diag.resumedFromCursor, tokenExpired: diag.tokenExpired, error: error?.message ?? null };
+  return { runId: run.id, status, ...stats, checkpointBefore: sinceId, complete: diag.complete, incomplete: !diag.complete, resumedFromCursor: diag.resumedFromCursor, tokenExpired: diag.tokenExpired, error: error?.message ?? null };
 }

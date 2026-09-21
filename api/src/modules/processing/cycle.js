@@ -5,7 +5,8 @@ import { ingestNewPosts } from '../ingestion/ingestion.service.js';
 import { sweepStaleOutages } from '../outages/linker.service.js';
 import { placeLocalities } from '../geo/geocode.service.js';
 import { withLease, PIPELINE } from '../coordination/lease.js';
-import { processPending, retryImageFailures } from './processor.service.js';
+import { faultItems, processPending, retryImageFailures } from './processor.service.js';
+import { assessCycle } from './quality.js';
 
 function friendly(err) {
   const m = String(err?.message ?? err);
@@ -20,7 +21,7 @@ function friendly(err) {
  * Single-flight (never two at once), with a cooldown on manual runs and a cap on posts read per run, because
  * every run spends money at X and at the AI provider. Dependencies are injected so it can be tested without either.
  */
-export function createCycle({ ingest, process, retry, sweep, place, counts, lease = async (fn) => ({ acquired: true, value: await fn(undefined) }), now = () => Date.now(), cooldownMs = 90_000, maxPosts = 200 }) {
+export function createCycle({ ingest, process, retry, sweep, place, counts, assess, lease = async (fn) => ({ acquired: true, value: await fn(undefined) }), now = () => Date.now(), cooldownMs = 90_000, maxPosts = 200 }) {
   let state = { state: 'idle', trigger: null, step: null, startedAt: null, finishedAt: null, progress: null, found: null, result: null, error: null };
   let lastManualAt = 0;
   let current = Promise.resolve();
@@ -29,6 +30,7 @@ export function createCycle({ ingest, process, retry, sweep, place, counts, leas
 
   async function work(ctx) {
     const before = await counts();
+    const cycleStart = new Date(now());
     const ing = await ingest({ ctx });
     if (ing?.skipped) throw Object.assign(new Error('Another fetch is already in progress.'), { spent: false });
     const fetched = (ing?.postsFetched ?? 0) > 0;
@@ -74,6 +76,13 @@ export function createCycle({ ingest, process, retry, sweep, place, counts, leas
       logger.warn('the cleanup sweep was skipped during a refresh');
     }
     const after = await counts();
+    // The saved quality result: the deterministic checks over exactly the posts this cycle covered. Assessing can never break a cycle.
+    let quality = null;
+    try {
+      quality = await assess?.({ trigger: state.trigger, startedAt: cycleStart, ingestionRunId: ing?.runId ?? null, ingestion: ing, tally: proc?.tally ?? {}, backlog: proc?.remaining ?? 0, incomplete });
+    } catch (err) {
+      logger.warn({ err: err?.message }, 'could not assess the quality of this cycle');
+    }
     const tally = proc?.tally ?? {};
     const failed = (tally.ERROR ?? 0) + (tally.FAILED ?? 0); // could not be processed; retried on the next run
     const needsReview = tally.NEEDS_REVIEW ?? 0;
@@ -94,6 +103,7 @@ export function createCycle({ ingest, process, retry, sweep, place, counts, leas
       placed,
       retriedPictures: retried.tried,
       incomplete,
+      quality: quality ? { id: quality.id, status: quality.status, problems: quality.problems.length } : null,
     };
   }
 
@@ -105,6 +115,11 @@ export function createCycle({ ingest, process, retry, sweep, place, counts, leas
       state = { ...state, state: 'done', step: null, finishedAt: now(), result: outcome.value };
     } catch (err) {
       logger.error({ err: err?.message, trigger }, 'refresh cycle failed');
+      try {
+        await assess?.({ trigger, startedAt: new Date(state.startedAt ?? now()), error: err?.message ?? 'failed' });
+      } catch (e) {
+        logger.warn({ err: e?.message }, 'could not record the failed cycle');
+      }
       state = { ...state, state: 'error', step: null, finishedAt: now(), error: friendly(err) };
       // a failed attempt that spent nothing lets the operator retry straight away; one that may have been billed does not
       if (trigger === 'manual' && err?.spent !== true) lastManualAt = 0;
@@ -142,6 +157,7 @@ export const cycle = createCycle({
   ingest: ingestNewPosts,
   process: processPending,
   retry: retryImageFailures,
+  assess: (args) => assessCycle({ prisma, faultItems, promptVersion: env.AI_PROMPT_VERSION, ...args }),
   lease: (fn) => withLease(PIPELINE, fn),
   sweep: sweepStage,
   place: () => placeLocalities({ max: 8, budgetMs: 20_000 }),
