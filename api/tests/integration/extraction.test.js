@@ -99,3 +99,30 @@ describe('media fetching is bounded and trusted', () => {
     await expect(_fetchImageForTest('https://pbs.twimg.com/a.jpg', { fetchFn })).rejects.toThrow(/too large/);
   });
 });
+
+describe('E03: an uncertain re-read is not accepted over a good reading', () => {
+  it('a low-confidence forced re-read keeps the accepted reading and its summaries, and says why', async () => {
+    replies.push(reading({ update_summary: 'good', confidence: 0.9 }));
+    const good = await extractPost('p');
+    replies.push(reading({ update_summary: 'shaky', confidence: 0.2, review_reason: 'unclear' }));
+    const again = await extractPost('p', { force: true });
+    expect(again.keptAfterFailure).toBe(true);
+    expect(again.rejectedReason).toMatch(/low confidence/);
+    expect(again.id).toBe(good.id);
+    expect((await prisma.postExtraction.findUnique({ where: { id: good.id } })).status).toBe('SUCCEEDED');
+    expect(await summaries()).toEqual(['good']);
+  });
+  it('a confident re-read is still accepted', async () => {
+    replies.push(reading({ update_summary: 'first' }));
+    await extractPost('p');
+    replies.push(reading({ update_summary: 'second', confidence: 0.95 }));
+    const again = await extractPost('p', { force: true });
+    expect(again.keptAfterFailure).toBeUndefined();
+    expect(await summaries()).toEqual(['second']);
+  });
+  it('a first reading that is uncertain is still stored for review (nothing to keep)', async () => {
+    replies.push(reading({ confidence: 0.2 }));
+    const first = await extractPost('p');
+    expect(first.status).toBe('NEEDS_REVIEW');
+  });
+});

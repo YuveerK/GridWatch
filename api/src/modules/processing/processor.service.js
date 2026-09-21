@@ -69,7 +69,7 @@ async function decisionsOf(postId) {
   return prisma.linkDecision.findMany({ where: { postId }, orderBy: { faultIndex: 'asc' } });
 }
 
-async function processLocked(postId, ctx, { force = false } = {}) {
+async function processLocked(postId, ctx, { force = false, repairOutageIds = [], reading = null } = {}) {
   ctx?.assertHeld();
   const postRow = await prisma.sourcePost.findUniqueOrThrow({ where: { id: postId } });
   await prisma.sourcePost.update({ where: { id: postId }, data: { processingStatus: 'PROCESSING', processingStartedAt: new Date() } });
@@ -81,7 +81,7 @@ async function processLocked(postId, ctx, { force = false } = {}) {
       return { postId, outcome: 'SKIPPED_REPLY' };
     }
     const cached = await prisma.postExtraction.findFirst({ where: { postId, status: 'SUCCEEDED' }, select: { id: true } });
-    const extraction = await extractPost(postId, { force, signal: ctx?.signal });
+    const extraction = reading ?? (await extractPost(postId, { force, signal: ctx?.signal })); // `reading`: already read (a re-read done before anything was removed)
     // "restored to X" in the post's own words settles X, whatever the reading listed (free, deterministic)
     if (extraction.result) extraction.result = markRestoredPlaces(extraction.result, postRow.noteTweetText || postRow.text);
     if (extraction.status !== 'SUCCEEDED') {
@@ -106,7 +106,7 @@ async function processLocked(postId, ctx, { force = false } = {}) {
         await recordDecision(ctx, { id: postId, faultIndex: item.faultIndex }, { outcome: 'NEW', reason: 'fault names no equipment or suburbs' });
         continue;
       }
-      const decision = await linkPost({ postRow, extraction: item.extraction, facts, faultIndex: item.faultIndex, ctx });
+      const decision = await linkPost({ postRow, extraction: item.extraction, facts, faultIndex: item.faultIndex, ctx, repairOutageIds });
       if (!item.fromDigest) single = { decision, facts };
     }
     const decisions = await decisionsOf(postId);
@@ -229,6 +229,14 @@ export async function reprocessPost(postId, { ctx, reextract = false } = {}) {
     const post = await prisma.sourcePost.findUnique({ where: { id: postId }, select: { id: true } });
     if (!post) return { postId, outcome: 'NOT_FOUND' };
 
+    // A re-read comes FIRST, before anything is removed: if the new reading is not accepted (failed, uncertain, a picture missing) the
+    // previously accepted reading, and the outage built from it, are left exactly as they were.
+    let reading = null;
+    if (reextract) {
+      reading = await extractPost(postId, { force: true, signal: held?.signal });
+      if (reading.keptAfterFailure) return { postId, outcome: 'KEPT_EXISTING', reprocessed: false, reason: reading.rejectedReason };
+    }
+
     // Evidence counted before contributions were recorded is adopted first, so taking it back below is exact.
     await adoptLegacyEvidence(postId, held);
 
@@ -245,7 +253,10 @@ export async function reprocessPost(postId, { ctx, reextract = false } = {}) {
       return results;
     });
     await removeContributions(postId, null, { ctx: held });
-    const res = await processLocked(postId, held, { force: reextract });
+    // The outages this post was in are its REPAIR candidates: taking the post out can move an outage's start to a later post, and the
+    // temporal rule (an outage cannot be about a post published before it opened) would then wrongly exclude the very outage it belonged to.
+    const repairOutageIds = Object.entries(touched).filter(([, v]) => v !== 'deleted').map(([id]) => id);
+    const res = await processLocked(postId, held, { force: false, repairOutageIds, reading });
     return { ...res, reprocessed: true, outagesRecomputed: Object.keys(touched).length, outagesDeleted: Object.values(touched).filter((v) => v === 'deleted').length };
   });
   return outcome.acquired ? outcome.value : { postId, outcome: 'BUSY' };

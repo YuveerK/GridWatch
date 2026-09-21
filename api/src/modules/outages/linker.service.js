@@ -68,16 +68,22 @@ async function suburbsNamedLikeStations(keys) {
   return out;
 }
 
-async function loadCandidates(post) {
+async function loadCandidates(post, repairOutageIds = []) {
   const since = new Date(post.postedAt.getTime() - env.OUTAGE_WINDOW_HOURS * HOUR);
   const revivalSince = new Date(post.postedAt.getTime() - env.STALE_REVIVAL_HOURS * HOUR);
   const outages = await prisma.outage.findMany({
     where: {
-      status: { not: 'CLOSED' },
-      // an outage that opened after this post was published cannot be what the post is about (late or historical posts)
-      startedAt: { lte: post.postedAt },
-      // planned work (reminders days ahead, multi-day isolations) stays linkable much longer than a fault
-      OR: [{ kind: 'UNPLANNED', lastUpdateAt: { gte: since } }, { kind: 'UNPLANNED', status: 'STALE', lastUpdateAt: { gte: revivalSince } }, { kind: 'PLANNED', lastUpdateAt: { gte: new Date(post.postedAt.getTime() - PLANNED_WINDOW_HOURS * HOUR) } }, { kind: 'PLANNED', scheduledEnd: { gte: post.postedAt } }],
+      OR: [
+        {
+          status: { not: 'CLOSED' },
+          // an outage that opened after this post was published cannot be what the post is about (late or historical posts)
+          startedAt: { lte: post.postedAt },
+          // planned work (reminders days ahead, multi-day isolations) stays linkable much longer than a fault
+          OR: [{ kind: 'UNPLANNED', lastUpdateAt: { gte: since } }, { kind: 'UNPLANNED', status: 'STALE', lastUpdateAt: { gte: revivalSince } }, { kind: 'PLANNED', lastUpdateAt: { gte: new Date(post.postedAt.getTime() - PLANNED_WINDOW_HOURS * HOUR) } }, { kind: 'PLANNED', scheduledEnd: { gte: post.postedAt } }],
+        },
+        // the outage(s) this very post was in before it was taken out to be re-linked (still scored like any other candidate)
+        ...(repairOutageIds.length ? [{ id: { in: repairOutageIds } }] : []),
+      ],
     },
     orderBy: [{ startedAt: 'asc' }, { title: 'asc' }],
     include: {
@@ -314,7 +320,7 @@ export async function recordDecision(ctx, post, data) {
  * Link (or open) an outage for one extracted post. Idempotent per post and fault.
  * `ctx` is the held pipeline lease (from exclusive/withLease); every commit re-checks it.
  */
-export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx }) {
+export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx, repairOutageIds = [] }) {
   const existing = await prisma.linkDecision.findUnique({ where: { postId_faultIndex: { postId: postRow.id, faultIndex } } });
   if (existing) return existing;
 
@@ -348,7 +354,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
 
   if (!LINKABLE.has(extraction.relevance)) return decide({ outcome: 'NEW', reason: `not linkable (${extraction.relevance})` });
 
-  const candidates = (await loadCandidates(post))
+  const candidates = (await loadCandidates(post, repairOutageIds))
     .filter((c) => !facts.fromDigest || !linkedToPost(c, post.id))
     .map((c) => applyRevivalRule({ ...c, ...scoreCandidate(post, c) }, post, { windowHours: env.OUTAGE_WINDOW_HOURS, highScore: env.LINK_HIGH_SCORE }))
     .sort((a, b) => b.score - a.score || String(a.stableId).localeCompare(String(b.stableId)));

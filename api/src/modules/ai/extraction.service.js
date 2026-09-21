@@ -141,10 +141,12 @@ export async function extractPost(postId, { force = false, signal } = {}) {
     durationMs: Date.now() - started,
     error: error ?? (failed ? `${failed} image(s) could not be fetched (${imageFailures.join(', ')})` : null),
   };
-  // A forced re-read that fails must not replace a good reading with a failure.
-  if (!result && existing?.status === 'SUCCEEDED') {
-    logger.warn({ postId, error }, 're-read failed; keeping the existing successful reading');
-    return Object.assign(existing, { keptAfterFailure: true });
+  // A forced re-read that fails, or that comes back uncertain (low confidence, a picture that would not download), must not replace a
+  // reading that was accepted: the outage it built stays as it was, and the rejected attempt is logged and reported to the caller.
+  if ((!result || needsReview) && existing?.status === 'SUCCEEDED') {
+    const reason = !result ? `the re-read failed (${error})` : failed > 0 ? `${failed} image(s) could not be fetched` : `low confidence (${result.confidence})`;
+    logger.warn({ postId, reason }, 're-read not accepted; keeping the existing successful reading');
+    return Object.assign(existing, { keptAfterFailure: true, rejectedReason: reason });
   }
   // The reading and its summaries are one unit: written together, and summaries the new reading no longer has are removed
   // (two faults shrinking to one must not leave a stale second summary).

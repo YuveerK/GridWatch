@@ -511,3 +511,73 @@ describe('a post held back because its picture would not download', () => {
     expect(await retryImageFailures({ now: at(10) })).toEqual({ tried: 0, fixed: 0 }); // done: nothing left to retry
   });
 });
+
+describe('E02: re-processing a post puts it back where it was', () => {
+  const membership = async () => (await outages()).map((o) => o.posts.map((p) => p.postId).sort()).sort();
+  const three = async () => {
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    const b = await addPost(1, 'Alpha crew on site', reading('UPDATE', 'CREW_ON_SITE', ['Alpha']));
+    const c = await addPost(90, 'Alpha repairs continue', reading('UPDATE', 'REPAIRING', ['Alpha']));
+    await processPending();
+    return { a, b, c };
+  };
+  it('the opening post, when a second post came a minute after it, joins the same outage (it used to open a second one)', async () => {
+    const { a } = await three();
+    const before = await membership();
+    expect(before).toHaveLength(1);
+    await reprocessPost(a);
+    expect(await membership()).toEqual(before);
+  });
+  it('the same for a middle post, the latest post, and doing it twice', async () => {
+    const { b, c } = await three();
+    const before = await membership();
+    await reprocessPost(b);
+    expect(await membership()).toEqual(before);
+    await reprocessPost(c);
+    await reprocessPost(c);
+    expect(await membership()).toEqual(before);
+  });
+  it('a post that really belonged to nothing before is not forced into an outage by the repair rule', async () => {
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    const z = await addPost(2, 'Power out at Zulu', reading('OUTAGE', 'INVESTIGATING', ['Zulu']));
+    await processPending();
+    await reprocessPost(a);
+    expect(await outages()).toHaveLength(2);
+    expect(z).toBeTruthy();
+  });
+  it('a post published before an unrelated outage opened still cannot join it (the temporal rule stays)', async () => {
+    const early = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    await addPost(200, 'Power out at Beta', reading('OUTAGE', 'INVESTIGATING', ['Beta']));
+    await processPending();
+    await reprocessPost(early);
+    const all = await outages();
+    expect(all).toHaveLength(2);
+    expect(all.every((o) => o.posts.length === 1)).toBe(true);
+  });
+});
+
+describe('E03: a re-read that is not accepted leaves the published outage alone', () => {
+  it('the outage, its timeline and the post status stay as they were', async () => {
+    const id = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    await processPending();
+    const before = await outages();
+    expect(before).toHaveLength(1);
+    readings.set(id, { ...reading('OUTAGE', 'INVESTIGATING', ['Alpha']), status: 'NEEDS_REVIEW', keptAfterFailure: true, rejectedReason: 'low confidence (0.2)' });
+    const r = await reprocessPost(id, { reextract: true });
+    expect(r).toMatchObject({ outcome: 'KEPT_EXISTING', reprocessed: false });
+    const after = await outages();
+    expect(after).toHaveLength(1);
+    expect(after[0].id).toBe(before[0].id);
+    expect((await prisma.sourcePost.findUnique({ where: { id } })).processingStatus).toBe('RELEVANT');
+    expect(await prisma.linkDecision.count({ where: { postId: id } })).toBe(1);
+  });
+  it('an accepted re-read still replaces the old one', async () => {
+    const id = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    await processPending();
+    readings.set(id, reading('OUTAGE', 'INVESTIGATING', ['Beta']));
+    await reprocessPost(id, { reextract: true });
+    const all = await outages();
+    expect(all).toHaveLength(1);
+    expect((await prisma.outageNode.findMany({ where: { outageId: all[0].id }, include: { node: true } })).map((n) => n.node.name)).toEqual(['Beta']);
+  });
+});
