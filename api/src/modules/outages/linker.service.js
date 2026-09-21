@@ -51,6 +51,21 @@ const originOf = (o) => {
   return first ? `${first.postId}#${first.faultIndex}` : o.id;
 };
 
+/**
+ * A station is often named after the suburb it serves (Halfway House, Selby, Klipfontein). For scoring only, a station named exactly like a
+ * known suburb counts as covering that suburb, so an outage that named the suburb and a post that named the station can find each other.
+ * Used only for a side that names NO suburb at all: where suburbs are named, they are better evidence than a guess from a name.
+ * Returns Map(node key -> [locality ids]).
+ */
+async function suburbsNamedLikeStations(keys) {
+  const wanted = [...new Set(keys.filter((k) => k && k.length >= 4))];
+  if (!wanted.length) return new Map();
+  const rows = await prisma.locality.findMany({ where: { normalizedName: { in: wanted }, active: true }, select: { id: true, normalizedName: true } });
+  const out = new Map();
+  for (const r of rows) out.set(r.normalizedName, [...(out.get(r.normalizedName) ?? []), r.id]);
+  return out;
+}
+
 async function loadCandidates(post) {
   const since = new Date(post.postedAt.getTime() - env.OUTAGE_WINDOW_HOURS * HOUR);
   const revivalSince = new Date(post.postedAt.getTime() - env.STALE_REVIVAL_HOURS * HOUR);
@@ -64,11 +79,12 @@ async function loadCandidates(post) {
     },
     orderBy: [{ startedAt: 'asc' }, { title: 'asc' }],
     include: {
-      nodes: { include: { node: { select: { name: true, type: true } } } },
+      nodes: { include: { node: { select: { name: true, type: true, normalizedKey: true } } } },
       localities: { include: { locality: { select: { canonicalName: true } } } },
       posts: { orderBy: { postedAt: 'asc' }, include: { post: { select: { conversationId: true, externalId: true, text: true, noteTweetText: true } } } },
     },
   });
+  const named = await suburbsNamedLikeStations(outages.flatMap((o) => o.nodes.map((n) => n.node.normalizedKey)));
   return outages.map((o) => ({
     raw: o,
     id: o.id,
@@ -79,7 +95,7 @@ async function loadCandidates(post) {
     sdcName: o.sdcName,
     nodeIds: new Set(o.nodes.map((n) => n.nodeId)),
     digest: o.digest,
-    localityIds: new Set(o.localities.map((l) => l.localityId)),
+    localityIds: new Set([...o.localities.map((l) => l.localityId), ...(o.localities.length ? [] : o.nodes.flatMap((n) => named.get(n.node.normalizedKey) ?? []))]),
     // links made by the post being placed (an earlier fault of the same graphic) are not thread evidence for it
     conversationIds: new Set(o.posts.filter((p) => p.postId !== post.id).flatMap((p) => [p.post.conversationId, p.post.externalId]).filter(Boolean)),
     lastUpdateAt: o.lastUpdateAt,
@@ -319,6 +335,9 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     schedule: postKind === 'PLANNED' ? scheduleFor(extraction, postRow, facts) : null, // an unplanned fault has no announced window
   };
   post.relatedNodeIds = await relatedNodeIds(post.nodeIds);
+  const namedLikeNodes = await suburbsNamedLikeStations(facts.nodes.map((n) => n.normalizedKey));
+  // only when the post names no suburb at all (otherwise the suburbs it does name are better evidence); for scoring only, what is stored is unchanged
+  if (!facts.localityIds.length) for (const n of facts.nodes) for (const id of namedLikeNodes.get(n.normalizedKey) ?? []) post.localityIds.add(id);
 
   const decide = (data) => recordDecision(ctx, post, data);
 
