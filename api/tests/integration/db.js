@@ -7,7 +7,7 @@ export function assertDisposable() {
   return name;
 }
 
-const TABLES = ['LinkDecision', 'OutagePost', 'OutageLocality', 'OutageNode', 'Outage', 'NodeLocality', 'InfraEdge', 'NodeAlias', 'InfraNode', 'PostSummary', 'PostExtraction', 'PostMedia', 'IngestionRunPost', 'IngestionRun', 'SourcePost', 'SourceAccount', 'IngestionLease', 'IngestionState', 'EvidenceContribution', 'WorkLease', 'Locality'];
+const TABLES = ['LinkDecision', 'OutagePost', 'OutageLocality', 'OutageNode', 'Outage', 'NodeLocality', 'InfraEdge', 'NodeAlias', 'InfraNode', 'PostSummary', 'PostExtraction', 'PostMedia', 'IngestionRunPost', 'IngestionRun', 'SourcePost', 'SourceAccount', 'IngestionLease', 'IngestionState', 'EvidenceContribution', 'WorkLease', 'NotificationEvent', 'PushSubscription', 'PushDevice', 'Locality'];
 
 export async function resetDb() {
   assertDisposable();

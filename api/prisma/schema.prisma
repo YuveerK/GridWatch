@@ -65,6 +65,7 @@ model SourcePost {
   extractions      PostExtraction[]
   outagePosts      OutagePost[]
   linkDecisions    LinkDecision[]
+  notifications    NotificationEvent[]
   overrides        LinkOverride[]         @relation("OverridePost")
   anchoredBy       LinkOverride[]         @relation("OverrideAnchor")
   summaries        PostSummary[]
@@ -148,7 +149,7 @@ model Region {
 }
 
 model Locality {
-  id             String           @id
+  id             String             @id
   canonicalName  String
   normalizedName String
   regionId       String?
@@ -157,13 +158,14 @@ model Locality {
   lat            Float?
   lon            Float?
   geoSource      String?
-  active         Boolean          @default(true)
-  createdAt      DateTime         @default(now())
+  active         Boolean            @default(true)
+  createdAt      DateTime           @default(now())
   updatedAt      DateTime
-  Region         Region?          @relation(fields: [regionId], references: [id])
+  Region         Region?            @relation(fields: [regionId], references: [id])
   LocalityAlias  LocalityAlias[]
   nodes          NodeLocality[]
   outages        OutageLocality[]
+  pushFollowers  PushSubscription[]
 
   @@unique([regionId, normalizedName])
   @@index([normalizedName])
@@ -479,4 +481,45 @@ model LinkOverride {
   anchor           SourcePost? @relation("OverrideAnchor", fields: [anchorPostId], references: [id], onDelete: Cascade)
 
   @@id([postId, faultIndex])
+}
+
+/// A phone that wants push notifications (an Expo push token) and the suburbs it follows.
+model PushDevice {
+  id            String             @id @default(cuid())
+  token         String             @unique
+  platform      String?
+  /// quiet hours in Johannesburg time (0-23); nothing is sent to this phone between them
+  quietFrom     Int?
+  quietTo       Int?
+  createdAt     DateTime           @default(now())
+  lastSeenAt    DateTime           @default(now())
+  disabledAt    DateTime?
+  subscriptions PushSubscription[]
+}
+
+model PushSubscription {
+  deviceId   String
+  localityId String
+  createdAt  DateTime   @default(now())
+  device     PushDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  locality   Locality   @relation(fields: [localityId], references: [id], onDelete: Cascade)
+
+  @@id([deviceId, localityId])
+  @@index([localityId])
+}
+
+/// Every outage change already judged for notifications (sent or not), one row per post fault: a change is announced at most once.
+model NotificationEvent {
+  postId     String
+  faultIndex Int        @default(0)
+  outageId   String?
+  kind       String
+  decision   String
+  reason     String?
+  recipients Int        @default(0)
+  createdAt  DateTime   @default(now())
+  post       SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([postId, faultIndex])
+  @@index([outageId, createdAt])
 }

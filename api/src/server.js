@@ -6,6 +6,7 @@ import { createScheduler } from './lib/scheduler.js';
 import { sweepStaleOutages } from './modules/outages/linker.service.js';
 import { cycle } from './modules/processing/cycle.js';
 import { scheduleState } from './modules/processing/schedule-state.js';
+import { runNotifications } from './modules/push/notify.service.js';
 
 const server = createApp().listen(env.PORT, () => logger.info(`GridWatch API listening on :${env.PORT}`));
 
@@ -29,6 +30,17 @@ async function tick() {
 }
 const fetchSchedule = createScheduler({ intervalMs: env.X_POLL_INTERVAL_MINUTES * 60_000, tick, onError: (err) => logger.error({ err: err.message }, 'scheduled tick failed') });
 if (!schedulerOff) fetchSchedule.start();
+
+// Tell phones about outage changes. Reads the database only, so it can run every minute without touching X or the AI.
+const notifySchedule = createScheduler({
+  intervalMs: 60_000,
+  tick: async () => {
+    const r = await runNotifications();
+    if (r.judged) logger.info(r, 'notifications');
+  },
+  onError: (err) => logger.error({ err: err.message }, 'notifications failed'),
+});
+if (!schedulerOff && env.PUSH_ENABLED === 'on') notifySchedule.start();
 scheduleState.enabled = !schedulerOff;
 scheduleState.intervalMs = env.X_POLL_INTERVAL_MINUTES * 60_000;
 scheduleState.nextRunAt = () => fetchSchedule.nextAt;
@@ -43,7 +55,7 @@ async function shutdown(signal) {
   const force = setTimeout(() => process.exit(1), 30_000);
   force.unref();
   try {
-    await Promise.all([fetchSchedule.stop(), sweepSchedule.stop(), new Promise((resolve) => server.close(resolve)), cycle.whenIdle()]);
+    await Promise.all([fetchSchedule.stop(), sweepSchedule.stop(), notifySchedule.stop(), new Promise((resolve) => server.close(resolve)), cycle.whenIdle()]);
     await prisma.$disconnect();
   } finally {
     process.exit(0);

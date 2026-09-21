@@ -56,6 +56,10 @@ export const schema = z
     REFRESH_TOKEN: z.string().min(16).optional(), // deprecated name for OPERATOR_TOKEN
     OPERATOR_SESSION_HOURS: int(1, 168).default(12),
     ALLOW_LOCAL_OPERATOR: flag.default('off'), // explicit local-development escape hatch; ignored in production
+    // Push notifications to phones (Expo). PUSH_DRY_RUN=on logs what would be sent instead of sending it.
+    PUSH_ENABLED: flag.default('on'),
+    PUSH_DRY_RUN: flag.default('off'),
+    EXPO_ACCESS_TOKEN: z.string().min(1).optional(),
     CORS_ALLOWED_ORIGINS: origins,
     MEDIA_MAX_BYTES: int(1024, 50 * 1024 * 1024).default(10 * 1024 * 1024),
     LINK_HIGH_SCORE: z.coerce.number().min(0).max(1).default(0.7),

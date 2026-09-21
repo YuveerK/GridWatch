@@ -3,6 +3,7 @@ import pinoHttp from 'pino-http';
 import { logger } from './lib/logger.js';
 import { allowedOrigins } from './modules/api/operator-auth.js';
 import { router } from './modules/api/routes.js';
+import { pushRouter } from './modules/push/push.routes.js';
 
 export function createApp() {
   const app = express();
@@ -34,6 +35,7 @@ export function createApp() {
     next();
   });
   app.use(express.json({ limit: '4kb' })); // the only bodies are tiny (sign-in, options)
+  app.use(pushRouter);
   app.use(router);
   app.use((_req, res) => res.status(404).json({ error: 'not_found' }));
   // eslint-disable-next-line no-unused-vars
