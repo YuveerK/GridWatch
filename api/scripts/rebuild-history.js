@@ -12,6 +12,8 @@ const { fileURLToPath } = await import('node:url');
 const { prisma } = await import('../src/db/prisma.js');
 const { processPending, resetLearnedState } = await import('../src/modules/processing/processor.service.js');
 const { aiUsage } = await import('../src/modules/ai/gemini.client.js');
+const { PIPELINE, withLease } = await import('../src/modules/coordination/lease.js');
+const { sweepStaleOutages } = await import('../src/modules/outages/linker.service.js');
 
 const confirm = process.argv.includes('--confirm');
 const count = async () => ({
@@ -30,6 +32,11 @@ if (!confirm) {
   process.exit(0);
 }
 
+// The whole rebuild holds the pipeline lease from the first backup to the last check: a running server's scheduled fetch waits, so nothing
+// (possibly running older rules) can process posts into a half-rebuilt database.
+const held = await withLease(
+  PIPELINE,
+  async (ctx) => {
 // 1. backup
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'backups');
 fs.mkdirSync(dir, { recursive: true });
@@ -54,23 +61,10 @@ console.log(`Backup written: ${file}`);
 // 2. remember where learned suburbs were placed on the map
 const positions = new Map(backup.learnedSuburbs.filter((l) => l.lat != null).map((l) => [l.normalizedName, { lat: l.lat, lon: l.lon, geoSource: l.geoSource }]));
 
-// 3. rebuild (the scheduler may hold the pipeline lease for a moment during a fetch)
-for (let i = 0; ; i++) {
-  try {
-    await resetLearnedState();
-    break;
-  } catch (err) {
-    if (i >= 8 || !/lease/.test(err.message)) throw err;
-    await new Promise((r) => setTimeout(r, 15_000));
-  }
-}
+// 3. rebuild
+await resetLearnedState({ ctx });
 console.log('Cleared. Rebuilding from stored readings...');
-let result;
-for (let i = 0; i < 8; i++) {
-  result = await processPending();
-  if (!result.skipped) break;
-  await new Promise((r) => setTimeout(r, 15_000));
-}
+const result = await processPending({ ctx });
 console.log('Processed:', result);
 
 // 4. put the map positions back
@@ -81,8 +75,12 @@ for (const [normalizedName, pos] of positions) {
 }
 console.log(`Map positions restored for ${restored} learned suburbs.`);
 // a rebuild recreates every outage as live: the housekeeping sweep marks the old ones stale/closed, as it does every hour
-const { sweepStaleOutages } = await import('../src/modules/outages/linker.service.js');
-console.log('Sweep:', await sweepStaleOutages());
+console.log('Sweep:', await sweepStaleOutages(new Date(), { ctx }));
 console.log('AI calls (tie-breaks only):', aiUsage);
 console.log('After:', await count());
+  },
+  { ttlMs: 120_000 },
+);
+if (!held.acquired) console.error('Another worker holds the pipeline lease (a fetch or refresh is running). Nothing was changed. Try again in a minute.');
 await prisma.$disconnect();
+process.exit(held.acquired ? 0 : 1);
