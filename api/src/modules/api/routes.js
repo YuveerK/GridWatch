@@ -401,7 +401,7 @@ router.get('/v1/map', wrap(async (_req, res) => {
   });
 }));
 
-/** Every substation, switching station and distributor with a known area, at its inferred position. */
+/** Service centres and equipment with mapped suburbs, at inferred positions. */
 router.get('/v1/map/infrastructure', wrap(async (_req, res) => {
   res.json({ data: await equipmentHubs() });
 }));
@@ -426,7 +426,7 @@ router.get('/v1/map/node/:id', wrap(async (req, res) => {
     byLoc.set(r.localityId, cur);
   }
   const all = [...byLoc.values()].sort((a, b) => b.evidence - a.evidence);
-  const placedRows = all.filter((l) => l.lat != null).slice(0, 120);
+  const placedRows = all.filter((l) => l.lat != null && l.lon != null);
   // Per suburb, not per outage: a suburb is "out" while ANY live outage (this equipment's or another's) still lists it as
   // not restored; it is "restored" when live outages mention it but all say it is back; otherwise nothing is reported.
   const states = await localityStates(placedRows.map((l) => l.id));
@@ -438,7 +438,7 @@ router.get('/v1/map/node/:id', wrap(async (req, res) => {
     origin: flow.origin,
     children: flow.children.map((c) => ({ id: c.id, name: c.name, type: c.type, lon: c.lon, lat: c.lat, live: c.live, served: c.served, near: c.near })),
     edges: flow.edges,
-    unplaced: all.filter((l) => l.lat == null).length,
+    unplaced: all.filter((l) => l.lat == null || l.lon == null).length,
     total: all.length,
   });
 }));

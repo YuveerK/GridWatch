@@ -68,3 +68,27 @@ describe('a date range (Klipfontein: 22 and 23 September)', () => {
     expect(parseSchedule('planned for 31 and 32 September 2026', ref)?.endDate).toBeUndefined();
   });
 });
+
+describe('a weekly schedule graphic: each item takes its own day', () => {
+  const image = 'City Power Weekly Maintenance Schedule for 21 September - 27 September 2026 The following maintenance interruptions is scheduled: Tuesday, 22 September • Randburg SDC - Beyers Substation from 09h00 until 17h00 affecting both BP Garages (North and South) along N1 Tuesday and Wednesday, 22 and 23 September 2026 • Midrand SDC - Klipfontein Substation from 09h00 until 17h00 affecting Klipfontein Wednesday, 23 September 2026 • Reuven SDC - Heriotdale Substation from 08h00 until 16h00 affecting Heriotdale • Lenasia SDC - Nancefield Substation from 09h00 until 17h00 affecting Johannesburg water Saturday, 26 September 2026 • Hursthill SDC - Mayfair Substation from 09h30 until 17h00 affecting Mayfair Sunday, 27 September 2026 • Alexandra SDC - Sebenza Substation from 09h00 until 17h00 affecting Greenstone Hill';
+  const item = (name, eta) => ({ result: { image_text: image, eta_text: eta, entities: [{ type: 'SDC', name: 'Some SDC' }, { type: 'SUBSTATION', name }] } });
+  const win = (name, eta) => scheduleWindow(item(name, eta), '', new Date('2026-09-21T06:00:00Z'));
+
+  it('one day, a two-day range, and the last day of the week', () => {
+    expect(win('Beyers', 'from 09h00 until 17h00')).toEqual({ start: '2026-09-22T07:00:00.000Z', end: '2026-09-22T15:00:00.000Z' });
+    expect(win('Klipfontein', 'from 09h00 until 17h00')).toEqual({ start: '2026-09-22T07:00:00.000Z', end: '2026-09-23T15:00:00.000Z' });
+    expect(win('Sebenza', 'from 09h00 until 17h00')).toEqual({ start: '2026-09-27T07:00:00.000Z', end: '2026-09-27T15:00:00.000Z' });
+  });
+  it('items under the same heading share its day, each with its own hours', () => {
+    expect(win('Heriotdale', 'from 08h00 until 16h00')).toEqual({ start: '2026-09-23T06:00:00.000Z', end: '2026-09-23T14:00:00.000Z' });
+    expect(win('Nancefield', 'from 09h00 until 17h00')).toEqual({ start: '2026-09-23T07:00:00.000Z', end: '2026-09-23T15:00:00.000Z' });
+    expect(win('Mayfair', 'from 09h30 until 17h00')).toEqual({ start: '2026-09-26T07:30:00.000Z', end: '2026-09-26T15:00:00.000Z' });
+  });
+  it('takes the hours from the graphic when the item has none of its own', () => {
+    expect(win('Heriotdale', null)).toEqual({ start: '2026-09-23T06:00:00.000Z', end: '2026-09-23T14:00:00.000Z' });
+  });
+  it('an item that is not in the graphic falls back to the old rule; post text is never overridden', () => {
+    expect(win('Unknown Place', null).start.slice(0, 10)).toBe('2026-09-27'); // the last date in the graphic, as before
+    expect(scheduleWindow({ result: { image_text: image, entities: [{ type: 'SUBSTATION', name: 'Beyers' }] } }, 'On Monday, 28 September 2026 from 10:00-12:00', new Date('2026-09-21T06:00:00Z')).start).toBe('2026-09-28T08:00:00.000Z');
+  });
+});

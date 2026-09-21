@@ -49,6 +49,33 @@ beforeEach(async () => {
 const call = (path, { method = 'GET', headers = {}, body } = {}) =>
   fetch(base + path, { method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...headers }, body: body ? JSON.stringify(body) : undefined });
 
+describe('map service centre coverage', () => {
+  it('exposes centres through downstream equipment and returns all mapped suburbs', async () => {
+    const now = new Date();
+    await prisma.infraNode.createMany({ data: [
+      { id: 'coverage-sdc', type: 'SDC', name: 'Coverage centre', normalizedKey: 'coverage centre', firstSeenAt: now, lastSeenAt: now },
+      { id: 'coverage-sub', type: 'SUBSTATION', name: 'Coverage substation', normalizedKey: 'coverage substation', firstSeenAt: now, lastSeenAt: now },
+    ] });
+    await prisma.infraEdge.create({ data: { parentId: 'coverage-sdc', childId: 'coverage-sub', lastSeenAt: now } });
+    await prisma.locality.createMany({ data: Array.from({ length: 126 }, (_, i) => ({
+      id: `coverage-${i}`, canonicalName: `Area ${i}`, normalizedName: `area ${i}`, lat: -26 + i * 0.0001, lon: i === 125 ? null : 28, updatedAt: now,
+    })) });
+    await prisma.nodeLocality.createMany({ data: Array.from({ length: 126 }, (_, i) => ({ nodeId: 'coverage-sub', localityId: `coverage-${i}`, lastSeenAt: now })) });
+    const hubsResponse = await call('/v1/map/infrastructure');
+    expect(hubsResponse.status).toBe(200);
+    const hubs = (await hubsResponse.json()).data;
+    expect(hubs.find((h) => h.id === 'coverage-sdc')).toMatchObject({ type: 'SDC', served: 125, lon: 28 });
+    const detailResponse = await call('/v1/map/node/coverage-sdc');
+    expect(detailResponse.status).toBe(200);
+    const detail = await detailResponse.json();
+    expect(detail.total).toBe(126);
+    expect(detail.unplaced).toBe(1);
+    expect(detail.places).toHaveLength(125);
+    expect(detail.children.map((c) => c.id)).toContain('coverage-sub');
+    expect(detail.places.every((p) => Number.isFinite(p.lon) && Number.isFinite(p.lat))).toBe(true);
+  });
+});
+
 describe('A01: operator routes fail closed', () => {
   it('refuses admin and refresh calls with no credentials, and does nothing', async () => {
     for (const [method, path] of [['POST', '/admin/ingest'], ['POST', '/admin/process'], ['POST', '/admin/reprocess/x'], ['GET', '/admin/review-queue'], ['POST', '/v1/refresh']]) {

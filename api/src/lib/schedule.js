@@ -53,11 +53,34 @@ export function parseTimes(text) {
   return { from: `${pad(t[1])}:${t[2]}`, to: `${pad(t[3])}:${t[4]}` };
 }
 
+/**
+ * One item inside a weekly-schedule graphic ("Tuesday, 22 September • Beyers … Wednesday, 23 September • Heriotdale …"): its day is the
+ * nearest date heading ABOVE its own line, not the last date anywhere in the graphic. `names` are the item's equipment names.
+ * Returns a schedule like parseSchedule's, or null when the item cannot be found or nothing dated comes before it.
+ */
+export function anchoredSchedule(imageText, names, etaText, refDate = new Date()) {
+  if (!imageText) return null;
+  const escape = (n) => n.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  let at = -1;
+  for (const n of names.filter((x) => x && x.trim().length >= 3)) {
+    const m = new RegExp(`\\b${escape(n)}\\b`, 'i').exec(imageText);
+    if (m && (at < 0 || m.index < at)) at = m.index;
+  }
+  if (at < 0) return null;
+  const sch = parseSchedule(imageText.slice(0, at), refDate);
+  if (!sch) return null;
+  const times = parseTimes(etaText) ?? parseTimes(imageText.slice(at, at + 260));
+  return { ...sch, from: times?.from ?? null, to: times?.to ?? null };
+}
+
 export function scheduleWindow(extraction, text, refDate = new Date()) {
   const r = extraction?.result ?? {};
   const sources = [text, extraction?.imageText, r.image_text, r.update_summary, r.eta_text];
-  for (const s of sources) {
-    let sch = parseSchedule(s, refDate);
+  // an item read out of a graphic (no post text of its own): its own day comes from where it sits in the graphic
+  const own = !text && r.image_text ? anchoredSchedule(r.image_text, (r.entities ?? []).filter((e) => e.type !== 'SDC').map((e) => e.name), r.eta_text, refDate) : null;
+  const candidates = [own, ...sources.map((s) => parseSchedule(s, refDate))];
+  for (const found of candidates) {
+    let sch = found;
     if (!sch) continue;
     // the date is in the post text but the hours are often only in the graphic or the estimate: take them from wherever they are
     if (!sch.from) {

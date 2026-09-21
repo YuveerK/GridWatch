@@ -4,7 +4,7 @@ import { prisma } from '../../db/prisma.js';
 // drawn at the centre of the suburbs it is known to serve (weighted by how often posts tied them together).
 // That is an inference, and the map says so. The connections (which suburbs it feeds) are real, learned from City Power's own posts.
 
-const HUB_TYPES = ['SUBSTATION', 'SWITCHING_STATION', 'DISTRIBUTOR'];
+const HUB_TYPES = ['SDC', 'SUBSTATION', 'SWITCHING_STATION', 'DISTRIBUTOR'];
 const LIVE = ['ACTIVE', 'PARTIALLY_RESTORED'];
 
 /** Evidence-weighted centre of some suburbs: [{ lat, lon, w }] -> [lon, lat] or null. */
@@ -27,10 +27,29 @@ export function withoutOutliers(places, origin) {
   return places.filter((p) => km([p.lon, p.lat], origin) <= limit);
 }
 
-/** Every substation, switching station and distributor that has at least one placed suburb. */
+/** Include downstream suburbs for service centres, deduplicated and safe against graph cycles. */
+export function serviceCentrePlaces(rootId, byNode, edges) {
+  const ids = new Set([rootId]);
+  let frontier = [rootId];
+  for (let depth = 0; depth < 4 && frontier.length; depth++) {
+    const parents = new Set(frontier);
+    frontier = edges.filter((e) => parents.has(e.parentId) && !ids.has(e.childId)).map((e) => e.childId);
+    frontier.forEach((id) => ids.add(id));
+  }
+  const places = new Map();
+  for (const id of ids) {
+    for (const point of byNode.get(id)?.pts ?? []) {
+      const current = places.get(point.id);
+      places.set(point.id, { ...point, w: (current?.w ?? 0) + point.w });
+    }
+  }
+  return [...places.values()];
+}
+
+/** Facilities with mapped suburbs; service centres also inherit their downstream suburbs. */
 export async function equipmentHubs() {
   const rows = await prisma.nodeLocality.findMany({
-    where: { locality: { lat: { not: null } }, node: { type: { in: HUB_TYPES } } },
+    where: { locality: { lat: { not: null }, lon: { not: null } } },
     select: { nodeId: true, evidenceCount: true, locality: { select: { id: true, lat: true, lon: true } }, node: { select: { id: true, name: true, type: true } } },
   });
   const byNode = new Map();
@@ -39,15 +58,23 @@ export async function equipmentHubs() {
     cur.pts.push({ id: r.locality.id, lat: r.locality.lat, lon: r.locality.lon, w: r.evidenceCount || 1 });
     byNode.set(r.nodeId, cur);
   }
-  const ids = [...byNode.keys()];
-  const [liveRows, parents] = await Promise.all([
-    prisma.outageNode.findMany({ where: { nodeId: { in: ids }, outage: { status: { in: LIVE } } }, select: { nodeId: true } }),
-    prisma.infraEdge.findMany({ where: { childId: { in: ids } }, orderBy: { evidenceCount: 'desc' }, select: { childId: true, parentId: true } }),
+  const [liveRows, parents, centres, sdcOutages] = await Promise.all([
+    prisma.outageNode.findMany({ where: { nodeId: { in: [...byNode.keys()] }, outage: { status: { in: LIVE } } }, select: { nodeId: true } }),
+    prisma.infraEdge.findMany({ orderBy: { evidenceCount: 'desc' }, select: { childId: true, parentId: true } }),
+    prisma.infraNode.findMany({ where: { type: 'SDC' }, select: { id: true, name: true, type: true } }),
+    prisma.outage.findMany({ where: { status: { in: LIVE }, sdcName: { not: null } }, select: { sdcName: true }, distinct: ['sdcName'] }),
   ]);
   const live = new Set(liveRows.map((r) => r.nodeId));
+  const liveSdcs = new Set(sdcOutages.map((r) => r.sdcName));
+  const centreHubs = centres.map((node) => ({ node, pts: serviceCentrePlaces(node.id, byNode, parents) }));
+  for (const hub of centreHubs) {
+    byNode.set(hub.node.id, hub);
+    if (liveSdcs.has(hub.node.name)) live.add(hub.node.id);
+  }
   const parentOf = new Map();
   for (const e of parents) if (!parentOf.has(e.childId)) parentOf.set(e.childId, e.parentId);
   return [...byNode.values()]
+    .filter(({ node }) => HUB_TYPES.includes(node.type))
     .map(({ node, pts }) => {
       const c = weightedCentre(pts);
       return c && { id: node.id, name: node.name, type: node.type, lon: c[0], lat: c[1], served: pts.length, live: live.has(node.id), parentId: parentOf.get(node.id) ?? null };
