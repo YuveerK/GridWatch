@@ -447,11 +447,23 @@ describe('a station named after a suburb', () => {
     expect(tieBreaks.calls).toBe(1); // judged by the tie-break, not linked automatically
   });
 
-  it('a station named after a suburb does not attach itself to an outage that has its own, different equipment there', async () => {
+  it('a station named after a suburb is never linked automatically to an outage that has its own, different equipment there: only the tie-break may join them', async () => {
     await addPost(0, 'Central substation fault', reading('OUTAGE', 'INVESTIGATING', ['Central'], { localities: [{ name: 'Halfway House', state: 'AFFECTED' }] }));
-    await addPost(150, 'Halfway House substation fault', reading('OUTAGE', 'INVESTIGATING', ['Halfway House']));
+    const b = await addPost(150, 'Halfway House substation fault', reading('OUTAGE', 'INVESTIGATING', ['Halfway House']));
     await processPending();
-    expect(await outages()).toHaveLength(2);
-    expect(tieBreaks.calls).toBe(0);
+    expect(tieBreaks.calls).toBe(1);
+    expect((await prisma.linkDecision.findFirst({ where: { postId: b } })).usedLlm).toBe(true);
+  });
+});
+
+describe('a suburb-named station against an outage with other equipment there', () => {
+  it('goes to the tie-break instead of opening a duplicate', async () => {
+    await addPost(0, 'Waterfall Substation: fault affecting Halfway House', reading('OUTAGE', 'INVESTIGATING', ['Waterfall'], { localities: [{ name: 'Halfway House', state: 'AFFECTED' }] }));
+    const b = await addPost(150, 'Halfway House: 50% restored after a cable fault', reading('UPDATE', 'PARTIALLY_RESTORED', ['Halfway House']));
+    await processPending();
+    const all = await outages();
+    expect(all).toHaveLength(1);
+    expect(all[0].posts.map((p) => p.postId)).toContain(b);
+    expect(tieBreaks.calls).toBe(1);
   });
 });

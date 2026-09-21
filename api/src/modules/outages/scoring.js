@@ -49,7 +49,8 @@ export function scoreCandidate(post, outage) {
   if (sharedLocalities.length) {
     const coef = sharedLocalities.length / Math.min(post.localityIds.size, outage.localityIds.size);
     // Same suburb but demonstrably different infrastructure is weak evidence of the same fault.
-    const conflicting = post.nodeIds.size && outage.nodeIds.size && !sharedNodes.length && !intersect(post.relatedNodeIds, outage.nodeIds).length;
+    // (not when the post's only suburb is one guessed from a station named after it: that says nothing about different infrastructure)
+    const conflicting = post.nodeIds.size && outage.nodeIds.size && !sharedNodes.length && !intersect(post.relatedNodeIds, outage.nodeIds).length && !post.localitiesImplied;
     // A post that names TWO OR MORE suburbs, all of which the outage already covers, is very likely the same incident even when it names
     // different equipment (a restoration often reveals which station was to blame). That earns a smaller penalty, which lifts it into
     // the tie-break instead of letting it open a duplicate outage.

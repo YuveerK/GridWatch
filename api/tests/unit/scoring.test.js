@@ -136,3 +136,14 @@ describe('an outage quiet for a long time', () => {
     expect(applyRevivalRule(cand({ status: 'ACTIVE' }), post(112), rule).score).toBe(0.9);
   });
 });
+
+describe('a suburb guessed from a station named after it', () => {
+  const different = { nodeIds: new Set(['n9']), localityIds: new Set(['l1']) }; // other equipment, same suburb
+  it('is not penalised as "different equipment in the same suburb", so it can reach the tie-break', () => {
+    const stated = scoreCandidate(post(different), outage());
+    const guessed = scoreCandidate(post({ ...different, localitiesImplied: true }), outage());
+    expect(stated.score).toBeLessThan(0.35);
+    expect(guessed.score).toBeGreaterThanOrEqual(0.35);
+    expect(guessed.score).toBeLessThan(0.7);
+  });
+});

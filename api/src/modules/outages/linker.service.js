@@ -337,7 +337,10 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
   post.relatedNodeIds = await relatedNodeIds(post.nodeIds);
   const namedLikeNodes = await suburbsNamedLikeStations(facts.nodes.map((n) => n.normalizedKey));
   // only when the post names no suburb at all (otherwise the suburbs it does name are better evidence); for scoring only, what is stored is unchanged
-  if (!facts.localityIds.length) for (const n of facts.nodes) for (const id of namedLikeNodes.get(n.normalizedKey) ?? []) post.localityIds.add(id);
+  if (!facts.localityIds.length) {
+    for (const n of facts.nodes) for (const id of namedLikeNodes.get(n.normalizedKey) ?? []) post.localityIds.add(id);
+    post.localitiesImplied = post.localityIds.size > 0;
+  }
 
   const decide = (data) => recordDecision(ctx, post, data);
 
