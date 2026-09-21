@@ -5,7 +5,7 @@
 //   node scripts/correct-link.js --list                                    show every stored correction
 // <post> is a database id or the X post id. Add --fault N for a graphic with several faults. Without --apply it only reports.
 // The post is then re-linked from its stored reading (no AI, no X).
-process.env.GRIDWATCH_NO_AI = '1';
+process.env.GRIDWATCH_NO_AI ??= '1'; // callers may set it to empty and allow the tie-break (GRIDWATCH_AI_ONLY=tiebreak GRIDWATCH_AI_MAX_CALLS=n) when the post has other faults to re-judge
 const { prisma } = await import('../src/db/prisma.js');
 const { setOverride, clearOverride } = await import('../src/modules/outages/overrides.js');
 const { reprocessPost } = await import('../src/modules/processing/processor.service.js');
