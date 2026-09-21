@@ -91,15 +91,19 @@ export function decideStatus({ error = null, incomplete = [], backlog = 0, inges
  * cycle: a failure to assess is itself recorded as a problem.
  *   posts covered = the posts this cycle's fetch inserted, plus every post processed since it started (a backlog counts too)
  */
-export async function assessCycle({ prisma, faultItems, promptVersion, trigger, startedAt, ingestionRunId = null, ingestion = null, tally = {}, backlog = 0, incomplete = [], error = null, now = new Date() }) {
-  const problems = [];
-  const covered = new Map();
+/** The posts a cycle covered: those its fetch inserted, plus every post processed since it started (a backlog counts too). */
+export async function coveredPostIds(prisma, { startedAt, ingestionRunId = null }) {
   const runPostIds = ingestionRunId ? (await prisma.ingestionRunPost.findMany({ where: { ingestionRunId }, select: { postId: true } })).map((r) => r.postId) : [];
   const worked = await prisma.sourcePost.findMany({ where: { processingStartedAt: { gte: startedAt } }, select: { id: true } });
-  for (const id of new Set([...runPostIds, ...worked.map((p) => p.id)])) covered.set(id, true);
+  return [...new Set([...runPostIds, ...worked.map((p) => p.id)])];
+}
+
+export async function assessCycle({ prisma, faultItems, promptVersion, trigger, startedAt, ingestionRunId = null, ingestion = null, tally = {}, backlog = 0, incomplete = [], error = null, now = new Date() }) {
+  const problems = [];
+  const coveredIds = await coveredPostIds(prisma, { startedAt, ingestionRunId });
 
   const rows = await prisma.sourcePost.findMany({
-    where: { id: { in: [...covered.keys()] } },
+    where: { id: { in: coveredIds } },
     orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }],
     select: {
       id: true, externalId: true, processingStatus: true, text: true, noteTweetText: true,

@@ -12,6 +12,7 @@ import { authorize, checkToken, isSameOrigin, allowedOrigins, loginAllowed, reco
 import { equipmentFlow, equipmentHubs } from '../geo/equipment-map.service.js';
 import { insights } from './insights.service.js';
 import { CATEGORY_IDS, dailyPostCounts, listPosts } from './post-activity.service.js';
+import { listReviewItems, resolveReviewItem } from '../review/review.service.js';
 import { latestUpdates } from './updates.service.js';
 import { localityHistory } from './locality-history.service.js';
 
@@ -633,6 +634,24 @@ router.get('/admin/quality', wrap(async (req, res) => {
   if (!q) return;
   const rows = await prisma.cycleQuality.findMany({ where: q.status ? { status: q.status } : {}, orderBy: { finishedAt: 'desc' }, take: q.limit, select: { id: true, trigger: true, status: true, startedAt: true, finishedAt: true, summary: true } });
   res.json({ data: rows });
+}));
+
+// the queue of suspicious changes (see modules/review): it points at things to look at and never changes an outage
+router.get('/admin/review', wrap(async (req, res) => {
+  const q = parse(z.object({ status: z.enum(['OPEN', 'RESOLVED', 'DISMISSED']).default('OPEN'), limit: intParam(1, 200, 50) }), req.query, res);
+  if (!q) return;
+  res.json({ data: await listReviewItems({ prisma, status: q.status, limit: q.limit }) });
+}));
+router.post('/admin/review/:id/resolve', wrap(async (req, res) => {
+  if (!id.safeParse(req.params.id).success) return res.status(400).json({ error: 'invalid_request' });
+  const b = parse(z.object({ status: z.enum(['RESOLVED', 'DISMISSED']).default('RESOLVED'), resolution: text(300).optional() }), req.body ?? {}, res);
+  if (!b) return;
+  try {
+    res.json({ data: await resolveReviewItem({ prisma, id: req.params.id, status: b.status, resolution: b.resolution ?? null }) });
+  } catch (err) {
+    if (err?.code === 'P2025') return res.status(404).json({ error: 'not_found' });
+    throw err;
+  }
 }));
 
 router.get('/admin/review-queue', wrap(async (_req, res) => {

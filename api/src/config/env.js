@@ -60,6 +60,10 @@ export const schema = z
     PUSH_ENABLED: flag.default('on'),
     PUSH_DRY_RUN: flag.default('off'),
     EXPO_ACCESS_TOKEN: z.string().min(1).optional(),
+    // An optional independent second opinion on suspicious placements (see modules/review). Off by default; it never changes an outage.
+    VERIFIER_ENABLED: flag.default('off'),
+    VERIFIER_MAX_CALLS_PER_DAY: int(0, 5000).default(30),
+    VERIFIER_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.03), // share of apparently clean posts spot-checked, when the verifier is on
     CORS_ALLOWED_ORIGINS: origins,
     MEDIA_MAX_BYTES: int(1024, 50 * 1024 * 1024).default(10 * 1024 * 1024),
     LINK_HIGH_SCORE: z.coerce.number().min(0).max(1).default(0.7),

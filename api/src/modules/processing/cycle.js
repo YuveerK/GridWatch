@@ -6,7 +6,8 @@ import { sweepStaleOutages } from '../outages/linker.service.js';
 import { placeLocalities } from '../geo/geocode.service.js';
 import { withLease, PIPELINE } from '../coordination/lease.js';
 import { faultItems, processPending, retryImageFailures, retryTieBreaks } from './processor.service.js';
-import { assessCycle } from './quality.js';
+import { assessCycle, coveredPostIds } from './quality.js';
+import { runReview } from '../review/review.service.js';
 
 function friendly(err) {
   const m = String(err?.message ?? err);
@@ -21,7 +22,7 @@ function friendly(err) {
  * Single-flight (never two at once), with a cooldown on manual runs and a cap on posts read per run, because
  * every run spends money at X and at the AI provider. Dependencies are injected so it can be tested without either.
  */
-export function createCycle({ ingest, process, retry, sweep, place, counts, assess, lease = async (fn) => ({ acquired: true, value: await fn(undefined) }), now = () => Date.now(), cooldownMs = 90_000, maxPosts = 200 }) {
+export function createCycle({ ingest, process, retry, review, sweep, place, counts, assess, lease = async (fn) => ({ acquired: true, value: await fn(undefined) }), now = () => Date.now(), cooldownMs = 90_000, maxPosts = 200 }) {
   let state = { state: 'idle', trigger: null, step: null, startedAt: null, finishedAt: null, progress: null, found: null, result: null, error: null };
   let lastManualAt = 0;
   let current = Promise.resolve();
@@ -58,6 +59,13 @@ export function createCycle({ ingest, process, retry, sweep, place, counts, asse
       retried = (await retry?.({ ctx })) ?? retried;
     } catch (err) {
       logger.warn({ err: err?.message }, 'retrying posts with missing pictures failed; will try again next run');
+    }
+    // suspicious changes are queued for a person (and, if switched on, the independent check); this never changes an outage
+    let reviewed = { flagged: 0, opened: 0, verified: 0 };
+    try {
+      reviewed = (await review?.({ startedAt: cycleStart, ingestionRunId: ing?.runId ?? null })) ?? reviewed;
+    } catch (err) {
+      logger.warn({ err: err?.message }, 'the review pass failed; it will look again next run');
     }
     state.step = 'tidying';
     // pin any suburbs learned from these posts on the map; capped and failure-proof, it can never hold up or break a fetch
@@ -103,6 +111,7 @@ export function createCycle({ ingest, process, retry, sweep, place, counts, asse
       placed,
       retriedPictures: retried.tried,
       incomplete,
+      reviewOpened: reviewed.opened,
       quality: quality ? { id: quality.id, status: quality.status, problems: quality.problems.length } : null,
     };
   }
@@ -161,6 +170,7 @@ export const cycle = createCycle({
     const tieBreaks = await retryTieBreaks({ ctx });
     return { tried: pictures.tried + tieBreaks.tried, fixed: pictures.fixed + tieBreaks.fixed, pictures, tieBreaks };
   },
+  review: async ({ startedAt, ingestionRunId }) => runReview({ prisma, postIds: await coveredPostIds(prisma, { startedAt, ingestionRunId }) }),
   assess: (args) => assessCycle({ prisma, faultItems, promptVersion: env.AI_PROMPT_VERSION, ...args }),
   lease: (fn) => withLease(PIPELINE, fn),
   sweep: sweepStage,
