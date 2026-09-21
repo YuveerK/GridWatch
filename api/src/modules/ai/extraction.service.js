@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readingRevision } from '../../lib/reading-revision.js';
 import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
@@ -151,6 +152,10 @@ export async function extractPost(postId, { force = false, signal } = {}) {
   // The reading and its summaries are one unit: written together, and summaries the new reading no longer has are removed
   // (two faults shrinking to one must not leave a stale second summary).
   return prisma.$transaction(async (tx) => {
+    // the accepted reading this one replaces is kept (with its fingerprint), so a repair can be undone and nothing is lost
+    if (existing?.status === 'SUCCEEDED' && existing.result && result && readingRevision(existing.result) !== readingRevision(result)) {
+      await tx.readingRevision.create({ data: { postId, promptVersion, revision: readingRevision(existing.result), model: existing.model, result: existing.result } });
+    }
     await tx.postSummary.deleteMany({ where: { postId } });
     if (result) {
       const faults = result.faults ?? [];

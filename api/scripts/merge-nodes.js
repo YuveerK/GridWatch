@@ -45,6 +45,11 @@ if (!apply) {
   process.exit(0);
 }
 
+// staged and reversible: everything these posts and this node touch is saved first (undo: node scripts/restore-repair.js <file> --apply)
+const { snapshotForPosts } = await import('../src/modules/processing/repair.js');
+const { saveSnapshotFile } = await import('../src/modules/processing/repair-files.js');
+const snapshotFile = saveSnapshotFile(await snapshotForPosts(prisma, posts.map((p) => p.id)), 'merge-nodes', { removeAlias: { nodeId: keep.id, normalizedKey: drop.normalizedKey } });
+console.log(`Snapshot saved: ${snapshotFile}`);
 await prisma.nodeAlias.upsert({ where: { nodeId_normalizedKey: { nodeId: keep.id, normalizedKey: drop.normalizedKey } }, create: { nodeId: keep.id, alias: drop.name, normalizedKey: drop.normalizedKey }, update: {} });
 await prisma.outage.updateMany({ where: { primaryNodeId: drop.id }, data: { primaryNodeId: keep.id } });
 await prisma.infraNode.delete({ where: { id: drop.id } }); // cascades its outage links, edges, locality links and aliases; the posts below are then learned again

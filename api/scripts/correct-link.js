@@ -56,11 +56,16 @@ console.log(`${post.externalId}  ${post.publishedAt.toISOString().slice(0, 16)}Z
 console.log('Now in:', (await where(post.id)).join('\n        ') || 'no outage');
 console.log(mode === 'SPLIT' ? 'Will become: its own new outage' : mode === 'JOIN' ? `Will join: ${(await where(anchor.id)).join(' | ')}` : 'Will: go back to the normal rules');
 if (!apply) {
-  console.log('\nReport only. Add --apply to do it.');
+  console.log('\nReport only. Add --apply to do it (a snapshot is saved first, so it can be undone).');
   await prisma.$disconnect();
   process.exit(0);
 }
 
+// staged and reversible: the post's entries, decisions, graph evidence, reading and corrections are saved before anything changes
+const { snapshotForPosts } = await import('../src/modules/processing/repair.js');
+const { saveSnapshotFile } = await import('../src/modules/processing/repair-files.js');
+const snapshotFile = saveSnapshotFile(await snapshotForPosts(prisma, [post.id]), 'correction');
+console.log(`Snapshot saved: ${snapshotFile}   (undo: node scripts/restore-repair.js ${snapshotFile} --apply)`);
 if (mode === 'CLEAR') await clearOverride(post.id, faultIndex);
 else await setOverride({ postId: post.id, faultIndex, action: mode, anchorPostId: anchor?.id ?? null, note: flag('--note'), contrastPostId: contrast?.id ?? null });
 const res = await reprocessPost(post.id);

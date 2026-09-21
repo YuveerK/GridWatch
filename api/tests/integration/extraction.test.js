@@ -126,3 +126,19 @@ describe('E03: an uncertain re-read is not accepted over a good reading', () => 
     expect(first.status).toBe('NEEDS_REVIEW');
   });
 });
+
+describe('B6: a reading a re-read replaces is kept', () => {
+  it('the accepted reading is stored as a revision when a different one replaces it, and not when nothing changed', async () => {
+    replies.push(reading({ update_summary: 'first', status: 'INVESTIGATING' }));
+    await extractPost('p');
+    replies.push(reading({ update_summary: 'same facts, new words', status: 'INVESTIGATING' }));
+    await extractPost('p', { force: true });
+    expect(await prisma.readingRevision.count()).toBe(0); // only the wording changed: nothing worth keeping
+    replies.push(reading({ update_summary: 'now different', status: 'RESTORED' }));
+    await extractPost('p', { force: true });
+    const kept = await prisma.readingRevision.findMany();
+    expect(kept).toHaveLength(1);
+    expect(kept[0].result.status).toBe('INVESTIGATING');
+    expect(kept[0].revision).toMatch(/^[0-9a-f]{16}$/);
+  });
+});

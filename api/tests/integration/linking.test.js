@@ -657,3 +657,86 @@ describe('B3: a temporary tie-break failure is retried by itself, real ambiguity
     expect(await prisma.retryAttempt.count()).toBe(0);
   });
 });
+
+describe('B6: a repair can be undone', () => {
+  const state = async () => ({
+    outages: (await outages()).map((o) => ({ posts: o.posts.map((p) => `${p.postId}:${p.faultIndex}:${p.role}`).sort(), status: o.status })).sort((a, b) => a.posts[0].localeCompare(b.posts[0])),
+    decisions: (await prisma.linkDecision.findMany({ orderBy: [{ postId: 'asc' }, { faultIndex: 'asc' }] })).map((d) => `${d.postId}:${d.faultIndex}:${d.outcome}:${d.outageId ? 'o' : '-'}`),
+    nodes: (await prisma.infraNode.findMany({ orderBy: { normalizedKey: 'asc' } })).map((n) => `${n.normalizedKey}:${n.evidenceCount}:${n.lifecycle}`),
+    evidence: await prisma.evidenceContribution.count(),
+    overrides: await prisma.linkOverride.count(),
+  });
+  const load = async () => {
+    const m = await import('../../src/modules/processing/repair.js');
+    return m;
+  };
+
+  it('a re-link that moves a post is put back exactly: entries, decisions, graph counters, outage state', async () => {
+    const { snapshotForPosts, restoreSnapshot } = await load();
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    const b = await addPost(30, 'Alpha crew on site', reading('UPDATE', 'CREW_ON_SITE', ['Alpha']));
+    await processPending();
+    const before = await state();
+    const snap = await snapshotForPosts(prisma, [b]);
+
+    readings.set(b, reading('OUTAGE', 'INVESTIGATING', ['Zulu'])); // the repair: a re-read moves it to different equipment
+    await reprocessPost(b, { reextract: true });
+    const moved = await state();
+    expect(moved).not.toEqual(before);
+
+    const r = await restoreSnapshot({ prisma, snapshot: snap });
+    expect(r).toMatchObject({ posts: 1 });
+    expect(await state()).toEqual(before);
+    expect(await prisma.infraNode.count({ where: { normalizedKey: 'zulu' } })).toBe(0); // equipment the repair introduced is gone too
+    expect(a).toBeTruthy();
+  });
+
+  it('an outage the repair deleted comes back with its id, and a correction that was added is removed', async () => {
+    const { snapshotForPosts, restoreSnapshot } = await load();
+    const { setOverride } = await import('../../src/modules/outages/overrides.js');
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    const c = await addPost(20, 'Power out at Zulu', reading('OUTAGE', 'INVESTIGATING', ['Zulu']));
+    await processPending();
+    const before = await outages();
+    const zuluOutage = before.find((o) => o.posts.some((p) => p.postId === c));
+    const snap = await snapshotForPosts(prisma, [c]);
+
+    await setOverride({ postId: c, action: 'JOIN', anchorPostId: a }); // the repair: join Zulu into Alpha's outage (Zulu's own outage disappears)
+    await reprocessPost(c);
+    expect(await outages()).toHaveLength(1);
+    expect(await prisma.linkOverride.count()).toBe(1);
+
+    await restoreSnapshot({ prisma, snapshot: snap });
+    const after = await outages();
+    expect(after).toHaveLength(2);
+    expect(after.some((o) => o.id === zuluOutage.id)).toBe(true); // the same outage, same id
+    expect(await prisma.linkOverride.count()).toBe(0);
+  });
+
+  it('a worker that lost the lease restores nothing', async () => {
+    const { snapshotForPosts, restoreSnapshot } = await load();
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    await processPending();
+    const snap = await snapshotForPosts(prisma, [a]);
+    await reprocessPost(a);
+    const before = await state();
+    const ghost = { name: 'pipeline', owner: 'expired-owner', lost: false, assertHeld() {} };
+    await expect(restoreSnapshot({ prisma, snapshot: snap, ctx: ghost })).rejects.toThrow(/lease/i);
+    expect(await state()).toEqual(before);
+  });
+
+  it('describes what a repair changed, post by post', async () => {
+    const { snapshotForPosts, describeChange } = await load();
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    const c = await addPost(20, 'Power out at Zulu', reading('OUTAGE', 'INVESTIGATING', ['Zulu']));
+    await processPending();
+    const snap = await snapshotForPosts(prisma, [c]);
+    expect((await describeChange(prisma, snap))[0].changed).toBe(false);
+    const { setOverride } = await import('../../src/modules/outages/overrides.js');
+    await setOverride({ postId: c, action: 'JOIN', anchorPostId: a });
+    await reprocessPost(c);
+    const [row] = await describeChange(prisma, snap);
+    expect(row.changed).toBe(true);
+    expect(row.was[0].label).toMatch(/Zulu/i);
+  });
+});

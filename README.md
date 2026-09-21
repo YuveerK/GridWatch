@@ -69,6 +69,28 @@ npm run geocode           # place any newly learned suburbs on the map
 
 Backups are written to `api/data/backups/` (not committed) and cover readings and their summaries. To undo a re-read: `npm run reread -- --restore=data/backups/<file>.json`, then re-link the posts it lists.
 
+## Knowing the engine is right
+
+The engine does not just run: every processing cycle saves a quality result, suspicious changes are queued, and every repair can be undone.
+
+```
+cd api
+npm run quality               # did the last cycle COMPLETE? which posts, faults and outages did it cover, and what did the checks find
+npm run quality -- --list     # the last 20 cycles
+npm run review                # the queue of suspicious changes, most urgent first (it never edits an outage)
+npm run review -- --resolve <id> [--dismiss] [--note "why"]
+npm run eval:all              # measures reading, coverage, grouping (holdouts apart), manual corrections and final state separately
+npm run audit                 # data health, exit status 1 on any contradiction, review/error/stuck work or unhealthy ingestion
+npm run batch                 # the latest fetch, post by post (exit 1 checks failed, 2 degraded)
+```
+
+- **Quality results** (`CycleQuality`): one per cycle, with status COMPLETE / INCOMPLETE / NEEDS_REVIEW / FAILED. `GET /v1/quality/status` gives the one-word answer; `/admin/quality/latest` (operator) gives the detail.
+- **Retries**: a temporary AI failure on a tie-break is retried in the call, then queued and retried by itself (5 min, 15 min, 45 min, 2 h, 6 h). After the last try it waits for a person and shows in the review queue.
+- **Review queue** (`ReviewItem`): new outage next to a live similar one, a restoration that opened its own outage, planned versus unplanned on the same equipment, a fault that produced no outage, an uncertain reading, near-duplicate equipment names, many new suburbs. An optional independent verifier (`VERIFIER_ENABLED=on`, capped by `VERIFIER_MAX_CALLS_PER_DAY`, spot-checking `VERIFIER_SAMPLE_RATE` of clean posts) must quote its evidence and only ever raises an item's priority.
+- **Corrections become tests**: `node scripts/correct-link.js <post> --join <anchor> --apply` (or `--split --from <post>`) saves a snapshot, applies the correction and adds a case to `api/tests/golden/corrections.json`. Commit that file. See `api/tests/golden/README.md` for what each labelled set is and which may be tuned on.
+- **Undoing a repair**: `reprocess.js`, `correct-link.js` and `merge-nodes.js` save a snapshot to `api/data/backups/repair-*.json` first and print the undo command: `node scripts/restore-repair.js <file> --apply`. `reprocess.js --preview` shows where posts are now without changing anything. A reading that a re-read replaces is kept in `ReadingRevision`.
+- **Rebuilding everything**: `node scripts/rebuild-history.js --confirm` (with `GRIDWATCH_AI_MAX_CALLS` to cap the small tie-break calls). It holds the pipeline lease throughout and writes a backup first.
+
 ### About the map
 
 - **Equipment positions are inferred.** City Power publishes no coordinates for its equipment, so each substation, switching station or distributor is drawn at the centre of the suburbs its posts tie it to. The connections (which suburbs it feeds) are real; the marker position is not. Suburbs implausibly far from the rest are left out of the animation.
