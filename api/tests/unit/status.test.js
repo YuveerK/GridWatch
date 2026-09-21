@@ -112,3 +112,17 @@ describe('E06: an overall percentage and explicit per-suburb restoration', () =>
     expect(suburbRestored({ status: 'RESTORED', partial: false, locs: [{ restored: false }], restored: false })).toBe(true);
   });
 });
+
+describe('E09: an emergency-isolation programme is one kind of work from its first post to its last', () => {
+  const ex = (relevance, status = 'RESTORED') => ({ relevance, result: { status } });
+  it('the daily and final posts count as planned even when they are read as an update or a restoration', () => {
+    expect(isPlanned(ex('UPDATE'), 'Day 4 of the emergency isolation programme in Glenanda has been successfully completed, with power supply restored.')).toBe(true);
+    expect(isPlanned(ex('RESTORATION'), 'Glenanda - Emergency Isolation: Power has been fully restored to all customers who were affected by the emergency isolation.')).toBe(true);
+    expect(isPlanned(ex('UPDATE'), 'The isolation programme is progressing well onsite.')).toBe(true);
+  });
+  it('an ordinary fault, an unplanned interruption and a bare "isolated" are still not', () => {
+    expect(isPlanned(ex('RESTORATION'), 'Power has been restored after an unplanned power interruption.')).toBe(false);
+    expect(isPlanned(ex('UPDATE'), 'The faulty section has been isolated and repairs continue.')).toBe(false);
+    expect(isPlanned(ex('OUTAGE', 'INVESTIGATING'), 'Emergency isolation of the cable was needed after the fault.')).toBe(false); // a fresh fault report is not the programme
+  });
+});

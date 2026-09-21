@@ -7,6 +7,9 @@ const FUZZY_NODE = 0.9;
 const FUZZY_LOCALITY = 0.92;
 const CONFIRM_AT = 2;
 const STATION_TYPES = ['SUBSTATION', 'SWITCHING_STATION'];
+// A street or a cable route is read as a cable in one post, a line in the next and "other" in a third ("Amanda Avenue"). The reader's guess at
+// which of these it is does not change what it is, so the same name is the same thing across them. (Never across a station or a distributor.)
+const MINOR_TYPES = ['CABLE', 'LINE', 'OTHER'];
 
 let localityIndex = null;
 
@@ -157,6 +160,9 @@ export async function resolveNode({ type, name, at, source = null, mode = 'count
   // "X Substation" and "X Switching Station" are written interchangeably for the same site.
   if (!node && STATION_TYPES.includes(type)) {
     node = await prisma.infraNode.findFirst({ where: { normalizedKey: key, type: { in: STATION_TYPES } }, orderBy: { evidenceCount: 'desc' } });
+  }
+  if (!node && MINOR_TYPES.includes(type)) {
+    node = await prisma.infraNode.findFirst({ where: { normalizedKey: key, type: { in: MINOR_TYPES } }, orderBy: [{ evidenceCount: 'desc' }, { firstSeenAt: 'asc' }] });
   }
   // "Roosevelt Park" and "Roosevelt" (one plain-word suffix) are the same substation.
   if (!node && STATION_TYPES.includes(type) && key.length >= 4) {

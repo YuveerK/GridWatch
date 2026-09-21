@@ -125,3 +125,16 @@ describe('a mistyped suburb is the suburb, not a new one', () => {
     expect(await prisma.locality.count({ where: { normalizedName: 'develand' } })).toBe(0);
   });
 });
+
+describe('E09: one street read as a cable, a line and "other" is one thing', () => {
+  it('the same name across the minor equipment types resolves to one node, never across a station', async () => {
+    const { resolveNode } = await import('../../src/modules/infrastructure/infrastructure.service.js');
+    const at = new Date('2026-09-21T10:00:00Z');
+    const a = await resolveNode({ type: 'CABLE', name: 'Amanda Avenue', at });
+    const b = await resolveNode({ type: 'LINE', name: 'Amanda Avenue', at });
+    const c = await resolveNode({ type: 'OTHER', name: 'Amanda Avenue', at });
+    expect(new Set([a.id, b.id, c.id]).size).toBe(1);
+    const st = await resolveNode({ type: 'SUBSTATION', name: 'Amanda Avenue', at });
+    expect(st.id).not.toBe(a.id);
+  });
+});

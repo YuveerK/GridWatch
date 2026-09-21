@@ -32,7 +32,9 @@ export const linkedToPost = (candidate, postId) => candidate.raw.posts.some((p) 
 // only added for posts that say they are amended, so nothing else about the tie-break changes
 const AMENDED_NOTE = ' This post is marked amended or corrected: it replaces an earlier post about the same fault, so its equipment names may differ from those already recorded. Judge it by the area and the timing.';
 const AMENDED = /\b(amended|corrected|correction|revised)\b/i;
-const PLANNED_TEXT = /\bplanned (maintenance|power interruption|interruption|outage)|\bscheduled (maintenance|interruption|outage)/i;
+// An "emergency isolation" programme (days of isolated supply for cable work, with a "day 3 of 4" post each day and a "fully restored" post at the end)
+// is work that was decided on, not a fault: its daily and final posts must be the same KIND as its first, or the planned/unplanned boundary splits it.
+const PLANNED_TEXT = /\bplanned (maintenance|power interruption|interruption|outage)|\bscheduled (maintenance|interruption|outage)|\bemergency isolation\b|\bisolation programme\b/i;
 
 /** Planned work also shows up as "restored" posts, so relevance alone is not enough. */
 export function isPlanned(extraction, text) {
@@ -231,7 +233,7 @@ export class StaleCandidateError extends Error {}
  * whole decision exists or none of it does, so a crash or a lost race can never leave a change without its marker.
  * Nothing slow (AI, network) happens in here: the candidates and verdict were settled before.
  */
-async function commitLink({ ctx, post, extraction, facts, outageId, isNew, retroactive, score, reasons, decision, manual = false }) {
+async function commitLink({ ctx, post, extraction, facts, outageId, isNew, retroactive, score, reasons, decision, manual = false, revision = null }) {
   return prisma.$transaction(
     async (tx) => {
       await assertLeaseInTx(tx, ctx);
@@ -260,7 +262,7 @@ async function commitLink({ ctx, post, extraction, facts, outageId, isNew, retro
       }
       // A digest post (many nodes) must not smear its nodes across an existing single-fault outage.
       const expand = isNew || !(isDigest(facts) || facts.fromDigest);
-      const effect = buildEffect({ extraction, facts, post, retroactive, expand });
+      const effect = buildEffect({ extraction, facts, post, retroactive, expand, revision });
       await tx.outagePost.create({
         data: { outageId: id, postId: post.id, role: roleFor(extraction, isNew && !retroactive), score, reasons, postedAt: post.postedAt, faultIndex: post.faultIndex, effect },
       });
@@ -320,7 +322,7 @@ export async function recordDecision(ctx, post, data) {
  * Link (or open) an outage for one extracted post. Idempotent per post and fault.
  * `ctx` is the held pipeline lease (from exclusive/withLease); every commit re-checks it.
  */
-export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx, repairOutageIds = [] }) {
+export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx, repairOutageIds = [], revision = null }) {
   const existing = await prisma.linkDecision.findUnique({ where: { postId_faultIndex: { postId: postRow.id, faultIndex } } });
   if (existing) return existing;
 
@@ -406,6 +408,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
       const match = pickHeadlineMatch(ranked);
       if (match) {
         return commitLink({
+          revision,
           ctx,
           post,
           extraction: { ...extraction, result: { ...extraction.result, localities: [] } },
@@ -428,6 +431,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
 
   const linkedTop = outageId && top?.id === outageId ? top : null;
   return commitLink({
+          revision,
     ctx,
     post,
     extraction,

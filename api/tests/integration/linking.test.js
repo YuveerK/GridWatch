@@ -581,3 +581,18 @@ describe('E03: a re-read that is not accepted leaves the published outage alone'
     expect((await prisma.outageNode.findMany({ where: { outageId: all[0].id }, include: { node: true } })).map((n) => n.node.name)).toEqual(['Beta']);
   });
 });
+
+describe('E10: an effect records the reading it was built from', () => {
+  it('and the stored revision changes when a re-read changes something that is not the fault count', async () => {
+    const { readingRevision } = await import('../../src/lib/reading-revision.js');
+    const id = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    await processPending();
+    const first = (await prisma.outagePost.findFirst({ where: { postId: id } })).effect.reading;
+    expect(first).toBe(readingRevision(readings.get(id).result));
+    readings.set(id, reading('OUTAGE', 'REPAIRING', ['Alpha'])); // same fault count, same class, different status
+    await reprocessPost(id, { reextract: true });
+    const second = (await prisma.outagePost.findFirst({ where: { postId: id } })).effect.reading;
+    expect(second).toBe(readingRevision(readings.get(id).result));
+    expect(second).not.toBe(first);
+  });
+});

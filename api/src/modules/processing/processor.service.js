@@ -4,6 +4,7 @@ import { logger } from '../../lib/logger.js';
 import { extractPost, faultLayout } from '../ai/extraction.service.js';
 import { LeaseLostError, assertLeaseInTx, exclusive, recoverStaleWork } from '../coordination/lease.js';
 import { learnFromExtraction, removeContributions } from '../infrastructure/infrastructure.service.js';
+import { readingRevision } from '../../lib/reading-revision.js';
 import { linkPost, recordDecision } from '../outages/linker.service.js';
 import { refoldOutage } from '../outages/outage-state.js';
 import { markRestoredPlaces } from '../../lib/restored-places.js';
@@ -82,6 +83,8 @@ async function processLocked(postId, ctx, { force = false, repairOutageIds = [],
     }
     const cached = await prisma.postExtraction.findFirst({ where: { postId, status: 'SUCCEEDED' }, select: { id: true } });
     const extraction = reading ?? (await extractPost(postId, { force, signal: ctx?.signal })); // `reading`: already read (a re-read done before anything was removed)
+    // which reading this is (taken from what was stored, before the free corrections below), recorded on every effect built from it
+    const revision = readingRevision(extraction.result);
     // "restored to X" in the post's own words settles X, whatever the reading listed (free, deterministic)
     if (extraction.result) extraction.result = markRestoredPlaces(extraction.result, postRow.noteTweetText || postRow.text);
     if (extraction.status !== 'SUCCEEDED') {
@@ -106,7 +109,7 @@ async function processLocked(postId, ctx, { force = false, repairOutageIds = [],
         await recordDecision(ctx, { id: postId, faultIndex: item.faultIndex }, { outcome: 'NEW', reason: 'fault names no equipment or suburbs' });
         continue;
       }
-      const decision = await linkPost({ postRow, extraction: item.extraction, facts, faultIndex: item.faultIndex, ctx, repairOutageIds });
+      const decision = await linkPost({ postRow, extraction: item.extraction, facts, faultIndex: item.faultIndex, ctx, repairOutageIds, revision });
       if (!item.fromDigest) single = { decision, facts };
     }
     const decisions = await decisionsOf(postId);

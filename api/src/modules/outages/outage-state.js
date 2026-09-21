@@ -43,7 +43,7 @@ export function suburbRestored({ status, partial, locs, restored }) {
 export const initialStatus = (retroactive, status) => (retroactive && status !== 'PARTIALLY_RESTORED' ? 'RESTORED' : status);
 
 /** What one fault said about its outage, in the shape stored on OutagePost.effect. */
-export function buildEffect({ extraction, facts, post, retroactive, expand }) {
+export function buildEffect({ extraction, facts, post, retroactive, expand, revision = null }) {
   const r = extraction.result;
   const restoredIds = new Set(facts.restoredLocalityIds ?? []);
   return {
@@ -59,6 +59,8 @@ export function buildEffect({ extraction, facts, post, retroactive, expand }) {
     expand: Boolean(expand),
     retroactive: Boolean(retroactive),
     schedule: post.schedule ?? null,
+    // which reading this effect was built from (see lib/reading-revision.js): a later reading that differs is detectable
+    reading: revision,
   };
 }
 

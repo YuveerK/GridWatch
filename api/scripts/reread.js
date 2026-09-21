@@ -14,6 +14,7 @@ import { env } from '../src/config/env.js';
 import { prisma } from '../src/db/prisma.js';
 import { extractPost, faultLayout, isStale } from '../src/modules/ai/extraction.service.js';
 import { PIPELINE, withLease } from '../src/modules/coordination/lease.js';
+import { readingRevision } from '../src/lib/reading-revision.js';
 
 const arg = (name, d) => (process.argv.find((a) => a.startsWith(`--${name}=`)) ?? `--${name}=${d}`).split('=').slice(1).join('=');
 const MAX_USD = Number(arg('max', 2.5));
@@ -87,7 +88,8 @@ async function worker() {
     } else {
       if (out.relevance !== before.relevance) stat.relevanceChanged++;
       if (faultsOf(out.result) !== faultsOf(before.result)) stat.faultsChanged++;
-      if (faultLayout(out.result) !== faultLayout(before.result) || out.relevance !== before.relevance) needRelink.push(before.postId);
+      // ANY change that can alter what the engine does (status, percentage, cause, estimate, equipment, suburbs, per-fault details), not only the fault count or class
+      if (readingRevision(out.result) !== readingRevision(before.result) || faultLayout(out.result) !== faultLayout(before.result) || out.relevance !== before.relevance) needRelink.push(before.postId);
     }
     done++;
     if (done % 10 === 0 || done === todo.length) {
@@ -102,7 +104,7 @@ async function worker() {
 }
 await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 console.log(`\nDONE. Re-read ${done} posts, spent $${spent.toFixed(3)}. ${stat.relevanceChanged} were classified differently, ${stat.faultsChanged} split into a different number of faults, ${stat.failed} failed and kept their old reading.`);
-if (needRelink.length) console.log(`${needRelink.length} posts changed fault layout or classification and need relinking (their existing links refer to the old reading):
+if (needRelink.length) console.log(`${needRelink.length} posts have a reading that differs in something the engine uses (their existing links and effects refer to the old reading):
   node scripts/reprocess.js ${needRelink.join(' ')}`);
 }
 
