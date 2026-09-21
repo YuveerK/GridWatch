@@ -3,6 +3,7 @@
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/db/prisma.js';
 import { isStale } from '../src/modules/ai/extraction.service.js';
+import { ingestionProblems, plannedOverdue, stuckProcessing } from '../src/modules/processing/quality.js';
 
 const HOUR = 3_600_000;
 const now = Date.now();
@@ -63,8 +64,8 @@ check(
 );
 check(
   'Planned outage past its window, still "Planned"',
-  'planned work that never got a completion post',
-  outages.filter((o) => o.status === 'PLANNED' && now - o.lastUpdateAt > 240 * HOUR),
+  'the stored window ended over 6 hours ago (or, with no window, nothing for 10 days)',
+  outages.filter((o) => plannedOverdue(o, now)),
 );
 check(
   'Very large outage (25+ suburbs)',
@@ -74,6 +75,8 @@ check(
 
 const review = await prisma.sourcePost.count({ where: { processingStatus: { in: ['NEEDS_REVIEW', 'PROCESSING_ERROR'] } } });
 const unprocessed = await prisma.sourcePost.count({ where: { processingStatus: 'UNPROCESSED' } });
+const stuck = stuckProcessing(await prisma.sourcePost.findMany({ where: { processingStatus: 'PROCESSING' }, select: { processingStatus: true, processingStartedAt: true } }));
+const ingest = ingestionProblems(await prisma.ingestionState.findUnique({ where: { accountId: env.X_SOURCE_ACCOUNT_ID } }));
 
 let problems = 0;
 console.log(`Audit of ${outages.length} outages\n`);
@@ -86,6 +89,9 @@ for (const c of checks) {
 const readings = await prisma.postExtraction.findMany({ where: { promptVersion: env.AI_PROMPT_VERSION }, select: { model: true, result: true } });
 const stale = readings.filter(isStale).length;
 console.log(`\n${stale === 0 ? 'OK  ' : 'WARN'}  Readings made with older instructions or another model: ${stale} of ${readings.length}${stale ? '   (run: npm run reread)' : ''}`);
-console.log(`Posts needing review/errored: ${review}   Unprocessed posts: ${unprocessed}`);
+console.log(`Posts needing review/errored: ${review}   Unprocessed posts: ${unprocessed}   Stuck in PROCESSING: ${stuck.length}`);
+for (const p of ingest) console.log(`WARN  Ingestion: ${p}`);
+// review, errored, unprocessed and stuck posts, and an unfinished or stale ingestion, are failures of the WORK, not just notes
+const workProblems = review + unprocessed + stuck.length + ingest.length;
 await prisma.$disconnect();
-process.exit(problems ? 1 : 0);
+process.exit(problems || workProblems ? 1 : 0);
