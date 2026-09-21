@@ -594,3 +594,16 @@ model ReadingRevision {
 
   @@index([postId])
 }
+
+/// One reserved call of the independent verifier (append-only). Reserved before the provider is contacted; counts toward the daily cap.
+model VerifierCall {
+  id         String   @id @default(cuid())
+  day        String
+  itemId     String
+  postId     String
+  reservedAt DateTime @default(now())
+  outcome    String?
+  error      String?
+
+  @@index([day])
+}

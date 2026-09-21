@@ -43,6 +43,18 @@ export async function snapshotForPosts(prisma, postIds, now = new Date()) {
   return plain({ version: 1, takenAt: now, postIds, posts, outagePosts, outages, linkDecisions, evidence, nodes, edges, nodeLocalities, extractions, summaries, overrides });
 }
 
+const CONFIRM_AT = 2;
+const NODE_FIELDS = ['type', 'name', 'normalizedKey', 'lifecycle', 'evidenceCount', 'firstSeenAt', 'lastSeenAt'];
+const edgeKey = (a, b) => a + '|' + b;
+/** How many contributions each graph fact has: NODE|id, EDGE|parent|child, NODE_LOCALITY|node|locality. */
+function tally(rows) {
+  const m = new Map();
+  for (const r of rows) {
+    const k = r.kind === 'NODE' ? 'NODE|' + r.refA : r.kind + '|' + r.refA + '|' + r.refB;
+    m.set(k, (m.get(k) ?? 0) + 1);
+  }
+  return m;
+}
 const OUTAGE_FIELDS = ['id', 'kind', 'status', 'title', 'sdcName', 'cause', 'etaText', 'restorationPercent', 'primaryNodeId', 'retroactive', 'digest', 'startedAt', 'lastUpdateAt', 'restoredAt', 'scheduledStart', 'scheduledEnd', 'createdAt'];
 const pick = (row, keys) => Object.fromEntries(keys.filter((k) => k in row).map((k) => [k, row[k]]));
 
@@ -53,42 +65,65 @@ export async function restoreSnapshot({ prisma, snapshot: raw, ctx }) {
   const before = await prisma.outagePost.findMany({ where: { postId: { in: postIds } }, select: { outageId: true } });
   const affected = new Set([...before.map((o) => o.outageId), ...s.outagePosts.map((o) => o.outageId)]);
 
-  await prisma.$transaction(
+  const out = await prisma.$transaction(
     async (tx) => {
       await assertLeaseInTx(tx, ctx);
-      // what the repair produced for these posts goes away, including what it taught the graph (counters taken back, as re-linking does)
+      // undoing twice, or undoing something already undone, must change nothing (the counters are corrected by difference, so a repeat would double-apply)
+      const sig = (ops, ev) => JSON.stringify([ops.map((o) => o.outageId + '|' + o.postId + '|' + o.faultIndex).sort(), [...tally(ev)].sort()]);
+      const nowOps = await tx.outagePost.findMany({ where: { postId: { in: postIds } }, select: { outageId: true, postId: true, faultIndex: true } });
+      const nowEvidence = await tx.evidenceContribution.findMany({ where: { postId: { in: postIds } } });
+      if (sig(nowOps, nowEvidence) === sig(s.outagePosts, s.evidence)) {
+        const stillThere = await tx.outage.count({ where: { id: { in: s.outages.map((o) => o.id) } } });
+        if (stillThere === s.outages.length) return { posts: postIds.length, outages: 0, entries: 0, alreadyRestored: true };
+      }
+      // what the repair produced for these posts goes away. The graph is corrected RELATIVELY: only what these posts contributed
+      // is swapped (now -> snapshot); anything a newer post has added since is left alone.
       const touchedNodes = new Set();
-      for (const r of await tx.evidenceContribution.findMany({ where: { postId: { in: postIds } } })) {
-        if (r.kind === 'NODE') {
-          const n = await tx.infraNode.findUnique({ where: { id: r.refA } });
-          if (n) await tx.infraNode.update({ where: { id: n.id }, data: { evidenceCount: Math.max(0, n.evidenceCount - 1) } });
-          touchedNodes.add(r.refA);
-        } else if (r.kind === 'EDGE') {
-          const key = { parentId_childId: { parentId: r.refA, childId: r.refB } };
-          const e = await tx.infraEdge.findUnique({ where: key });
-          if (e) await (e.evidenceCount <= 1 ? tx.infraEdge.delete({ where: key }) : tx.infraEdge.update({ where: key, data: { evidenceCount: { decrement: 1 } } }));
-        } else if (r.kind === 'NODE_LOCALITY') {
-          const key = { nodeId_localityId: { nodeId: r.refA, localityId: r.refB } };
-          const l = await tx.nodeLocality.findUnique({ where: key });
-          if (l) await (l.evidenceCount <= 1 ? tx.nodeLocality.delete({ where: key }) : tx.nodeLocality.update({ where: key, data: { evidenceCount: { decrement: 1 } } }));
+      const current = await tx.evidenceContribution.findMany({ where: { postId: { in: postIds } } });
+      for (const r of current) if (r.kind === 'NODE') touchedNodes.add(r.refA);
+      const nowCounts = tally(current);
+      const wasCounts = tally(s.evidence);
+      const keys = [...new Set([...nowCounts.keys(), ...wasCounts.keys()])].sort((x, y) => (x.startsWith('NODE|') ? 0 : 1) - (y.startsWith('NODE|') ? 0 : 1));
+      const nodeById = new Map(s.nodes.map((n) => [n.id, n]));
+      const edgeBy = new Map(s.edges.map((e) => [edgeKey(e.parentId, e.childId), e]));
+      const nlBy = new Map(s.nodeLocalities.map((l) => [edgeKey(l.nodeId, l.localityId), l]));
+      for (const k of keys) {
+        const delta = (wasCounts.get(k) ?? 0) - (nowCounts.get(k) ?? 0);
+        if (!delta) continue;
+        const [kind, a, b] = k.split('|');
+        if (kind === 'NODE') {
+          const cur = await tx.infraNode.findUnique({ where: { id: a } });
+          const snap = nodeById.get(a);
+          if (!cur) {
+            if (snap) await tx.infraNode.create({ data: { id: a, ...pick(snap, NODE_FIELDS) } }); // a node the repair deleted comes back with the same id
+            continue;
+          }
+          const evidenceCount = Math.max(0, cur.evidenceCount + delta);
+          const data = { evidenceCount, lifecycle: evidenceCount >= CONFIRM_AT ? 'CONFIRMED' : cur.lifecycle === 'CONFIRMED' ? 'CANDIDATE' : cur.lifecycle };
+          if (snap) {
+            if (snap.firstSeenAt < cur.firstSeenAt) data.firstSeenAt = snap.firstSeenAt;
+            if (snap.lastSeenAt > cur.lastSeenAt) data.lastSeenAt = snap.lastSeenAt;
+          }
+          await tx.infraNode.update({ where: { id: a }, data });
+        } else {
+          const isEdge = kind === 'EDGE';
+          const model = isEdge ? tx.infraEdge : tx.nodeLocality;
+          const where = isEdge ? { parentId_childId: { parentId: a, childId: b } } : { nodeId_localityId: { nodeId: a, localityId: b } };
+          const snap = (isEdge ? edgeBy : nlBy).get(edgeKey(a, b));
+          const cur = await model.findUnique({ where });
+          if (!cur) {
+            if (snap && (wasCounts.get(k) ?? 0) > 0) await model.create({ data: isEdge ? { parentId: a, childId: b, evidenceCount: wasCounts.get(k), lastSeenAt: snap.lastSeenAt } : { nodeId: a, localityId: b, evidenceCount: wasCounts.get(k), lastSeenAt: snap.lastSeenAt } });
+            continue;
+          }
+          const evidenceCount = cur.evidenceCount + delta;
+          if (evidenceCount <= 0) await model.delete({ where });
+          else await model.update({ where, data: { evidenceCount, ...(snap && snap.lastSeenAt > cur.lastSeenAt ? { lastSeenAt: snap.lastSeenAt } : {}) } });
         }
       }
       await tx.outagePost.deleteMany({ where: { postId: { in: postIds } } });
       await tx.linkDecision.deleteMany({ where: { postId: { in: postIds } } });
       await tx.evidenceContribution.deleteMany({ where: { postId: { in: postIds } } });
       await tx.linkOverride.deleteMany({ where: { OR: [{ postId: { in: postIds } }, { anchorPostId: { in: postIds } }] } });
-
-      // the graph, with its counters as they were (a node a repair deleted comes back with the same id)
-      for (const n of s.nodes) {
-        const data = pick(n, ['type', 'name', 'normalizedKey', 'lifecycle', 'evidenceCount', 'firstSeenAt', 'lastSeenAt']);
-        await tx.infraNode.upsert({ where: { id: n.id }, create: { id: n.id, ...data }, update: data });
-      }
-      for (const e of s.edges) {
-        await tx.infraEdge.upsert({ where: { parentId_childId: { parentId: e.parentId, childId: e.childId } }, create: { parentId: e.parentId, childId: e.childId, evidenceCount: e.evidenceCount, lastSeenAt: e.lastSeenAt }, update: { evidenceCount: e.evidenceCount, lastSeenAt: e.lastSeenAt } });
-      }
-      for (const l of s.nodeLocalities) {
-        await tx.nodeLocality.upsert({ where: { nodeId_localityId: { nodeId: l.nodeId, localityId: l.localityId } }, create: { nodeId: l.nodeId, localityId: l.localityId, evidenceCount: l.evidenceCount, lastSeenAt: l.lastSeenAt }, update: { evidenceCount: l.evidenceCount, lastSeenAt: l.lastSeenAt } });
-      }
 
       // the readings and their summaries
       await tx.postSummary.deleteMany({ where: { postId: { in: postIds } } });
@@ -121,10 +156,11 @@ export async function restoreSnapshot({ prisma, snapshot: raw, ctx }) {
         const used = (await tx.outageNode.count({ where: { nodeId: id } })) + (await tx.infraEdge.count({ where: { OR: [{ parentId: id }, { childId: id }] } })) + (await tx.nodeLocality.count({ where: { nodeId: id } }));
         if (!used) await tx.infraNode.delete({ where: { id } });
       }
+      return { posts: postIds.length, outages: affected.size, entries: s.outagePosts.length };
     },
     { timeout: 60_000 },
   );
-  return { posts: postIds.length, outages: affected.size, entries: s.outagePosts.length };
+  return out;
 }
 
 /** Where each post was in the snapshot and where it is now, for showing what a repair changed. */

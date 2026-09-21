@@ -5,6 +5,24 @@ import { readingRevision } from '../../src/lib/reading-revision.js';
 const linked = (i, outageId = `o${i}`) => ({ faultIndex: i, outcome: 'LINKED', outageId, reason: 'shared node' });
 const entry = (i, outageId = `o${i}`) => ({ faultIndex: i, outageId });
 
+describe('F02: a decision and its timeline entry must agree exactly', () => {
+  const fresh = (i, outageId = 'o' + i) => ({ faultIndex: i, outcome: 'NEW', outageId, reason: 'no candidate' });
+  it('NEW with an outage but no timeline entry is a problem', () => {
+    expect(checkPostDispositions({ expectedIndices: [0], decisions: [fresh(0)], outagePosts: [] }).problems).toEqual([expect.stringMatching(/no timeline entry/)]);
+  });
+  it('a second entry for the same fault in another outage is a problem', () => {
+    const v = checkPostDispositions({ expectedIndices: [0], decisions: [linked(0, 'a')], outagePosts: [entry(0, 'a'), entry(0, 'b')] });
+    expect(v.problems).toEqual([expect.stringMatching(/2 timeline entries/)]);
+  });
+  it('an entry in a different outage than the decision names is a problem', () => {
+    expect(checkPostDispositions({ expectedIndices: [0], decisions: [linked(0, 'a')], outagePosts: [entry(0, 'b')] }).problems).toEqual([expect.stringMatching(/another/)]);
+  });
+  it('an explicit exclusion must have no timeline entry', () => {
+    const v = checkPostDispositions({ expectedIndices: [0], decisions: [{ faultIndex: 0, outcome: 'NEW', outageId: null, reason: 'notice' }], outagePosts: [entry(0, 'a')] });
+    expect(v.problems).toEqual([expect.stringMatching(/left out of every outage but has 1 timeline entry/)]);
+  });
+});
+
 describe('E11: every expected fault has exactly one accepted disposition', () => {
   it('a complete, consistent post has no problems', () => {
     const v = checkPostDispositions({ expectedIndices: [0, 1], decisions: [linked(0), linked(1)], outagePosts: [entry(0), entry(1)] });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 process.env.VERIFIER_ENABLED = 'on'; // this file exercises the verifier (the default is off)
 process.env.VERIFIER_MAX_CALLS_PER_DAY = '30';
@@ -181,6 +181,41 @@ describe('B4: the optional verifier', () => {
     const v = await verifyItem({ prisma, item: it0, generate: async () => { throw new Error('503 unavailable'); } });
     expect(v.verdict).toBe('UNSURE');
     expect(v.reason).toMatch(/could not be made/);
+  });
+
+  it('the daily cap counts CALLS: re-checking one item, and failed calls, use it up', async () => {
+    const it0 = await item();
+    const generate = vi.fn(async () => ({ text: JSON.stringify({ verdict: 'AGREE', evidence_quote: 'Operators will attend', reason: 'ok' }) }));
+    for (let i = 0; i < 3; i++) await verifyItem({ prisma, item: it0, generate, force: true, maxPerDay: 2 });
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(await callsLeftToday(prisma, new Date(), 2)).toBe(0);
+    await prisma.verifierCall.deleteMany();
+    const failing = vi.fn(async () => { throw new Error('503 unavailable'); });
+    await verifyItem({ prisma, item: it0, generate: failing, force: true, maxPerDay: 1 });
+    await verifyItem({ prisma, item: it0, generate: failing, force: true, maxPerDay: 1 });
+    expect(failing).toHaveBeenCalledTimes(1); // a failed call was still a call
+    expect((await prisma.verifierCall.findFirst()).outcome).toBe('ERROR');
+  });
+
+  it('callers racing for the last calls cannot exceed the cap', async () => {
+    const items = [await item(), await item(), await item(), await item(), await item()];
+    const generate = vi.fn(async () => ({ text: JSON.stringify({ verdict: 'UNSURE', evidence_quote: '', reason: 'x' }) }));
+    await Promise.all(items.map((i) => verifyItem({ prisma, item: i, generate, force: true, maxPerDay: 2 })));
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(await prisma.verifierCall.count()).toBe(2);
+  });
+
+  it('the verifier is shown the other posts of the outage the post was placed in', async () => {
+    const it0 = await item();
+    const other = await post({ text: 'Earlier report: cable fault at Fort Substation, crews dispatched' });
+    const o = await outage({ title: 'Fort fault', localityIds: ['l1'] });
+    await join(o.id, other);
+    await join(o.id, it0.postId);
+    await prisma.linkDecision.create({ data: { postId: it0.postId, faultIndex: 0, outcome: 'LINKED', outageId: o.id, reason: 'same node' } });
+    let seen = '';
+    await verifyItem({ prisma, item: it0, force: true, generate: async ({ parts }) => { seen = parts[0].text; return { text: JSON.stringify({ verdict: 'UNSURE', evidence_quote: '', reason: 'x' }) }; } });
+    expect(seen).toMatch(/OTHER POSTS IN THAT OUTAGE/);
+    expect(seen).toMatch(/cable fault at Fort Substation/);
   });
 
   it('respects its daily cap', async () => {

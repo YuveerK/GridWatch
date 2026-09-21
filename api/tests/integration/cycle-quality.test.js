@@ -14,7 +14,8 @@ vi.mock('../../src/modules/ai/gemini.client.js', () => ({
 }));
 
 const { createCycle, sweepStage } = await import('../../src/modules/processing/cycle.js');
-const { assessCycle } = await import('../../src/modules/processing/quality.js');
+const { assessCycle, beginCycleQuality, failCycleQuality, qualityStatus } = await import('../../src/modules/processing/quality.js');
+const { reviewStage } = await import('../../src/modules/processing/cycle.js');
 const { faultItems, processPending } = await import('../../src/modules/processing/processor.service.js');
 const { withLease, PIPELINE } = await import('../../src/modules/coordination/lease.js');
 const { resetLocalityIndex } = await import('../../src/modules/infrastructure/infrastructure.service.js');
@@ -51,6 +52,8 @@ const cycleWith = (ids, overrides = {}) =>
     },
     process: processPending,
     assess,
+    begin: ({ trigger, startedAt }) => beginCycleQuality({ prisma, trigger, startedAt }),
+    failRecord: (args) => failCycleQuality({ prisma, ...args }),
     ...overrides,
   });
 
@@ -121,10 +124,73 @@ describe('B1/B2: each cycle saves what it covered and whether it completed', () 
     expect(row.summary.error).toMatch(/reach X/);
   });
 
-  it('assessing can never break a cycle', async () => {
+  it('a failed assessment is an explicit outcome: the record is FAILED and the result says so', async () => {
     const cycle = cycleWith([], { assess: async () => { throw new Error('assessment down'); } });
     await cycle.runNow('manual');
+    const result = cycle.status().result;
     expect(cycle.status().state).toBe('done');
-    expect(cycle.status().result.quality).toBeNull();
+    expect(result.degraded).toBe(true);
+    expect(result.stageFailures).toContain('assess');
+    expect(result.quality).toMatchObject({ status: 'FAILED', error: 'assessment down' });
+    const row = await prisma.cycleQuality.findFirst();
+    expect(row.status).toBe('FAILED');
+    expect(row.summary).toMatchObject({ failedStage: 'assess' });
+  });
+
+  it('the cycle record exists from the start (RUNNING) and is completed in place', async () => {
+    let during;
+    const cycle = cycleWith([], { process: async () => { during = await prisma.cycleQuality.findMany(); return {}; } });
+    await cycle.runNow('manual');
+    expect(during).toHaveLength(1);
+    expect(during[0].status).toBe('RUNNING');
+    const rows = await prisma.cycleQuality.findMany();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(during[0].id);
+    expect(rows[0].status).toBe('COMPLETE');
+  });
+
+  it('a failed review pass makes the cycle INCOMPLETE, and its posts are looked at again next cycle', async () => {
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    const cycle = cycleWith([a], { review: async () => { throw new Error('review down'); } });
+    await cycle.runNow('manual');
+    expect(cycle.status().result.stageFailures).toEqual(['review']);
+    const row = await prisma.cycleQuality.findFirst();
+    expect(row.status).toBe('INCOMPLETE');
+    expect(row.summary.incomplete).toContain('review');
+    // next cycle covers nothing new, yet the earlier posts are reviewed and the old record is marked as retried
+    await reviewStage({ startedAt: new Date(), ingestionRunId: null }, prisma);
+    const after = await prisma.cycleQuality.findUnique({ where: { id: row.id } });
+    expect(after.summary.reviewRetriedAt).toBeTruthy();
+  });
+
+  it('an open real review item of a covered post makes the cycle NEEDS_REVIEW; a routine spot-check does not', async () => {
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    const startedAt = new Date(Date.now() - 60_000);
+    await processPending();
+    await prisma.reviewItem.create({ data: { postId: a, faultIndex: 0, priority: 1, sampled: true, reasons: [{ code: 'SAMPLE' }] } });
+    const routine = await assess({ trigger: 'manual', startedAt });
+    expect(routine.status).toBe('COMPLETE');
+    expect(routine.summary).toMatchObject({ reviewOpen: 0, reviewSampled: 1 });
+    await prisma.reviewItem.update({ where: { postId_faultIndex: { postId: a, faultIndex: 0 } }, data: { sampled: false, priority: 10, reasons: [{ code: 'KIND_CONFLICT' }] } });
+    const real = await assess({ trigger: 'manual', startedAt });
+    expect(real.status).toBe('NEEDS_REVIEW');
+    expect(real.summary.reviewOpen).toBe(1);
+  });
+
+  it('the public status shows how old the result is, a running or stuck cycle, and open concerns', async () => {
+    const now = new Date('2026-09-22T12:00:00Z');
+    expect((await qualityStatus(prisma, { now })).status).toBe('UNKNOWN');
+    const mk = (status, minsAgo, extra = {}) => prisma.cycleQuality.create({ data: { trigger: 'scheduler', status, startedAt: new Date(+now - (minsAgo + 1) * 60_000), finishedAt: new Date(+now - minsAgo * 60_000), summary: {}, problems: [], posts: [], changedOutageIds: [], ...extra } });
+    await mk('COMPLETE', 10);
+    expect(await qualityStatus(prisma, { now })).toMatchObject({ status: 'COMPLETE', lastCycle: { ageMinutes: 10 }, currentCycle: null });
+    await prisma.cycleQuality.deleteMany();
+    await mk('COMPLETE', 400);
+    expect((await qualityStatus(prisma, { now })).status).toBe('STALE'); // an old clean result is not a current one
+    await prisma.cycleQuality.deleteMany();
+    await mk('COMPLETE', 100);
+    await mk('RUNNING', 0, { startedAt: new Date(+now - 90 * 60_000), finishedAt: new Date(+now - 90 * 60_000) });
+    const s = await qualityStatus(prisma, { now });
+    expect(s.currentCycle).toMatchObject({ stuck: true });
+    expect(s.status).toBe('STALE');
   });
 });

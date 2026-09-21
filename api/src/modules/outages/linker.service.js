@@ -394,7 +394,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
       if (isTransientAiError(err)) {
         await prisma.retryAttempt.upsert({
           where: { postId_faultIndex_kind: { postId: post.id, faultIndex: post.faultIndex, kind: 'TIEBREAK' } },
-          create: { postId: post.id, faultIndex: post.faultIndex, kind: 'TIEBREAK', attempts: 1, lastError: String(err.message).slice(0, 300), nextRetryAt: nextRetryAt(1) },
+          create: { postId: post.id, faultIndex: post.faultIndex, kind: 'TIEBREAK', attempts: 0, lastError: String(err.message).slice(0, 300), nextRetryAt: nextRetryAt(0) },
           update: { lastError: String(err.message).slice(0, 300) },
         });
       }

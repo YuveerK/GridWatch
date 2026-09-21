@@ -5,7 +5,7 @@ import { extractPost, faultLayout } from '../ai/extraction.service.js';
 import { LeaseLostError, assertLeaseInTx, exclusive, recoverStaleWork } from '../coordination/lease.js';
 import { learnFromExtraction, removeContributions } from '../infrastructure/infrastructure.service.js';
 import { readingRevision } from '../../lib/reading-revision.js';
-import { GAVE_UP_AT, MAX_RETRY_ATTEMPTS, nextRetryAt } from '../../lib/retry.js';
+import { MAX_RETRY_ATTEMPTS, nextRetryAt } from '../../lib/retry.js';
 import { linkPost, recordDecision } from '../outages/linker.service.js';
 import { refoldOutage } from '../outages/outage-state.js';
 import { markRestoredPlaces } from '../../lib/restored-places.js';
@@ -204,9 +204,9 @@ export async function retryTieBreaks({ ctx, now = new Date(), limit = 5 } = {}) 
   let fixed = 0;
   let gaveUp = 0;
   for (const r of due) {
-    const attempts = r.attempts + 1;
+    const attempts = r.attempts + 1; // automatic retries made, counting this one (the queued failure is attempts 0)
     // count this try (and when the next is due) BEFORE making it, so a crash or a non-transient failure cannot make it repeat every cycle
-    await prisma.retryAttempt.update({ where: { postId_faultIndex_kind: { postId: r.postId, faultIndex: r.faultIndex, kind: r.kind } }, data: { attempts, nextRetryAt: attempts >= MAX_RETRY_ATTEMPTS ? GAVE_UP_AT : nextRetryAt(attempts, now) } });
+    await prisma.retryAttempt.update({ where: { postId_faultIndex_kind: { postId: r.postId, faultIndex: r.faultIndex, kind: r.kind } }, data: { attempts, nextRetryAt: nextRetryAt(attempts, now) } });
     await reprocessPost(r.postId, { ctx });
     const d = await prisma.linkDecision.findUnique({ where: { postId_faultIndex: { postId: r.postId, faultIndex: r.faultIndex } }, select: { outcome: true, reason: true } });
     if (!d || d.outcome !== 'NEEDS_REVIEW') {

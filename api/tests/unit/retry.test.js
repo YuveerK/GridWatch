@@ -29,8 +29,8 @@ describe('the wait before the next automatic try', () => {
   it('grows: 5 min, 15 min, 45 min, 2 h, 6 h', () => {
     const now = new Date('2026-09-22T10:00:00Z');
     expect(RETRY_BACKOFF_MINUTES).toEqual([5, 15, 45, 120, 360]);
-    expect(nextRetryAt(1, now).toISOString()).toBe('2026-09-22T10:05:00.000Z');
-    expect(nextRetryAt(3, now).toISOString()).toBe('2026-09-22T10:45:00.000Z');
-    expect(nextRetryAt(5, now).toISOString()).toBe('2026-09-22T16:00:00.000Z');
+    // nextRetryAt(retriesDone): 0 = the failure has just been queued
+    expect([0, 1, 2, 3, 4].map((n) => (+nextRetryAt(n, now) - +now) / 60_000)).toEqual([5, 15, 45, 120, 360]);
+    expect(nextRetryAt(5, now).getUTCFullYear()).toBe(9999); // after the fifth retry nothing is due again
   });
 });

@@ -9,7 +9,10 @@ process.env.TIEBREAK_CACHE_FILE = join(mkdtempSync(join(tmpdir(), 'gw-tiebreak-'
 const readings = new Map();
 vi.mock('../../src/modules/ai/extraction.service.js', async (orig) => ({
   ...(await orig()),
-  extractPost: async (postId) => readings.get(postId) ?? { status: 'FAILED', result: null },
+  extractPost: async (postId) => {
+    await globalThis.__gate?.(postId); // a test can hold a read open to make two workers overlap for certain
+    return readings.get(postId) ?? { status: 'FAILED', result: null };
+  },
 }));
 // The tie-break "model": always says the first (best-scored) candidate is the same fault. Counts its calls.
 process.env.TIEBREAK_RETRY_DELAYS_MS = '1,1'; // the in-call retries of a temporary failure wait milliseconds in tests
@@ -78,10 +81,29 @@ describe('A04: the decision commits with the change', () => {
     expect(await prisma.outagePost.count()).toBe(0);
   });
 
-  it('the same post processed twice at once gives one outage, one decision and one evidence contribution', async () => {
+  it('the same post processed while another worker is mid-way is refused (BUSY), leaving one outage, decision and contribution', async () => {
     const id = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
-    const results = await Promise.all([processPost(id), processPost(id)]);
-    expect(results.filter((r) => r.outcome === 'BUSY')).toHaveLength(1);
+    let entered;
+    const inside = new Promise((r) => (entered = r));
+    let release;
+    const hold = new Promise((r) => (release = r));
+    globalThis.__gate = async () => { entered(); await hold; };
+    const first = processPost(id);
+    await inside; // the first worker is now certainly inside, holding the lease
+    globalThis.__gate = undefined;
+    const second = await processPost(id);
+    expect(second.outcome).toBe('BUSY');
+    release();
+    expect((await first).outcome).not.toBe('BUSY');
+    expect(await outages()).toHaveLength(1);
+    expect(await prisma.linkDecision.count()).toBe(1);
+    expect((await prisma.infraNode.findFirst({ where: { name: { contains: 'Alpha' } } })).evidenceCount).toBe(1);
+  });
+
+  it('the same post processed twice one after the other adds nothing the second time', async () => {
+    const id = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    await processPost(id);
+    await processPost(id);
     expect(await outages()).toHaveLength(1);
     expect(await prisma.linkDecision.count()).toBe(1);
     expect((await prisma.infraNode.findFirst({ where: { name: { contains: 'Alpha' } } })).evidenceCount).toBe(1);
@@ -617,7 +639,7 @@ describe('B3: a temporary tie-break failure is retried by itself, real ambiguity
     expect((await prisma.linkDecision.findFirst({ where: { postId: b } })).outcome).toBe('NEEDS_REVIEW');
     expect((await prisma.sourcePost.findUnique({ where: { id: b } })).processingStatus).toBe('NEEDS_REVIEW');
     const queued = await prisma.retryAttempt.findFirst({ where: { postId: b } });
-    expect(queued).toMatchObject({ kind: 'TIEBREAK', attempts: 1 });
+    expect(queued).toMatchObject({ kind: 'TIEBREAK', attempts: 0 }); // no automatic retry made yet
     expect(queued.lastError).toMatch(/503/);
 
     expect(await retryTieBreaks({ now: new Date() })).toEqual({ tried: 0, fixed: 0, gaveUp: 0 }); // not due yet
@@ -630,21 +652,32 @@ describe('B3: a temporary tie-break failure is retried by itself, real ambiguity
     expect(await outages()).toHaveLength(1);
   });
 
-  it('keeps failing: attempts grow with longer waits, and after the last try it is left for a person and never retried again', async () => {
+  it('keeps failing: five retries at 5, 15, 45, 120 and 360 minutes, then it is left for a person and never retried again', async () => {
     const { retryTieBreaks } = await import('../../src/modules/processing/processor.service.js');
     tieBreaks.fail = '503 Service Unavailable';
     const b = await setup('Norwick');
     await processPending();
-    let clock = 10;
-    for (let i = 0; i < 4; i++) {
-      const r = await retryTieBreaks({ now: later(clock) });
-      expect(r.tried).toBe(1);
-      clock += 24 * 60; // long enough that the next try is always due
+    const row = () => prisma.retryAttempt.findFirst({ where: { postId: b } });
+    const gaps = [5, 15, 45, 120, 360];
+    let due = (await row()).nextRetryAt;
+    const failedAt = due;
+    expect(Math.round((+due - Date.now()) / 60_000)).toBe(5); // first retry: 5 minutes after the failure
+    for (let i = 0; i < 5; i++) {
+      expect(await retryTieBreaks({ now: new Date(+due - 1000) })).toEqual({ tried: 0, fixed: 0, gaveUp: 0 }); // one second early: not due
+      const r = await retryTieBreaks({ now: due });
+      expect(r).toMatchObject({ tried: 1, fixed: 0 });
+      const now = await row();
+      expect(now.attempts).toBe(i + 1);
+      if (i < 4) {
+        expect((+now.nextRetryAt - +due) / 60_000).toBe(gaps[i + 1]); // the wait after retry i+1
+        due = now.nextRetryAt;
+      } else {
+        expect(r.gaveUp).toBe(1);
+        expect(now.nextRetryAt.getUTCFullYear()).toBe(9999); // gave up: nothing is ever due again
+      }
     }
-    const row = await prisma.retryAttempt.findFirst({ where: { postId: b } });
-    expect(row.attempts).toBe(5);
-    expect(row.nextRetryAt.getUTCFullYear()).toBe(9999); // gave up: nothing is ever due again
-    expect(await retryTieBreaks({ now: later(clock + 1_000_000) })).toEqual({ tried: 0, fixed: 0, gaveUp: 0 });
+    expect(+failedAt).toBeGreaterThan(0);
+    expect(await retryTieBreaks({ now: new Date(+due + 10_000_000_000) })).toEqual({ tried: 0, fixed: 0, gaveUp: 0 });
     expect((await prisma.linkDecision.findFirst({ where: { postId: b } })).outcome).toBe('NEEDS_REVIEW'); // still waiting for a person
   });
 
@@ -723,6 +756,37 @@ describe('B6: a repair can be undone', () => {
     const ghost = { name: 'pipeline', owner: 'expired-owner', lost: false, assertHeld() {} };
     await expect(restoreSnapshot({ prisma, snapshot: snap, ctx: ghost })).rejects.toThrow(/lease/i);
     expect(await state()).toEqual(before);
+  });
+
+  it('undo keeps what a newer post taught the graph (counters are corrected by difference, not overwritten)', async () => {
+    const { snapshotForPosts, restoreSnapshot } = await load();
+    await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    const b = await addPost(10, 'Alpha crew', reading('UPDATE', 'CREW_ON_SITE', ['Alpha']));
+    await processPending();
+    const snap = await snapshotForPosts(prisma, [b]);
+    await reprocessPost(b);
+    await addPost(20, 'Alpha more news', reading('UPDATE', 'CREW_ON_SITE', ['Alpha'])); // arrives after the snapshot
+    await processPending();
+    const node = () => prisma.infraNode.findFirst({ where: { normalizedKey: 'alpha' } });
+    expect((await node()).evidenceCount).toBe(3);
+    await restoreSnapshot({ prisma, snapshot: snap });
+    const n = await node();
+    expect(n.evidenceCount).toBe(3);
+    expect(await prisma.evidenceContribution.count({ where: { kind: 'NODE', refA: n.id } })).toBe(3);
+  });
+
+  it('undoing twice changes nothing the second time', async () => {
+    const { snapshotForPosts, restoreSnapshot } = await load();
+    await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    const b = await addPost(10, 'Alpha crew', reading('UPDATE', 'CREW_ON_SITE', ['Alpha']));
+    await processPending();
+    const snap = await snapshotForPosts(prisma, [b]);
+    await reprocessPost(b);
+    await restoreSnapshot({ prisma, snapshot: snap });
+    const once = await state();
+    const second = await restoreSnapshot({ prisma, snapshot: snap });
+    expect(second.alreadyRestored).toBe(true);
+    expect(await state()).toEqual(once);
   });
 
   it('describes what a repair changed, post by post', async () => {

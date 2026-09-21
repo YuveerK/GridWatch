@@ -6,7 +6,7 @@ import { sweepStaleOutages } from '../outages/linker.service.js';
 import { placeLocalities } from '../geo/geocode.service.js';
 import { withLease, PIPELINE } from '../coordination/lease.js';
 import { faultItems, processPending, retryImageFailures, retryTieBreaks } from './processor.service.js';
-import { assessCycle, coveredPostIds } from './quality.js';
+import { assessCycle, beginCycleQuality, coveredPostIds, failCycleQuality } from './quality.js';
 import { runReview } from '../review/review.service.js';
 
 function friendly(err) {
@@ -22,7 +22,7 @@ function friendly(err) {
  * Single-flight (never two at once), with a cooldown on manual runs and a cap on posts read per run, because
  * every run spends money at X and at the AI provider. Dependencies are injected so it can be tested without either.
  */
-export function createCycle({ ingest, process, retry, review, sweep, place, counts, assess, lease = async (fn) => ({ acquired: true, value: await fn(undefined) }), now = () => Date.now(), cooldownMs = 90_000, maxPosts = 200 }) {
+export function createCycle({ ingest, process, retry, review, sweep, place, counts, assess, begin, failRecord, lease = async (fn) => ({ acquired: true, value: await fn(undefined) }), now = () => Date.now(), cooldownMs = 90_000, maxPosts = 200 }) {
   let state = { state: 'idle', trigger: null, step: null, startedAt: null, finishedAt: null, progress: null, found: null, result: null, error: null };
   let lastManualAt = 0;
   let current = Promise.resolve();
@@ -32,6 +32,16 @@ export function createCycle({ ingest, process, retry, review, sweep, place, coun
   async function work(ctx) {
     const before = await counts();
     const cycleStart = new Date(now());
+    // the cycle's quality record exists from the moment it starts (RUNNING): a cycle that dies still leaves a visible trace
+    const stageFailures = [];
+    let qualityId = null;
+    try {
+      qualityId = (await begin?.({ trigger: state.trigger, startedAt: cycleStart }))?.id ?? null;
+      state.qualityId = qualityId;
+    } catch (err) {
+      stageFailures.push('record');
+      logger.warn({ err: err?.message }, 'could not create the cycle record');
+    }
     const ing = await ingest({ ctx });
     if (ing?.skipped) throw Object.assign(new Error('Another fetch is already in progress.'), { spent: false });
     const fetched = (ing?.postsFetched ?? 0) > 0;
@@ -62,10 +72,13 @@ export function createCycle({ ingest, process, retry, review, sweep, place, coun
     }
     // suspicious changes are queued for a person (and, if switched on, the independent check); this never changes an outage
     let reviewed = { flagged: 0, opened: 0, verified: 0 };
+    let reviewFailed = false;
     try {
       reviewed = (await review?.({ startedAt: cycleStart, ingestionRunId: ing?.runId ?? null })) ?? reviewed;
     } catch (err) {
-      logger.warn({ err: err?.message }, 'the review pass failed; it will look again next run');
+      reviewFailed = true; // required stage: reported, and its posts are looked at again next cycle
+      stageFailures.push('review');
+      logger.warn({ err: err?.message }, 'the review pass failed; its posts are looked at again next run');
     }
     state.step = 'tidying';
     // pin any suburbs learned from these posts on the map; capped and failure-proof, it can never hold up or break a fetch
@@ -77,7 +90,7 @@ export function createCycle({ ingest, process, retry, review, sweep, place, coun
       logger.warn({ err: err?.message }, 'placing new suburbs on the map failed; will retry next fetch');
     }
     // a required stage that did not run is reported, never passed over as success
-    const incomplete = [];
+    const incomplete = [...stageFailures];
     const swept = await sweep({ ctx });
     if (swept?.skipped) {
       incomplete.push('sweep');
@@ -85,11 +98,20 @@ export function createCycle({ ingest, process, retry, review, sweep, place, coun
     }
     const after = await counts();
     // The saved quality result: the deterministic checks over exactly the posts this cycle covered. Assessing can never break a cycle.
+    // If assessing itself fails that is an explicit outcome: the record is closed FAILED (if the database allows) and the result says so.
     let quality = null;
     try {
-      quality = await assess?.({ trigger: state.trigger, startedAt: cycleStart, ingestionRunId: ing?.runId ?? null, ingestion: ing, tally: proc?.tally ?? {}, backlog: proc?.remaining ?? 0, incomplete });
+      quality = await assess?.({ trigger: state.trigger, startedAt: cycleStart, qualityId, ingestionRunId: ing?.runId ?? null, ingestion: ing, tally: proc?.tally ?? {}, backlog: proc?.remaining ?? 0, incomplete });
     } catch (err) {
+      stageFailures.push('assess');
       logger.warn({ err: err?.message }, 'could not assess the quality of this cycle');
+      let closed = null;
+      try {
+        closed = await failRecord?.({ qualityId, error: err?.message ?? 'failed', stage: 'assess' });
+      } catch (e) {
+        logger.warn({ err: e?.message }, 'could not close the cycle record either');
+      }
+      quality = { id: closed?.id ?? qualityId, status: 'FAILED', problems: [], error: String(err?.message ?? err).slice(0, 200) };
     }
     const tally = proc?.tally ?? {};
     const failed = (tally.ERROR ?? 0) + (tally.FAILED ?? 0); // could not be processed; retried on the next run
@@ -111,21 +133,23 @@ export function createCycle({ ingest, process, retry, review, sweep, place, coun
       placed,
       retriedPictures: retried.tried,
       incomplete,
+      stageFailures,
+      degraded: stageFailures.length > 0,
       reviewOpened: reviewed.opened,
-      quality: quality ? { id: quality.id, status: quality.status, problems: quality.problems.length } : null,
+      quality: quality ? { id: quality.id, status: quality.status, problems: quality.problems.length, ...(quality.error ? { error: quality.error } : {}) } : null,
     };
   }
 
   async function run(trigger) {
     state = { state: 'running', trigger, step: 'fetching', startedAt: now(), finishedAt: null, progress: null, found: null, result: null, error: null };
     try {
-      const outcome = await lease(work);
+      const outcome = await lease((ctx) => work(ctx));
       if (!outcome.acquired) throw Object.assign(new Error('Another fetch is already in progress.'), { spent: false });
       state = { ...state, state: 'done', step: null, finishedAt: now(), result: outcome.value };
     } catch (err) {
       logger.error({ err: err?.message, trigger }, 'refresh cycle failed');
       try {
-        await assess?.({ trigger, startedAt: new Date(state.startedAt ?? now()), error: err?.message ?? 'failed' });
+        await assess?.({ trigger, startedAt: new Date(state.startedAt ?? now()), qualityId: state.qualityId ?? null, error: err?.message ?? 'failed' });
       } catch (e) {
         logger.warn({ err: e?.message }, 'could not record the failed cycle');
       }
@@ -162,6 +186,19 @@ export function createCycle({ ingest, process, retry, review, sweep, place, coun
 /** The cleanup stage of a refresh: it runs under the refresh's own lease (its signature is (now, { ctx }), not ({ ctx })). */
 export const sweepStage = ({ ctx } = {}) => sweepStaleOutages(new Date(), { ctx });
 
+/**
+ * The review stage. Besides this cycle's posts it re-covers the posts of any earlier cycle whose review pass failed (its record says
+ * 'review' was incomplete and not yet retried), so a skipped pass is never lost.
+ */
+export async function reviewStage({ startedAt, ingestionRunId }, db = prisma) {
+  const pending = (await db.cycleQuality.findMany({ where: { status: { in: ['INCOMPLETE', 'FAILED'] } }, orderBy: { finishedAt: 'desc' }, take: 20, select: { id: true, summary: true, posts: true } })).filter((r) => r.summary?.incomplete?.includes('review') && !r.summary?.reviewRetriedAt);
+  const carried = pending.flatMap((r) => (Array.isArray(r.posts) ? r.posts.map((p) => p.postId) : []));
+  const covered = await coveredPostIds(db, { startedAt, ingestionRunId });
+  const out = await runReview({ prisma: db, postIds: [...new Set([...covered, ...carried])] });
+  for (const r of pending) await db.cycleQuality.update({ where: { id: r.id }, data: { summary: { ...r.summary, reviewRetriedAt: new Date().toISOString() } } });
+  return out;
+}
+
 export const cycle = createCycle({
   ingest: ingestNewPosts,
   process: processPending,
@@ -170,7 +207,9 @@ export const cycle = createCycle({
     const tieBreaks = await retryTieBreaks({ ctx });
     return { tried: pictures.tried + tieBreaks.tried, fixed: pictures.fixed + tieBreaks.fixed, pictures, tieBreaks };
   },
-  review: async ({ startedAt, ingestionRunId }) => runReview({ prisma, postIds: await coveredPostIds(prisma, { startedAt, ingestionRunId }) }),
+  review: reviewStage,
+  begin: ({ trigger, startedAt }) => beginCycleQuality({ prisma, trigger, startedAt }),
+  failRecord: (args) => failCycleQuality({ prisma, ...args }),
   assess: (args) => assessCycle({ prisma, faultItems, promptVersion: env.AI_PROMPT_VERSION, ...args }),
   lease: (fn) => withLease(PIPELINE, fn),
   sweep: sweepStage,

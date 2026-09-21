@@ -15,19 +15,27 @@ export function checkPostDispositions({ expectedIndices, decisions, outagePosts 
   const excluded = [];
   const byIndex = new Map();
   for (const d of decisions) byIndex.set(d.faultIndex, [...(byIndex.get(d.faultIndex) ?? []), d]);
+  const entriesBy = new Map();
+  for (const p of outagePosts) entriesBy.set(p.faultIndex, [...(entriesBy.get(p.faultIndex) ?? []), p]);
   for (const i of expectedIndices) {
     const ds = byIndex.get(i) ?? [];
+    const entries = entriesBy.get(i) ?? [];
     if (ds.length === 0) problems.push(`fault ${i} has no disposition`);
     else if (ds.length > 1) problems.push(`fault ${i} has ${ds.length} dispositions`);
     for (const d of ds) {
-      if (d.outcome === 'LINKED') {
-        if (!outagePosts.some((p) => p.faultIndex === i && p.outageId === d.outageId)) problems.push(`fault ${i} says linked but has no timeline entry`);
-      } else if (d.outcome === 'NEW' && !d.outageId && !outagePosts.some((p) => p.faultIndex === i)) {
-        // no outage was created or joined: fine for notices and summaries, but it must be visible, with its reason
+      if (d.outcome === 'NEEDS_REVIEW') problems.push(`fault ${i} needs review: ${d.reason ?? ''}`.trim());
+      else if (d.outageId) {
+        // LINKED, or NEW with an outage: exactly one timeline entry for this fault, and it must be in the outage the decision names
+        if (entries.length === 0) problems.push(`fault ${i} says ${d.outcome === 'LINKED' ? 'linked' : 'a new outage was opened'} but has no timeline entry`);
+        else if (entries.length > 1) problems.push(`fault ${i} has ${entries.length} timeline entries (one expected)`);
+        else if (entries[0].outageId !== d.outageId) problems.push(`fault ${i} was decided for one outage but its timeline entry is in another`);
+      } else if (d.outcome === 'NEW') {
+        // an explicit exclusion (notice, summary): no outage, so no timeline entry; it must be visible with its reason
         excluded.push({ faultIndex: i, reason: d.reason ?? 'no reason recorded' });
         if (!d.reason) problems.push(`fault ${i} was left out with no reason`);
-      } else if (d.outcome === 'NEEDS_REVIEW') {
-        problems.push(`fault ${i} needs review: ${d.reason ?? ''}`.trim());
+        if (entries.length) problems.push(`fault ${i} was left out of every outage but has ${entries.length} timeline ${entries.length === 1 ? 'entry' : 'entries'}`);
+      } else {
+        problems.push(`fault ${i} has an unrecognised disposition (${d.outcome})`);
       }
     }
   }
@@ -76,13 +84,13 @@ export async function latestNonemptyRuns(prisma, n = 1) {
  * The verdict on a cycle, from what happened. Pure.
  *   FAILED        the cycle itself threw
  *   INCOMPLETE    work is missing: a stage was skipped, posts are still waiting, the fetch did not finish, or work is stuck
- *   NEEDS_REVIEW  the work ran, but some result needs a person (a check failed, a post or fault awaits review)
+ *   NEEDS_REVIEW  the work ran, but some result needs a person (a check failed, a post awaits review, or an open review item of a covered post)
  *   COMPLETE      everything that should have happened did, and every check passed
  */
-export function decideStatus({ error = null, incomplete = [], backlog = 0, ingestionIncomplete = false, stuck = 0, problems = 0, needsReview = 0 }) {
+export function decideStatus({ error = null, incomplete = [], backlog = 0, ingestionIncomplete = false, stuck = 0, problems = 0, needsReview = 0, reviewOpen = 0 }) {
   if (error) return 'FAILED';
   if (incomplete.length || backlog > 0 || ingestionIncomplete || stuck > 0) return 'INCOMPLETE';
-  if (problems > 0 || needsReview > 0) return 'NEEDS_REVIEW';
+  if (problems > 0 || needsReview > 0 || reviewOpen > 0) return 'NEEDS_REVIEW';
   return 'COMPLETE';
 }
 
@@ -98,7 +106,22 @@ export async function coveredPostIds(prisma, { startedAt, ingestionRunId = null 
   return [...new Set([...runPostIds, ...worked.map((p) => p.id)])];
 }
 
-export async function assessCycle({ prisma, faultItems, promptVersion, trigger, startedAt, ingestionRunId = null, ingestion = null, tally = {}, backlog = 0, incomplete = [], error = null, now = new Date() }) {
+/** Create the cycle's record as it STARTS (status RUNNING); assessCycle completes it. A cycle that dies leaves a visible RUNNING record. */
+export async function beginCycleQuality({ prisma, trigger, startedAt }) {
+  const row = await prisma.cycleQuality.create({ data: { trigger, status: 'RUNNING', startedAt, finishedAt: startedAt, summary: {}, problems: [], posts: [], changedOutageIds: [] } });
+  return { id: row.id };
+}
+
+/** Close a cycle's record as FAILED because a required stage did not complete (best effort: the caller reports it either way). */
+export async function failCycleQuality({ prisma, qualityId, error, stage, now = new Date() }) {
+  if (!qualityId) return null;
+  const row = await prisma.cycleQuality.findUnique({ where: { id: qualityId }, select: { summary: true } });
+  const summary = { ...(row?.summary ?? {}), failedStage: stage, error: String(error).slice(0, 300) };
+  await prisma.cycleQuality.update({ where: { id: qualityId }, data: { status: 'FAILED', finishedAt: now, summary } });
+  return { id: qualityId, status: 'FAILED', summary, problems: [] };
+}
+
+export async function assessCycle({ prisma, faultItems, promptVersion, trigger, startedAt, qualityId = null, ingestionRunId = null, ingestion = null, tally = {}, backlog = 0, incomplete = [], error = null, now = new Date() }) {
   const problems = [];
   const coveredIds = await coveredPostIds(prisma, { startedAt, ingestionRunId });
 
@@ -125,8 +148,9 @@ export async function assessCycle({ prisma, faultItems, promptVersion, trigger, 
     expectedFaults += expectedIndices.length;
     disposed += expectedIndices.filter((i) => x.linkDecisions.some((d) => d.faultIndex === i)).length;
     for (const p of verdict.problems) problems.push({ kind: 'DISPOSITION', postId: x.id, externalId: x.externalId, message: p });
-    const linkable = e?.result && ['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE'].includes(e.result.relevance);
-    if (linkable) for (const d of verdict.excluded) problems.push({ kind: 'FAULT_LEFT_OUT', postId: x.id, externalId: x.externalId, message: `fault ${d.faultIndex} produced no outage (${d.reason})` });
+    // judged per fault: a mixed SDC summary can hold linkable faults even when the post as a whole is not an outage post
+    const relevanceOf = new Map(items.map((i) => [i.faultIndex, i.extraction.relevance]));
+    for (const d of verdict.excluded) if (['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE'].includes(relevanceOf.get(d.faultIndex))) problems.push({ kind: 'FAULT_LEFT_OUT', postId: x.id, externalId: x.externalId, message: `fault ${d.faultIndex} produced no outage (${d.reason})` });
     if (e?.result) for (const op of x.outagePosts) if (effectReadingMismatch(op.effect, e.result)) problems.push({ kind: 'STALE_EFFECT', postId: x.id, externalId: x.externalId, message: `the outage entry for fault ${op.faultIndex} was built from a different reading than the current one` });
     if (['NEEDS_REVIEW', 'PROCESSING_ERROR', 'UNPROCESSED'].includes(x.processingStatus)) problems.push({ kind: 'POST_STATE', postId: x.id, externalId: x.externalId, message: `the post is ${x.processingStatus}` });
     posts.push({
@@ -146,15 +170,47 @@ export async function assessCycle({ prisma, faultItems, promptVersion, trigger, 
 
   const stuck = stuckProcessing(await prisma.sourcePost.findMany({ where: { processingStatus: 'PROCESSING' }, select: { processingStatus: true, processingStartedAt: true } }), now.getTime());
   const needsReview = rows.filter((x) => x.processingStatus === 'NEEDS_REVIEW').length;
+  // unresolved review items of the covered posts: real concerns count against the verdict; routine spot-checks (sampled) are only counted
+  const openItems = await prisma.reviewItem.findMany({ where: { postId: { in: coveredIds }, status: 'OPEN' }, select: { sampled: true } });
+  const reviewOpen = openItems.filter((i) => !i.sampled).length;
+  const reviewSampled = openItems.length - reviewOpen;
   const ingestionIncomplete = Boolean(ingestion?.incomplete) || ingestion?.status === 'RATE_LIMITED' || ingestion?.status === 'FAILED';
-  const status = decideStatus({ error, incomplete, backlog, ingestionIncomplete, stuck: stuck.length, problems: problems.length, needsReview });
+  const status = decideStatus({ error, incomplete, backlog, ingestionIncomplete, stuck: stuck.length, problems: problems.length, needsReview, reviewOpen });
   const summary = {
     posts: rows.length, expectedFaults, faultsWithDisposition: disposed, outagesChanged: changedOutageIds.length,
-    problems: problems.length, needsReview, backlog, stuck: stuck.length, incomplete, ingestionIncomplete,
+    problems: problems.length, needsReview, reviewOpen, reviewSampled, backlog, stuck: stuck.length, incomplete, ingestionIncomplete,
     tally, ...(error ? { error: String(error).slice(0, 300) } : {}),
   };
-  const saved = await prisma.cycleQuality.create({
-    data: { trigger, status, startedAt, finishedAt: now, ingestionRunId, summary, problems: problems.slice(0, 200), posts, changedOutageIds },
-  });
+  const data = { trigger, status, startedAt, finishedAt: now, ingestionRunId, summary, problems: problems.slice(0, 200), posts, changedOutageIds };
+  const saved = qualityId ? await prisma.cycleQuality.update({ where: { id: qualityId }, data }) : await prisma.cycleQuality.create({ data });
   return { id: saved.id, status, summary, problems };
+}
+
+/**
+ * What the public status endpoint says. Not just the last saved verdict: how OLD it is, whether a cycle is running now (or died mid-way),
+ * and how many concerns are still unresolved, so a stale or unreviewed result can never read as "all clear".
+ *   verdict: UNKNOWN (nothing recorded) | STALE (no recent finished cycle, or the current one is stuck) | the last cycle's verdict,
+ *   raised to NEEDS_REVIEW while real (non-sampled) review items are open.
+ */
+export async function qualityStatus(prisma, { now = new Date(), staleAfterMinutes = 180, stuckAfterMinutes = 60 } = {}) {
+  const [latest, running, open] = await Promise.all([
+    prisma.cycleQuality.findFirst({ where: { status: { not: 'RUNNING' } }, orderBy: { finishedAt: 'desc' }, select: { id: true, status: true, startedAt: true, finishedAt: true, summary: true } }),
+    prisma.cycleQuality.findFirst({ where: { status: 'RUNNING' }, orderBy: { startedAt: 'desc' }, select: { id: true, startedAt: true } }),
+    prisma.reviewItem.findMany({ where: { status: 'OPEN' }, select: { sampled: true } }),
+  ]);
+  const minutes = (d) => Math.round((now.getTime() - new Date(d).getTime()) / 60_000);
+  const openConcerns = open.filter((i) => !i.sampled).length;
+  const currentStuck = running && minutes(running.startedAt) > stuckAfterMinutes;
+  const newerRunning = running && (!latest || running.startedAt > latest.startedAt);
+  let verdict;
+  if (!latest) verdict = 'UNKNOWN';
+  else if (minutes(latest.finishedAt) > staleAfterMinutes || (newerRunning && currentStuck)) verdict = 'STALE';
+  else verdict = latest.status;
+  if (verdict === 'COMPLETE' && openConcerns > 0) verdict = 'NEEDS_REVIEW';
+  return {
+    status: verdict,
+    lastCycle: latest ? { id: latest.id, status: latest.status, finishedAt: latest.finishedAt, ageMinutes: minutes(latest.finishedAt), posts: latest.summary?.posts ?? 0, problems: latest.summary?.problems ?? 0 } : null,
+    currentCycle: newerRunning ? { id: running.id, startedAt: running.startedAt, runningMinutes: minutes(running.startedAt), stuck: currentStuck } : null,
+    review: { open: openConcerns, sampled: open.length - openConcerns },
+  };
 }

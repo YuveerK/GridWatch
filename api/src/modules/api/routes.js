@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { ingestNewPosts } from '../ingestion/ingestion.service.js';
 import { env } from '../../config/env.js';
 import { cycle } from '../processing/cycle.js';
+import { qualityStatus } from '../processing/quality.js';
 import { scheduleState } from '../processing/schedule-state.js';
 import { processPending, reprocessPost } from '../processing/processor.service.js';
 import { authorize, checkToken, isSameOrigin, allowedOrigins, loginAllowed, recordLoginFailure, requireOperator, resetLoginFailures, sessionCookie } from './operator-auth.js';
@@ -626,11 +627,11 @@ router.post('/admin/reprocess/:postId', wrap(async (req, res) => {
 }));
 // the saved quality result of each cycle (operator only: it names posts, faults and outages)
 router.get('/admin/quality/latest', wrap(async (_req, res) => {
-  const row = await prisma.cycleQuality.findFirst({ orderBy: { finishedAt: 'desc' } });
+  const row = await prisma.cycleQuality.findFirst({ where: { status: { not: 'RUNNING' } }, orderBy: { finishedAt: 'desc' } });
   res.json({ data: row });
 }));
 router.get('/admin/quality', wrap(async (req, res) => {
-  const q = parse(z.object({ limit: intParam(1, 100, 20), status: z.enum(['COMPLETE', 'INCOMPLETE', 'NEEDS_REVIEW', 'FAILED']).optional() }), req.query, res);
+  const q = parse(z.object({ limit: intParam(1, 100, 20), status: z.enum(['RUNNING', 'COMPLETE', 'INCOMPLETE', 'NEEDS_REVIEW', 'FAILED']).optional() }), req.query, res);
   if (!q) return;
   const rows = await prisma.cycleQuality.findMany({ where: q.status ? { status: q.status } : {}, orderBy: { finishedAt: 'desc' }, take: q.limit, select: { id: true, trigger: true, status: true, startedAt: true, finishedAt: true, summary: true } });
   res.json({ data: rows });
@@ -688,10 +689,9 @@ router.get('/v1/posts', wrap(async (req, res) => {
   res.json(await listPosts({ from: q.from ?? null, to: q.to ?? null, type: q.type ?? null, q: q.q || null, limit: q.limit, offset: q.offset }));
 }));
 
-/** Did the last processing cycle complete, in one word (no post or outage details: those are operator-only). */
+/** Is the tracker's own checking healthy, in a few fields (no post or outage details: those are operator-only). Includes how old the result is. */
 router.get('/v1/quality/status', wrap(async (_req, res) => {
-  const row = await prisma.cycleQuality.findFirst({ orderBy: { finishedAt: 'desc' }, select: { status: true, finishedAt: true, summary: true } });
-  res.json({ data: row ? { status: row.status, finishedAt: row.finishedAt, posts: row.summary?.posts ?? 0, problems: row.summary?.problems ?? 0 } : null });
+  res.json({ data: await qualityStatus(prisma) });
 }));
 
 router.get('/v1/insights', wrap(async (req, res) => {
