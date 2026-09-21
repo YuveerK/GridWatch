@@ -5,6 +5,7 @@ import { extractPost, faultLayout } from '../ai/extraction.service.js';
 import { LeaseLostError, assertLeaseInTx, exclusive, recoverStaleWork } from '../coordination/lease.js';
 import { learnFromExtraction, removeContributions } from '../infrastructure/infrastructure.service.js';
 import { readingRevision } from '../../lib/reading-revision.js';
+import { GAVE_UP_AT, MAX_RETRY_ATTEMPTS, nextRetryAt } from '../../lib/retry.js';
 import { linkPost, recordDecision } from '../outages/linker.service.js';
 import { refoldOutage } from '../outages/outage-state.js';
 import { markRestoredPlaces } from '../../lib/restored-places.js';
@@ -191,6 +192,32 @@ export async function processPending({ limit, onPost, onStart, from, to, ctx } =
     return { total: posts.length, attempted: done, tally, remaining };
   });
   return outcome.acquired ? outcome.value : { skipped: true, total: 0, attempted: 0, tally: {}, remaining: null };
+}
+
+/**
+ * A tie-break the AI provider could not answer for a temporary reason is tried again by itself: at most MAX_RETRY_ATTEMPTS times, with growing
+ * waits (5 min to 6 h). Each try re-decides the post (answers already given are cached, so only the failed question is asked again). Success
+ * clears it; after the last try it is left for a person (the decision stays NEEDS_REVIEW) and never retried automatically again.
+ */
+export async function retryTieBreaks({ ctx, now = new Date(), limit = 5 } = {}) {
+  const due = await prisma.retryAttempt.findMany({ where: { kind: 'TIEBREAK', nextRetryAt: { lte: now } }, orderBy: { nextRetryAt: 'asc' }, take: limit });
+  let fixed = 0;
+  let gaveUp = 0;
+  for (const r of due) {
+    const attempts = r.attempts + 1;
+    // count this try (and when the next is due) BEFORE making it, so a crash or a non-transient failure cannot make it repeat every cycle
+    await prisma.retryAttempt.update({ where: { postId_faultIndex_kind: { postId: r.postId, faultIndex: r.faultIndex, kind: r.kind } }, data: { attempts, nextRetryAt: attempts >= MAX_RETRY_ATTEMPTS ? GAVE_UP_AT : nextRetryAt(attempts, now) } });
+    await reprocessPost(r.postId, { ctx });
+    const d = await prisma.linkDecision.findUnique({ where: { postId_faultIndex: { postId: r.postId, faultIndex: r.faultIndex } }, select: { outcome: true, reason: true } });
+    if (!d || d.outcome !== 'NEEDS_REVIEW') {
+      await prisma.retryAttempt.deleteMany({ where: { postId: r.postId, faultIndex: r.faultIndex, kind: r.kind } });
+      fixed += 1;
+    } else if (attempts >= MAX_RETRY_ATTEMPTS) {
+      gaveUp += 1;
+      logger.warn({ postId: r.postId, faultIndex: r.faultIndex, attempts }, 'gave up retrying a tie-break: left for review');
+    }
+  }
+  return { tried: due.length, fixed, gaveUp };
 }
 
 /**

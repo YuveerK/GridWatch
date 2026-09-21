@@ -12,10 +12,12 @@ vi.mock('../../src/modules/ai/extraction.service.js', async (orig) => ({
   extractPost: async (postId) => readings.get(postId) ?? { status: 'FAILED', result: null },
 }));
 // The tie-break "model": always says the first (best-scored) candidate is the same fault. Counts its calls.
-const tieBreaks = { calls: 0, pick: 0 };
+process.env.TIEBREAK_RETRY_DELAYS_MS = '1,1'; // the in-call retries of a temporary failure wait milliseconds in tests
+const tieBreaks = { calls: 0, pick: 0, fail: null }; // fail: a message makes every tie-break throw it
 vi.mock('../../src/modules/ai/gemini.client.js', () => ({
   generateJson: async ({ parts }) => {
     tieBreaks.calls += 1;
+    if (tieBreaks.fail) throw new Error(tieBreaks.fail);
     const first = JSON.parse(parts[0].text).candidate_outages[tieBreaks.pick];
     return { text: JSON.stringify({ outage_id: first.outage_id, reason: 'test verdict' }), inputTokens: 0, outputTokens: 0 };
   },
@@ -62,6 +64,7 @@ beforeEach(async () => {
   globalThis.__boom = null;
   tieBreaks.calls = 0;
   tieBreaks.pick = 0;
+  tieBreaks.fail = null;
   n = 0;
 });
 
@@ -594,5 +597,63 @@ describe('E10: an effect records the reading it was built from', () => {
     const second = (await prisma.outagePost.findFirst({ where: { postId: id } })).effect.reading;
     expect(second).toBe(readingRevision(readings.get(id).result));
     expect(second).not.toBe(first);
+  });
+});
+
+describe('B3: a temporary tie-break failure is retried by itself, real ambiguity waits for a person', () => {
+  // (a different place each time: an answer already cached from an earlier test would otherwise mean no question is asked)
+  const setup = async (place) => {
+    await addPost(0, place + ' feeder fault', reading('OUTAGE', 'INVESTIGATING', [place + ' Feeder'], { localities: [{ name: place + ' Heights', state: 'AFFECTED' }] }));
+    return addPost(150, place + ' Heights substation fault', reading('OUTAGE', 'INVESTIGATING', [place + ' Heights'])); // a tie-break is needed
+  };
+  const later = (min) => new Date(Date.now() + min * 60_000);
+
+  it('a busy provider: retried in the call, then queued, then linked by a later retry, and the queue entry is cleared', async () => {
+    const { retryTieBreaks } = await import('../../src/modules/processing/processor.service.js');
+    tieBreaks.fail = '503 Service Unavailable';
+    const b = await setup('Marlow');
+    await processPending();
+    expect(tieBreaks.calls).toBeGreaterThanOrEqual(3); // tried 3 times in the one call
+    expect((await prisma.linkDecision.findFirst({ where: { postId: b } })).outcome).toBe('NEEDS_REVIEW');
+    expect((await prisma.sourcePost.findUnique({ where: { id: b } })).processingStatus).toBe('NEEDS_REVIEW');
+    const queued = await prisma.retryAttempt.findFirst({ where: { postId: b } });
+    expect(queued).toMatchObject({ kind: 'TIEBREAK', attempts: 1 });
+    expect(queued.lastError).toMatch(/503/);
+
+    expect(await retryTieBreaks({ now: new Date() })).toEqual({ tried: 0, fixed: 0, gaveUp: 0 }); // not due yet
+
+    tieBreaks.fail = null; // the provider is back
+    expect(await retryTieBreaks({ now: later(6) })).toEqual({ tried: 1, fixed: 1, gaveUp: 0 });
+    expect((await prisma.linkDecision.findFirst({ where: { postId: b } })).outcome).toBe('LINKED');
+    expect((await prisma.sourcePost.findUnique({ where: { id: b } })).processingStatus).toBe('RELEVANT');
+    expect(await prisma.retryAttempt.count()).toBe(0);
+    expect(await outages()).toHaveLength(1);
+  });
+
+  it('keeps failing: attempts grow with longer waits, and after the last try it is left for a person and never retried again', async () => {
+    const { retryTieBreaks } = await import('../../src/modules/processing/processor.service.js');
+    tieBreaks.fail = '503 Service Unavailable';
+    const b = await setup('Norwick');
+    await processPending();
+    let clock = 10;
+    for (let i = 0; i < 4; i++) {
+      const r = await retryTieBreaks({ now: later(clock) });
+      expect(r.tried).toBe(1);
+      clock += 24 * 60; // long enough that the next try is always due
+    }
+    const row = await prisma.retryAttempt.findFirst({ where: { postId: b } });
+    expect(row.attempts).toBe(5);
+    expect(row.nextRetryAt.getUTCFullYear()).toBe(9999); // gave up: nothing is ever due again
+    expect(await retryTieBreaks({ now: later(clock + 1_000_000) })).toEqual({ tried: 0, fixed: 0, gaveUp: 0 });
+    expect((await prisma.linkDecision.findFirst({ where: { postId: b } })).outcome).toBe('NEEDS_REVIEW'); // still waiting for a person
+  });
+
+  it('a failure that will not change (a call limit) is not queued for retry: it waits for a person straight away', async () => {
+    tieBreaks.fail = 'AI call limit reached for this run';
+    const b = await setup('Ostrava');
+    await processPending();
+    expect((await prisma.linkDecision.findFirst({ where: { postId: b } })).outcome).toBe('NEEDS_REVIEW');
+    expect(tieBreaks.calls).toBe(1); // not retried in the call either
+    expect(await prisma.retryAttempt.count()).toBe(0);
   });
 });

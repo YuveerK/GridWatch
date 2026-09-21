@@ -8,6 +8,7 @@ import { scheduleWindow } from '../../lib/schedule.js';
 import { assertLeaseInTx, exclusive } from '../coordination/lease.js';
 import { buildEffect, initialStatus, refoldOutage, statusFor, suburbRestored } from './outage-state.js';
 import { headlineNode, pickHeadlineMatch } from './headline.js';
+import { isTransientAiError, nextRetryAt, retryTransient } from '../../lib/retry.js';
 import { resolveOverride } from './overrides.js';
 import { applyRevivalRule, scoreCandidate } from './scoring.js';
 import { cachedVerdict, storeVerdict } from './tiebreak-cache.js';
@@ -382,11 +383,21 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     // a prose update about one incident that names many substations is not a multi-fault graphic: let the tie-break decide
     usedLlm = true;
     try {
-      const verdict = await askLlm(post, extraction, candidates, { fromDigest: Boolean(facts.fromDigest) });
+      // a temporary failure (the provider is busy or unreachable) is tried again a moment later before it is given up on
+      const delays = (process.env.TIEBREAK_RETRY_DELAYS_MS ?? '1000,3000').split(',').map(Number);
+      const verdict = await retryTransient(() => askLlm(post, extraction, candidates, { fromDigest: Boolean(facts.fromDigest) }), { delaysMs: delays });
       outageId = verdict.outageId;
       reason = `LLM: ${verdict.reason}`;
     } catch (err) {
       logger.warn({ postId: post.id, err: err.message }, 'link tie-break failed');
+      // A temporary failure is queued to be tried again by itself (bounded, with backoff); anything else waits for a person.
+      if (isTransientAiError(err)) {
+        await prisma.retryAttempt.upsert({
+          where: { postId_faultIndex_kind: { postId: post.id, faultIndex: post.faultIndex, kind: 'TIEBREAK' } },
+          create: { postId: post.id, faultIndex: post.faultIndex, kind: 'TIEBREAK', attempts: 1, lastError: String(err.message).slice(0, 300), nextRetryAt: nextRetryAt(1) },
+          update: { lastError: String(err.message).slice(0, 300) },
+        });
+      }
       return decide({ outcome: 'NEEDS_REVIEW', topScore: top.score, usedLlm, reason: `tie-break failed: ${err.message}`, candidates: summary });
     }
   } else {

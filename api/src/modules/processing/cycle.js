@@ -5,7 +5,7 @@ import { ingestNewPosts } from '../ingestion/ingestion.service.js';
 import { sweepStaleOutages } from '../outages/linker.service.js';
 import { placeLocalities } from '../geo/geocode.service.js';
 import { withLease, PIPELINE } from '../coordination/lease.js';
-import { faultItems, processPending, retryImageFailures } from './processor.service.js';
+import { faultItems, processPending, retryImageFailures, retryTieBreaks } from './processor.service.js';
 import { assessCycle } from './quality.js';
 
 function friendly(err) {
@@ -156,7 +156,11 @@ export const sweepStage = ({ ctx } = {}) => sweepStaleOutages(new Date(), { ctx 
 export const cycle = createCycle({
   ingest: ingestNewPosts,
   process: processPending,
-  retry: retryImageFailures,
+  retry: async ({ ctx }) => {
+    const pictures = await retryImageFailures({ ctx });
+    const tieBreaks = await retryTieBreaks({ ctx });
+    return { tried: pictures.tried + tieBreaks.tried, fixed: pictures.fixed + tieBreaks.fixed, pictures, tieBreaks };
+  },
   assess: (args) => assessCycle({ prisma, faultItems, promptVersion: env.AI_PROMPT_VERSION, ...args }),
   lease: (fn) => withLease(PIPELINE, fn),
   sweep: sweepStage,
