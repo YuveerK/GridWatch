@@ -66,7 +66,7 @@ try {
   console.log('outages:', await db.outage.count());
   await db.$disconnect();
 
-  for (const file of ['links.json', 'holdout-0910.json', 'holdout-0911.json', 'holdout-0912.json', 'holdout-0914.json', 'holdout-0915.json']) {
+  for (const file of ['links.json', 'holdout-0910.json', 'holdout-0911.json', 'holdout-0912.json', 'holdout-0914.json', 'holdout-0915.json', 'cases-0921.json']) {
     const ev = run(['scripts/eval.js', `--file=${file}`]);
     console.log(`\n=== ${file} ===\n${ev.stdout.trim()}${ev.status ? `\n(exit ${ev.status}) ${ev.stderr.slice(0, 300)}` : ''}`);
   }

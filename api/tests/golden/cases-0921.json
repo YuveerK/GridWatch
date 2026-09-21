@@ -1,0 +1,13 @@
+{
+  "_note": "Hard cases found while checking fresh posts, 9-21 Sep 2026. Key = last 6 digits of the X post id. Each group was labelled from the post text (dates, places, equipment, 'restored' wording), NOT blind: it was labelled after the engine's grouping of these cases had been seen, so it guards against regressions and known weaknesses rather than measuring unseen accuracy. Open-call-count graphics and multi-fault image summaries are left out as ambiguous. weltevredenpark_a/_b: a full restoration on 19 Sep ends the first incident, and a new report on 20 Sep is a second one. glenanda_isolation: one four/five-day programme, including its final 'fully restored' post. klipfontein_planned: the misspelt 'Klipfotein' posts are the same planned work. klipfontein_view_fault: an unplanned Eskom-side trip, a different thing from the planned work of the same name. greenstone_planned: includes the 21 Sep postponement post.",
+  "554283": "weltevredenpark_a", "272034": "weltevredenpark_a", "404319": "weltevredenpark_a", "202191": "weltevredenpark_a",
+  "240534": "weltevredenpark_b", "690527": "weltevredenpark_b", "901571": "weltevredenpark_b",
+  "011178": "glenanda_isolation", "753962": "glenanda_isolation", "959887": "glenanda_isolation", "844227": "glenanda_isolation", "108832": "glenanda_isolation", "745770": "glenanda_isolation", "644652": "glenanda_isolation", "847909": "glenanda_isolation", "974625": "glenanda_isolation", "658716": "glenanda_isolation",
+  "060125": "northriding_17sept", "659093": "northriding_17sept",
+  "512712": "dale_lace_vandalism", "242143": "dale_lace_vandalism",
+  "165208": "bosbok_road",
+  "490225": "klipfontein_planned", "900537": "klipfontein_planned", "621836": "klipfontein_planned", "937493": "klipfontein_planned", "912335": "klipfontein_planned",
+  "247432": "klipfontein_view_fault", "938523": "klipfontein_view_fault", "474066": "klipfontein_view_fault", "334666": "klipfontein_view_fault", "123309": "klipfontein_view_fault", "172077": "klipfontein_view_fault", "562615": "klipfontein_view_fault",
+  "296997": "vorna_valley",
+  "698749": "greenstone_planned", "953086": "greenstone_planned", "088447": "greenstone_planned", "582640": "greenstone_planned", "510458": "greenstone_planned", "442043": "greenstone_planned", "536114": "greenstone_planned"
+}
