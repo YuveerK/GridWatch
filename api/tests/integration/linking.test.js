@@ -417,3 +417,21 @@ describe('an outage that went quiet for days', () => {
     expect(tieBreaks.calls).toBe(0);
   });
 });
+
+describe('a station name misspelled in one post', () => {
+  it('is the same station, so its posts stay in one outage (scrambled letters and a missing letter)', async () => {
+    const a = await addPost(0, 'Kazerne Substation: fault being located', reading('OUTAGE', 'INVESTIGATING', ['Kazerne']));
+    const b = await addPost(60, 'Karzene Substation: power restored to 28%', reading('UPDATE', 'PARTIALLY_RESTORED', ['Karzene']));
+    await processPending();
+    const all = await outages();
+    expect(all).toHaveLength(1);
+    expect(all[0].posts.map((p) => p.postId).sort()).toEqual([a, b].sort());
+    expect(await prisma.infraNode.count({ where: { type: 'SUBSTATION' } })).toBe(1);
+  });
+  it('but two stations that differ only in a short label stay two', async () => {
+    await addPost(0, 'Lenasia One fault', reading('OUTAGE', 'INVESTIGATING', ['Lenasia Extension 1']));
+    await addPost(30, 'Lenasia Two fault', reading('OUTAGE', 'INVESTIGATING', ['Lenasia Extension 2']));
+    await processPending();
+    expect(await prisma.infraNode.count({ where: { type: 'SUBSTATION' } })).toBe(2);
+  });
+});

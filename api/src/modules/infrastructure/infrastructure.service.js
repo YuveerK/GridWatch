@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../../db/prisma.js';
-import { differsByLabel, infraKey, isNotSuburbName, localityKey, similarity, tailPlace, oneEditApart } from '../../lib/normalize.js';
+import { differsByLabel, infraKey, isNotSuburbName, likelyTypo, localityKey, similarity, tailPlace, oneEditApart } from '../../lib/normalize.js';
 
 const FUZZY_NODE = 0.9;
 const FUZZY_LOCALITY = 0.92;
@@ -172,6 +172,15 @@ export async function resolveNode({ type, name, at, source = null, mode = 'count
         create: { nodeId: node.id, alias: name, normalizedKey: key },
         update: {},
       });
+    }
+  }
+  // a station name that is one letter off, or the same letters scrambled, is a misspelling of a known station (only when exactly one fits)
+  if (!node && STATION_TYPES.includes(type) && key.length >= 7) {
+    const stations = await prisma.infraNode.findMany({ where: { type: { in: STATION_TYPES } }, select: { id: true, normalizedKey: true } });
+    const near = stations.filter((n) => !differsByLabel(key, n.normalizedKey) && likelyTypo(key, n.normalizedKey));
+    if (near.length === 1) {
+      node = await prisma.infraNode.findUnique({ where: { id: near[0].id } });
+      await prisma.nodeAlias.upsert({ where: { nodeId_normalizedKey: { nodeId: node.id, normalizedKey: key } }, create: { nodeId: node.id, alias: name, normalizedKey: key }, update: {} });
     }
   }
   if (node) {

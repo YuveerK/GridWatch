@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { tailPlace, differsByLabel, infraKey, isNotSuburbName, localityKey, similarity } from '../../src/lib/normalize.js';
+import { tailPlace, differsByLabel, infraKey, isNotSuburbName, likelyTypo, localityKey, similarity } from '../../src/lib/normalize.js';
 
 describe('normalize', () => {
   it('strips type words from infrastructure names', () => {
@@ -39,5 +39,23 @@ describe('normalize', () => {
     expect(tailPlace('12th Avenue in Parktown North')).toBe('Parktown North');
     expect(tailPlace('Westdene')).toBeNull();
     expect(tailPlace('customers in')).toBeNull();
+  });
+});
+
+describe('likely typos of equipment names', () => {
+  it('one letter off, or the same letters scrambled with the same first and last letter', () => {
+    expect(likelyTypo('klipfotein', 'klipfontein')).toBe(true);
+    expect(likelyTypo('karzene', 'kazerne')).toBe(true);
+    expect(likelyTypo('marshall street east', 'marshal street east')).toBe(true);
+  });
+  it('short names, different first letters and genuinely different names are not typos', () => {
+    expect(likelyTypo('fort', 'forts')).toBe(false);
+    expect(likelyTypo('bellairs north', 'prichard north')).toBe(false);
+    expect(likelyTypo('kazerne', 'kazerne')).toBe(false);
+    expect(likelyTypo('parkhurst', 'northcliff')).toBe(false);
+  });
+  it('a one-letter label difference is still equipment, not a typo (the caller checks differsByLabel)', () => {
+    expect(differsByLabel('central a', 'central b')).toBe(true);
+    expect(differsByLabel('panorama no 1', 'panorama no 2')).toBe(true);
   });
 });

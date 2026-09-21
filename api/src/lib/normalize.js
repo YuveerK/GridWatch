@@ -65,6 +65,19 @@ export function isNotSuburbName(name) {
   return n.length < 3 || /^\d/.test(n) || /[,/&]/.test(n) || /\b(to|and|parts? of|surrounding|ward)\b/i.test(n) || /\s\d{3,}$/.test(n) || STREET_WORDS.test(n) || FACILITY_WORDS.test(n) || ORG_WORDS.test(n);
 }
 
+/**
+ * Two equipment names that are almost certainly the same name misspelled: one letter off ("Klipfotein" / "Klipfontein"), or the
+ * same letters scrambled with the same first and last letter ("Karzene" / "Kazerne"). Only for names of 7+ letters: short names
+ * ("Fort", "Ridge") are too easily different places.
+ */
+export function likelyTypo(a, b) {
+  if (a === b || Math.min(a.length, b.length) < 7) return false;
+  if (a[0] !== b[0]) return false;
+  if (oneEditApart(a, b)) return true;
+  const letters = (s) => [...s.replace(/\s+/g, '')].sort().join('');
+  return a.length === b.length && a.at(-1) === b.at(-1) && letters(a) === letters(b);
+}
+
 /** True when two names differ by exactly one inserted, deleted, changed or swapped letter ("Develand" / "Devland"). */
 export function oneEditApart(a, b) {
   if (a === b || Math.abs(a.length - b.length) > 1) return false;
