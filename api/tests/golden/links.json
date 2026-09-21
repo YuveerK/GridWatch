@@ -1,5 +1,6 @@
 {
   "_note": "Hand-labelled ground truth. Key = last 6 digits of the X post id, value = true outage group. NONE = not a specific outage. Ambiguous multi-outage image summaries are intentionally left out.",
+  "_kind": "tuning",
   "628133": "panorama", "145170": "panorama",
   "334290": "lenasia_s4_maint", "828828": "lenasia_s4_maint",
   "730721": "tshep_lineB",

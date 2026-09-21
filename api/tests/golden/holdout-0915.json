@@ -1,5 +1,6 @@
 {
   "_note": "Final blind hold-out: posts from 15 Sep 2026, labelled from post content only, after all rule changes of this session. Key = last 6 digits of the X post id. Open-call-count graphics and multi-fault image summaries are left out as ambiguous.",
+  "_kind": "holdout",
   "984265": "moffat_planned", "607460": "moffat_planned", "801841": "moffat_planned", "843500": "moffat_planned",
   "793032": "booysens", "167033": "booysens",
   "900537": "klipfontein_planned",

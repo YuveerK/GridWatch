@@ -1,5 +1,6 @@
 {
   "_note": "Fresh hold-out: posts from 14 Sep 2026, labelled BLIND (post content only) AFTER all rule changes. Key = last 6 digits of the X post id. 'Sitting with N open calls' graphics, weekly schedules and multi-fault image summaries are left out as ambiguous.",
+  "_kind": "holdout",
   "535105": "johnware", "750072": "johnware",
   "503890": "khanyisa", "945444": "khanyisa", "041569": "khanyisa", "711373": "khanyisa",
   "934939": "nhls", "526593": "nhls",

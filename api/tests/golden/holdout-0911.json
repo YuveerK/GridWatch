@@ -1,5 +1,6 @@
 {
   "_note": "Untouched blind hold-out: posts from 11 Sep 2026, labelled from post content only, AFTER the final rule changes, and never used for tuning. Key = last 6 digits of the X post id. Open-call-count graphics and multi-fault image summaries are left out as ambiguous.",
+  "_kind": "holdout",
   "281951": "napier",
   "950510": "mulbarton_star", "747582": "mulbarton_star", "776739": "mulbarton_star", "249137": "mulbarton_star",
   "450996": "mulbarton_isolation", "634307": "mulbarton_isolation",

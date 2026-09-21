@@ -1,5 +1,6 @@
 {
   "_note": "Hold-out set: posts from 10 Sep 2026, labelled from the post text BEFORE looking at the engine's grouping. Key = last 6 digits of the X post id. Digest images and 'sitting with N open calls' graphics are left out as ambiguous.",
+  "_kind": "holdout",
   "263526": "roosevelt_fairlands", "808037": "roosevelt_fairlands", "983087": "roosevelt_fairlands", "398851": "roosevelt_fairlands", "690830": "roosevelt_fairlands",
   "993862": "roosevelt_northcliff_south",
   "518253": "uj", "296582": "uj", "683002": "uj", "369779": "uj", "943956": "uj",

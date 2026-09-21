@@ -21,11 +21,11 @@ export async function resolveOverride(postId, faultIndex, db = prisma) {
   return anchor ? { action: 'JOIN', outageId: anchor.outageId, note: o.note } : null;
 }
 
-export async function setOverride({ postId, faultIndex = 0, action, anchorPostId = null, anchorFaultIndex = 0, note = null }) {
+export async function setOverride({ postId, faultIndex = 0, action, anchorPostId = null, anchorFaultIndex = 0, note = null, contrastPostId = null }) {
   if (action !== 'SPLIT' && action !== 'JOIN') throw new Error('action must be SPLIT or JOIN');
   if (action === 'JOIN' && !anchorPostId) throw new Error('JOIN needs an anchor post');
   if (action === 'JOIN' && anchorPostId === postId && anchorFaultIndex === faultIndex) throw new Error('a post cannot join itself');
-  const data = { action, anchorPostId: action === 'JOIN' ? anchorPostId : null, anchorFaultIndex: action === 'JOIN' ? anchorFaultIndex : 0, note };
+  const data = { action, anchorPostId: action === 'JOIN' ? anchorPostId : null, anchorFaultIndex: action === 'JOIN' ? anchorFaultIndex : 0, note, contrastPostId: action === 'SPLIT' ? contrastPostId : null };
   return prisma.linkOverride.upsert({ where: { postId_faultIndex: { postId, faultIndex } }, create: { postId, faultIndex, ...data }, update: data });
 }
 

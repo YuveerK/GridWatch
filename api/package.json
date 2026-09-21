@@ -20,6 +20,7 @@
     "batch": "node scripts/batch-report.js",
     "quality": "node scripts/quality.js",
     "review": "node scripts/review.js",
+    "eval:all": "node scripts/eval-all.js",
     "test:integration": "vitest run --config vitest.integration.config.js",
     "test:all": "vitest run && vitest run --config vitest.integration.config.js"
   },

@@ -70,6 +70,9 @@ try {
     const ev = run(['scripts/eval.js', `--file=${file}`]);
     console.log(`\n=== ${file} ===\n${ev.stdout.trim()}${ev.status ? `\n(exit ${ev.status}) ${ev.stderr.slice(0, 300)}` : ''}`);
   }
+  // The stored manual corrections and final-state expectations, WITHOUT the manual overrides (a replay never copies them): what the engine gets right on its own.
+  const pairs = run(['scripts/eval-pairs.js']);
+  console.log(`\n=== corrections and final state, without manual help ===\n${pairs.stdout.trim()}`);
 } finally {
   if (keep) console.log(`\nkept database ${name}`);
   else {

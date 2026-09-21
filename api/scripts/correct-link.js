@@ -1,5 +1,5 @@
 // Correct where one post belongs. The correction is stored, so every later re-link or rebuild applies it again.
-//   node scripts/correct-link.js <post> --split [--note "why"]            make it its own new outage
+//   node scripts/correct-link.js <post> --split --from <post> [--note "why"]  make it its own new outage (--from: the post it was wrongly joined with)
 //   node scripts/correct-link.js <post> --join <anchorPost> [--note ".."]  put it in the outage the anchor post is in
 //   node scripts/correct-link.js <post> --clear                            drop the correction (normal rules decide again)
 //   node scripts/correct-link.js --list                                    show every stored correction
@@ -12,7 +12,7 @@ const { reprocessPost } = await import('../src/modules/processing/processor.serv
 
 const args = process.argv.slice(2);
 const flag = (n) => (args.includes(n) ? args[args.indexOf(n) + 1] : null);
-const valueFlags = new Set(['--join', '--note', '--fault']);
+const valueFlags = new Set(['--join', '--note', '--fault', '--from']);
 const positional = args.filter((a, i) => !a.startsWith('--') && !valueFlags.has(args[i - 1]));
 const apply = args.includes('--apply');
 const find = (ref) => prisma.sourcePost.findFirst({ where: { OR: [{ id: ref }, { externalId: ref }] }, select: { id: true, externalId: true, publishedAt: true, text: true, noteTweetText: true } });
@@ -40,6 +40,11 @@ if (!post) fail(`Post not found: ${ref}`);
 const faultIndex = Number(flag('--fault') ?? 0);
 const mode = args.includes('--split') ? 'SPLIT' : flag('--join') ? 'JOIN' : args.includes('--clear') ? 'CLEAR' : null;
 if (!mode) fail('Say what to do: --split, --join <anchorPost> or --clear.');
+let contrast = null;
+if (mode === 'SPLIT' && flag('--from')) {
+  contrast = await find(flag('--from'));
+  if (!contrast) fail(`The post to keep it apart from was not found: ${flag('--from')}`);
+}
 let anchor = null;
 if (mode === 'JOIN') {
   anchor = await find(flag('--join'));
@@ -57,9 +62,15 @@ if (!apply) {
 }
 
 if (mode === 'CLEAR') await clearOverride(post.id, faultIndex);
-else await setOverride({ postId: post.id, faultIndex, action: mode, anchorPostId: anchor?.id ?? null, note: flag('--note') });
+else await setOverride({ postId: post.id, faultIndex, action: mode, anchorPostId: anchor?.id ?? null, note: flag('--note'), contrastPostId: contrast?.id ?? null });
 const res = await reprocessPost(post.id);
 if (res.outcome === 'BUSY') fail('The pipeline is busy (a fetch is running). The correction is stored; re-run the same command in a minute to apply it.');
 console.log('Re-linked:', res);
 console.log('Now in:', (await where(post.id)).join('\n        ') || 'no outage');
+// every correction is evidence of what the engine should have done: it becomes a permanent test case
+if (mode !== 'CLEAR') {
+  const { exportCorrections } = await import('./export-corrections.js');
+  const r = await exportCorrections({ write: true });
+  console.log(r.added.length ? `Added ${r.added.length} test case(s) to tests/golden/corrections.json (commit that file).` : mode === 'SPLIT' && !contrast ? 'Not turned into a test: a split needs --from <the post it was wrongly joined with>.' : 'Already a test case.');
+}
 await prisma.$disconnect();

@@ -4,6 +4,7 @@ import { prisma } from '../src/db/prisma.js';
 const goldenFile = process.argv.find((a) => a.startsWith('--file='))?.split('=')[1] ?? 'links.json';
 const golden = JSON.parse(readFileSync(new URL(`../tests/golden/${goldenFile}`, import.meta.url), 'utf8'));
 delete golden._note;
+delete golden._kind; // "holdout" (labelled blind, never used to tune) or "tuning" / "regression" (may be looked at)
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1];
 const from = arg('from') ? new Date(arg('from')) : null;
 const to = arg('to') ? new Date(arg('to')) : null;
