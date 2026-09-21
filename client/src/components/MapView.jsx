@@ -101,12 +101,12 @@ const at = (pts, u) => {
  *  layers    { outages, equipment }
  * Suburb positions are their centres, and equipment positions are inferred; the page says so in words.
  */
-export default function MapView({ points = [], hubs = [], flow = null, focus = null, layers = { outages: true, equipment: false }, selectedHub = null, onPickSuburb, onPickHub, onClear, height = 460, cooperative = false, label = 'Map' }) {
+export default function MapView({ points = [], hubs = [], flow = null, coverage = null, focus = null, layers = { outages: true, equipment: false }, selectedHub = null, onPickSuburb, onPickHub, onClear, height = 460, cooperative = false, label = 'Map' }) {
   const box = useRef(null);
   const mapRef = useRef(null);
   const readyRef = useRef(false);
   const latest = useRef({});
-  latest.current = { points, hubs, flow, focus, layers, selectedHub, onPickSuburb, onPickHub, onClear };
+  latest.current = { points, hubs, flow, coverage, focus, layers, selectedHub, onPickSuburb, onPickHub, onClear };
   const dark = useIsDark();
   const raf = useRef(0);
   const framed = useRef(false);
@@ -166,10 +166,15 @@ export default function MapView({ points = [], hubs = [], flow = null, focus = n
       map.addImage('hub-live', hubImage(c.live, c.card));
       map.addImage('hub-sel', hubImage(c.ink, c.card, 56));
 
+      // Estimated coverage sits below markers and connection lines.
+      map.addSource('coverage', { type: 'geojson', data: latest.current.coverage?.data ?? EMPTY });
+      map.addLayer({ id: 'coverage-fill', type: 'fill', source: 'coverage', paint: { 'fill-color': c.plan, 'fill-opacity': 0.16 } });
+      map.addLayer({ id: 'coverage-outline', type: 'line', source: 'coverage', paint: { 'line-color': c.plan, 'line-width': 2, 'line-dasharray': [3, 2], 'line-opacity': 0.85 } });
+
       // equipment
       map.addSource('hubs', { type: 'geojson', data: hubCollection() });
       map.addLayer({
-        id: 'hubs', type: 'symbol', source: 'hubs', minzoom: 9.2,
+        id: 'hubs', type: 'symbol', source: 'hubs',
         layout: {
           'icon-image': ['case', ['==', ['get', 'selected'], 1], 'hub-sel', ['==', ['get', 'live'], 1], 'hub-live', 'hub-idle'],
           'icon-size': ['interpolate', ['linear'], ['zoom'], 9, ['+', 0.4, ['*', 0.012, ['min', ['get', 'served'], 20]]], 13, ['+', 0.65, ['*', 0.02, ['min', ['get', 'served'], 20]]]],
@@ -233,7 +238,7 @@ export default function MapView({ points = [], hubs = [], flow = null, focus = n
       map.getCanvas().style.cursor = hub || dot || cluster ? 'pointer' : '';
       if (hub) {
         const p = hub.properties;
-        return pop(hub.geometry.coordinates, `<b>${esc(p.name)}</b><div style="margin-top:2px;opacity:.75">${esc(String(p.type).toLowerCase().replace('_', ' '))} · serves ${p.served} suburb${p.served === 1 ? '' : 's'}${p.live ? ' · outage now' : ''}</div><div style="margin-top:3px;opacity:.6;font-size:11.5px">Position inferred from the suburbs it serves</div>`);
+        return pop(hub.geometry.coordinates, `<b>${esc(p.name)}</b><div style="margin-top:2px;opacity:.75">${p.type === 'SDC' ? 'Service delivery centre' : esc(String(p.type).toLowerCase().replaceAll('_', ' '))} · serves ${p.served} suburb${p.served === 1 ? '' : 's'}${p.live ? ' · outage now' : ''}</div><div style="margin-top:3px;opacity:.6;font-size:11.5px">Position inferred from associated suburbs</div>`);
       }
       if (dot) {
         const p = dot.properties;
@@ -280,14 +285,20 @@ export default function MapView({ points = [], hubs = [], flow = null, focus = n
     if (readyRef.current && focus?.bounds) fitTo(focus.bounds);
   }, [focus?.key, ready]);
 
+  useEffect(() => {
+    if (!readyRef.current) return;
+    setData('coverage', coverage?.data ?? EMPTY);
+    if (coverage?.bounds) fitTo(coverage.bounds, { padding: 70, maxZoom: 13.5 });
+  }, [coverage, ready]);
+
   // first paint: once the map and the data are both ready, frame the outages
   useEffect(() => {
-    if (!readyRef.current || framed.current || !points.length || flow) return;
+    if (!readyRef.current || framed.current || !points.length || flow || coverage) return;
     framed.current = true;
     const b = new maplibregl.LngLatBounds();
     points.forEach((p) => b.extend([p.lon, p.lat]));
     fitTo(b, { duration: 0 });
-  }, [points, flow, ready]);
+  }, [points, flow, coverage, ready]);
 
   // ── animated power flow
   useEffect(() => {

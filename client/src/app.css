@@ -621,6 +621,8 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 13px; }
 button.chip:hover { background: color-mix(in srgb, var(--ink) 11%, transparent); }
 .chip.equip { background: color-mix(in srgb, var(--plan) 12%, transparent); }
 .key-dot.diamond { border-radius: 2px; transform: rotate(45deg) scale(0.85); box-shadow: none; }
+.key-dot.coverage { border-radius: 2px; background: var(--tint); border: 1.5px dashed var(--tone); box-shadow: none; }
+.coverage-note { pointer-events: none; width: max-content; max-width: calc(100% - 110px); text-align: center; }
 .eyebrow .key-dot { width: 9px; height: 9px; }
 .legend .key-dot.diamond { width: 10px; height: 10px; }
 
