@@ -87,8 +87,30 @@ describe('a weekly schedule graphic: each item takes its own day', () => {
   it('takes the hours from the graphic when the item has none of its own', () => {
     expect(win('Heriotdale', null)).toEqual({ start: '2026-09-23T06:00:00.000Z', end: '2026-09-23T14:00:00.000Z' });
   });
-  it('an item that is not in the graphic falls back to the old rule; post text is never overridden', () => {
-    expect(win('Unknown Place', null).start.slice(0, 10)).toBe('2026-09-27'); // the last date in the graphic, as before
+  it('an item that is not in the graphic gets no window; post text is never overridden', () => {
+    expect(win('Unknown Place', null)).toBeNull(); // no guess from the last date in the picture
     expect(scheduleWindow({ result: { image_text: image, entities: [{ type: 'SUBSTATION', name: 'Beyers' }] } }, 'On Monday, 28 September 2026 from 10:00-12:00', new Date('2026-09-21T06:00:00Z')).start).toBe('2026-09-28T08:00:00.000Z');
+  });
+});
+
+describe('a summary picture whose planned item states its own date', () => {
+  // The Lenasia picture of 21 Sept: an unrelated "yesterday, 20 September" sentence sits before the Nancefield item.
+  const image = 'Lenasia SDC Outage Update 21 September 2026 15:50 ACTIVE OUTAGE: Ennerdale Substation, CBD 1 Feeder: Operators have been dispatched. The outage occurred yesterday, 20 September 2026, around 20h00. PLANNED MAINTENANCE: Nancefield Substation: This planned maintenance is scheduled to take place on Wednesday, 23 September 2026 from 09h00 until 17h00. Affecting Coca-Cola.';
+  const item = { result: { image_text: image, eta_text: '23 September 2026 from 09h00 until 17h00', update_summary: 'Planned maintenance is scheduled at Nancefield Substation on Wednesday, 23 September 2026 from 09h00 until 17h00.', entities: [{ type: 'SDC', name: 'Lenasia' }, { type: 'SUBSTATION', name: 'Nancefield' }] } };
+
+  it("takes the item's own date, not an unrelated date that happens to come before it", () => {
+    expect(scheduleWindow(item, '', new Date('2026-09-21T13:00:00Z'))).toEqual({ start: '2026-09-23T07:00:00.000Z', end: '2026-09-23T15:00:00.000Z' });
+  });
+  it('an item with no date of its own still takes its heading in a weekly schedule', () => {
+    const weekly = { result: { image_text: 'Tuesday, 22 September • Beyers Substation from 09h00 until 17h00 Wednesday, 23 September 2026 • Heriotdale Substation from 08h00 until 16h00', eta_text: 'from 08h00 until 16h00', update_summary: 'A planned power interruption is scheduled at Heriotdale Substation.', entities: [{ type: 'SUBSTATION', name: 'Heriotdale' }] } };
+    expect(scheduleWindow(weekly, '', new Date('2026-09-21T06:00:00Z')).start).toBe('2026-09-23T06:00:00.000Z');
+  });
+});
+
+describe('a daily summary picture: its header date is the issue date, not the date of the work', () => {
+  const daily = 'Midrand SDC Outage Update 21 September 2026 14:50 PLANNED MAINTENANCE: Klipfontein Substation: planned interruption from 09h00 until 17h00 affecting Klipfontein.';
+  const item = { result: { image_text: daily, eta_text: 'from 09h00 until 17h00', update_summary: 'A planned power interruption is scheduled at Klipfontein Substation from 09h00 until 17h00.', entities: [{ type: 'SUBSTATION', name: 'Klipfontein' }] } };
+  it('gives no window at all (so it cannot overwrite the window the planned posts gave)', () => {
+    expect(scheduleWindow(item, '', new Date('2026-09-21T13:00:00Z'))).toBeNull();
   });
 });

@@ -467,3 +467,26 @@ describe('a suburb-named station against an outage with other equipment there', 
     expect(tieBreaks.calls).toBe(1);
   });
 });
+
+describe('planned work closed by a wrong date', () => {
+  it('is opened again when its window is corrected to a date still ahead', async () => {
+    const { refoldOutage } = await import('../../src/modules/outages/outage-state.js');
+    const p = await addPost(0, 'Planned work at Alpha', reading('PLANNED_OUTAGE', 'PLANNED', ['Alpha']));
+    const o = await prisma.outage.create({ data: { kind: 'PLANNED', status: 'CLOSED', title: 'Alpha', startedAt: at(0), lastUpdateAt: at(0) } });
+    const future = new Date(Date.now() + 2 * 24 * 3_600_000);
+    const effect = { status: 'PLANNED', pct: null, cause: null, eta: null, headlineLocalities: [], locs: [], nodeIds: [], expand: true, retroactive: false, schedule: { start: future.toISOString(), end: new Date(future.getTime() + 8 * 3_600_000).toISOString() } };
+    await prisma.outagePost.create({ data: { outageId: o.id, postId: p, role: 'OPENED', postedAt: at(0), effect } });
+    await prisma.$transaction((tx) => refoldOutage(tx, o.id));
+    expect((await prisma.outage.findUnique({ where: { id: o.id } })).status).toBe('PLANNED');
+  });
+  it('but planned work whose window has really passed stays closed', async () => {
+    const { refoldOutage } = await import('../../src/modules/outages/outage-state.js');
+    const p = await addPost(0, 'Planned work at Beta', reading('PLANNED_OUTAGE', 'PLANNED', ['Beta']));
+    const o = await prisma.outage.create({ data: { kind: 'PLANNED', status: 'CLOSED', title: 'Beta', startedAt: at(0), lastUpdateAt: at(0) } });
+    const past = new Date(Date.now() - 3 * 24 * 3_600_000);
+    const effect = { status: 'PLANNED', pct: null, cause: null, eta: null, headlineLocalities: [], locs: [], nodeIds: [], expand: true, retroactive: false, schedule: { start: past.toISOString(), end: new Date(past.getTime() + 8 * 3_600_000).toISOString() } };
+    await prisma.outagePost.create({ data: { outageId: o.id, postId: p, role: 'OPENED', postedAt: at(0), effect } });
+    await prisma.$transaction((tx) => refoldOutage(tx, o.id));
+    expect((await prisma.outage.findUnique({ where: { id: o.id } })).status).toBe('CLOSED');
+  });
+});

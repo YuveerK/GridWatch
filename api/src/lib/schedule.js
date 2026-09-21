@@ -58,6 +58,10 @@ export function parseTimes(text) {
  * nearest date heading ABOVE its own line, not the last date anywhere in the graphic. `names` are the item's equipment names.
  * Returns a schedule like parseSchedule's, or null when the item cannot be found or nothing dated comes before it.
  */
+const WEEKDAY = '(?:mon|tues|wednes|thurs|fri|satur|sun)day';
+const MONTH_NAMES = 'january|february|march|april|may|june|july|august|september|october|november|december';
+const WEEKDAY_HEADING = new RegExp(`\\b${WEEKDAY}(?:\\s*(?:,|and|&)\\s*${WEEKDAY})*\\s*,?\\s*\\d{1,2}(?:st|nd|rd|th)?(?:\\s*(?:and|&|-|–|—|to)\\s*\\d{1,2}(?:st|nd|rd|th)?)?\\s+(?:${MONTH_NAMES})(?:\\s+20\\d{2})?`, 'gi');
+
 export function anchoredSchedule(imageText, names, etaText, refDate = new Date()) {
   if (!imageText) return null;
   const escape = (n) => n.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
@@ -67,7 +71,11 @@ export function anchoredSchedule(imageText, names, etaText, refDate = new Date()
     if (m && (at < 0 || m.index < at)) at = m.index;
   }
   if (at < 0) return null;
-  const sch = parseSchedule(imageText.slice(0, at), refDate);
+  // Only a WEEKDAY heading counts ("Wednesday, 23 September"). A bare date before the item is usually the issue date of the picture
+  // ("Update 21 September 2026 15:50") or an unrelated sentence ("the outage occurred yesterday, 20 September"), not when this item happens.
+  let heading = null;
+  for (const m of imageText.slice(0, at).matchAll(WEEKDAY_HEADING)) heading = m[0];
+  const sch = heading ? parseSchedule(heading, refDate) : null;
   if (!sch) return null;
   const times = parseTimes(etaText) ?? parseTimes(imageText.slice(at, at + 260));
   return { ...sch, from: times?.from ?? null, to: times?.to ?? null };
@@ -76,9 +84,14 @@ export function anchoredSchedule(imageText, names, etaText, refDate = new Date()
 export function scheduleWindow(extraction, text, refDate = new Date()) {
   const r = extraction?.result ?? {};
   const sources = [text, extraction?.imageText, r.image_text, r.update_summary, r.eta_text];
-  // an item read out of a graphic (no post text of its own): its own day comes from where it sits in the graphic
-  const own = !text && r.image_text ? anchoredSchedule(r.image_text, (r.entities ?? []).filter((e) => e.type !== 'SDC').map((e) => e.name), r.eta_text, refDate) : null;
-  const candidates = [own, ...sources.map((s) => parseSchedule(s, refDate))];
+  // An item read out of a graphic (no post text of its own). Its OWN words come first ("scheduled for Wednesday, 23 September 2026 from 09h00 until
+  // 17h00"), and only when they name no date does its day come from the heading above it in the graphic (a weekly schedule lists dates as headings).
+  // Never the last date anywhere in the picture, and never just the nearest date before the item: an unrelated sentence can sit in between.
+  const fromGraphic = !text && r.image_text;
+  const ownWords = fromGraphic ? [r.eta_text, r.update_summary].map((x) => parseSchedule(x, refDate)) : [];
+  const heading = fromGraphic ? anchoredSchedule(r.image_text, (r.entities ?? []).filter((e) => e.type !== 'SDC').map((e) => e.name), r.eta_text, refDate) : null;
+  // (no date of its own and no weekday heading: no window at all, so it cannot overwrite the window the planned posts gave)
+  const candidates = fromGraphic ? [...ownWords, heading] : sources.map((s) => parseSchedule(s, refDate));
   for (const found of candidates) {
     let sch = found;
     if (!sch) continue;

@@ -114,7 +114,7 @@ export function foldEffects(posts) {
  * effect, so the row is left as it is) or 'folded'.
  */
 export async function refoldOutage(tx, outageId) {
-  const outage = await tx.outage.findUnique({ where: { id: outageId }, select: { status: true, lastUpdateAt: true } });
+  const outage = await tx.outage.findUnique({ where: { id: outageId }, select: { status: true, kind: true, lastUpdateAt: true } });
   if (!outage) return 'deleted';
   const posts = await tx.outagePost.findMany({ where: { outageId }, select: { postId: true, postedAt: true, faultIndex: true, effect: true } });
   if (!posts.length) {
@@ -125,7 +125,9 @@ export async function refoldOutage(tx, outageId) {
 
   const f = foldEffects(posts);
   // a sweep that already marked the outage STALE/CLOSED stands unless newer news arrived
-  const swept = ['STALE', 'CLOSED'].includes(outage.status) && f.lastUpdateAt <= outage.lastUpdateAt;
+  // (except planned work whose corrected window still lies ahead: a wrong date must not leave it closed)
+  const windowAhead = outage.kind === 'PLANNED' && f.schedule?.end && new Date(f.schedule.end) > new Date();
+  const swept = ['STALE', 'CLOSED'].includes(outage.status) && f.lastUpdateAt <= outage.lastUpdateAt && !windowAhead;
   await tx.outage.update({
     where: { id: outageId },
     data: {
