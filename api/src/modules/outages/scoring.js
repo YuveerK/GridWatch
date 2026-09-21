@@ -8,6 +8,19 @@ const intersect = (a, b) => [...a].filter((x) => b.has(x));
  * post:   { kind, relevance, status, nodeIds:Set, relatedNodeIds:Set, localityIds:Set, sdcName, conversationId, postedAt:Date }
  * outage: { kind, status, nodeIds:Set, localityIds:Set, sdcName, conversationIds:Set, lastUpdateAt:Date, restoredAt:Date|null }
  */
+/**
+ * An outage that has been quiet for longer than the normal window (STALE: no news, outcome unknown) is only a candidate when the post
+ * names some of its exact equipment, and even then it may only reach the tie-break: a fault that dragged on (waiting for a part, an
+ * insurance claim) is the same fault, but a new fault on the same equipment days later is not, and a score alone cannot tell them apart.
+ */
+export function applyRevivalRule(candidate, post, { windowHours, highScore }) {
+  if (candidate.status !== 'STALE') return candidate;
+  const quietHours = (post.postedAt - candidate.lastUpdateAt) / HOUR;
+  if (quietHours <= windowHours) return candidate;
+  if (!candidate.reasons.some((r) => r.startsWith('shared node'))) return { ...candidate, score: 0, reasons: [...candidate.reasons, 'quiet for a long time and no shared equipment'] };
+  return { ...candidate, score: Math.min(candidate.score, highScore - 0.01), reasons: [...candidate.reasons, `quiet for ${(quietHours / 24).toFixed(1)} days: only the tie-break may pick it up again`] };
+}
+
 export function scoreCandidate(post, outage) {
   const reasons = [];
   let score = 0;

@@ -391,3 +391,29 @@ describe('a summary picture that opens with one piece of equipment', () => {
     expect(summary).toBeTruthy();
   });
 });
+
+describe('an outage that went quiet for days', () => {
+  it('is picked up again by a post naming its exact equipment (via the tie-break), and is live again', async () => {
+    await addPost(0, 'Vandalism at Alpha, replacement mini substation being procured', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    await processPending();
+    await prisma.outage.updateMany({ data: { status: 'STALE' } });
+    const later = await addPost(5 * 24 * 60, 'Alpha: insurance claim being finalised', reading('UPDATE', 'INVESTIGATING', ['Alpha']));
+    await processPending();
+    const all = await outages();
+    expect(all).toHaveLength(1);
+    expect(all[0].posts.map((p) => p.postId)).toContain(later);
+    expect(all[0].status).toBe('ACTIVE');
+    expect(tieBreaks.calls).toBe(1); // it was the tie-break, not an automatic link
+  });
+
+  it('is not touched by a post about different equipment, or once it is older than the revival limit', async () => {
+    await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    await processPending();
+    await prisma.outage.updateMany({ data: { status: 'STALE' } });
+    await addPost(5 * 24 * 60, 'Power out at Beta', reading('OUTAGE', 'INVESTIGATING', ['Beta']));
+    await addPost(15 * 24 * 60, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    await processPending();
+    expect(await outages()).toHaveLength(3);
+    expect(tieBreaks.calls).toBe(0);
+  });
+});

@@ -9,7 +9,7 @@ import { assertLeaseInTx, exclusive } from '../coordination/lease.js';
 import { buildEffect, initialStatus, refoldOutage, statusFor } from './outage-state.js';
 import { headlineNode, pickHeadlineMatch } from './headline.js';
 import { resolveOverride } from './overrides.js';
-import { scoreCandidate } from './scoring.js';
+import { applyRevivalRule, scoreCandidate } from './scoring.js';
 import { cachedVerdict, storeVerdict } from './tiebreak-cache.js';
 
 const LINKABLE = new Set(['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE']);
@@ -53,13 +53,14 @@ const originOf = (o) => {
 
 async function loadCandidates(post) {
   const since = new Date(post.postedAt.getTime() - env.OUTAGE_WINDOW_HOURS * HOUR);
+  const revivalSince = new Date(post.postedAt.getTime() - env.STALE_REVIVAL_HOURS * HOUR);
   const outages = await prisma.outage.findMany({
     where: {
       status: { not: 'CLOSED' },
       // an outage that opened after this post was published cannot be what the post is about (late or historical posts)
       startedAt: { lte: post.postedAt },
       // planned work (reminders days ahead, multi-day isolations) stays linkable much longer than a fault
-      OR: [{ kind: 'UNPLANNED', lastUpdateAt: { gte: since } }, { kind: 'PLANNED', lastUpdateAt: { gte: new Date(post.postedAt.getTime() - PLANNED_WINDOW_HOURS * HOUR) } }, { kind: 'PLANNED', scheduledEnd: { gte: post.postedAt } }],
+      OR: [{ kind: 'UNPLANNED', lastUpdateAt: { gte: since } }, { kind: 'UNPLANNED', status: 'STALE', lastUpdateAt: { gte: revivalSince } }, { kind: 'PLANNED', lastUpdateAt: { gte: new Date(post.postedAt.getTime() - PLANNED_WINDOW_HOURS * HOUR) } }, { kind: 'PLANNED', scheduledEnd: { gte: post.postedAt } }],
     },
     orderBy: [{ startedAt: 'asc' }, { title: 'asc' }],
     include: {
@@ -325,7 +326,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
 
   const candidates = (await loadCandidates(post))
     .filter((c) => !facts.fromDigest || !linkedToPost(c, post.id))
-    .map((c) => ({ ...c, ...scoreCandidate(post, c) }))
+    .map((c) => applyRevivalRule({ ...c, ...scoreCandidate(post, c) }, post, { windowHours: env.OUTAGE_WINDOW_HOURS, highScore: env.LINK_HIGH_SCORE }))
     .sort((a, b) => b.score - a.score || String(a.stableId).localeCompare(String(b.stableId)));
   const top = candidates[0];
   const summary = candidates.slice(0, 5).map((c) => ({ id: c.id, score: c.score, reasons: c.reasons }));
@@ -371,7 +372,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     if (head) {
       const narrow = { ...post, nodeIds: new Set([head.id]), localityIds: new Set() };
       narrow.relatedNodeIds = await relatedNodeIds(narrow.nodeIds);
-      const ranked = candidates.map((c) => ({ ...c, ...scoreCandidate(narrow, c) })).sort((a, b) => b.score - a.score || String(a.stableId).localeCompare(String(b.stableId)));
+      const ranked = candidates.filter((c) => !(c.status === 'STALE' && (post.postedAt - c.lastUpdateAt) / HOUR > env.OUTAGE_WINDOW_HOURS)).map((c) => ({ ...c, ...scoreCandidate(narrow, c) })).sort((a, b) => b.score - a.score || String(a.stableId).localeCompare(String(b.stableId)));
       const match = pickHeadlineMatch(ranked);
       if (match) {
         return commitLink({

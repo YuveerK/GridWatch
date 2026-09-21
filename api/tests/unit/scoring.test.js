@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { scoreCandidate } from '../../src/modules/outages/scoring.js';
+import { applyRevivalRule, scoreCandidate } from '../../src/modules/outages/scoring.js';
 
 const t0 = new Date('2026-09-16T08:00:00Z');
 const hoursLater = (h) => new Date(t0.getTime() + h * 3_600_000);
@@ -114,5 +114,25 @@ describe('a restoration that names different equipment but all the same suburbs'
     const o = outage({ nodeIds: new Set(['other-station']), localityIds: new Set(['a', 'b']) });
     const p = post({ nodeIds: new Set(['jg-strydom']), localityIds: new Set(['a']), postedAt: hoursLater(30) });
     expect(scoreCandidate(p, o).score).toBeLessThan(0.35);
+  });
+});
+
+describe('an outage quiet for a long time', () => {
+  const rule = { windowHours: 72, highScore: 0.7 };
+  const cand = (over = {}) => ({ status: 'STALE', lastUpdateAt: t0, score: 0.9, reasons: ['shared node x1 (overlap 1.00)'], ...over });
+  const post = (h) => ({ postedAt: hoursLater(h) });
+
+  it('within the normal window nothing changes', () => {
+    expect(applyRevivalRule(cand(), post(60), rule).score).toBe(0.9);
+  });
+  it('beyond it, equipment in common is needed, and even then only the tie-break may pick it up (never an automatic link)', () => {
+    const r = applyRevivalRule(cand(), post(112), rule);
+    expect(r.score).toBeLessThan(0.7);
+    expect(r.score).toBeGreaterThanOrEqual(0.35);
+    expect(r.reasons.at(-1)).toMatch(/4\.7 days/);
+    expect(applyRevivalRule(cand({ reasons: ['locality overlap 100%'] }), post(112), rule).score).toBe(0);
+  });
+  it('only STALE outages are treated this way', () => {
+    expect(applyRevivalRule(cand({ status: 'ACTIVE' }), post(112), rule).score).toBe(0.9);
   });
 });

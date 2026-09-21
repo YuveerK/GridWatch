@@ -64,6 +64,9 @@ export const schema = z
     MEDIA_MAX_BYTES: int(1024, 50 * 1024 * 1024).default(10 * 1024 * 1024),
     LINK_HIGH_SCORE: z.coerce.number().min(0).max(1).default(0.7),
     LINK_LOW_SCORE: z.coerce.number().min(0).max(1).default(0.35),
+    // A STALE unplanned outage (no news for a while, outcome unknown) can still be picked up again by a post naming its exact equipment,
+    // up to this many hours after its last news. Only the tie-break may do it, never an automatic link.
+    STALE_REVIVAL_HOURS: int(1, 24 * 60).default(240),
     OUTAGE_WINDOW_HOURS: int(1, 24 * 30).default(72),
     OUTAGE_AUTOCLOSE_HOURS: int(1, 24 * 30).default(48),
   })
