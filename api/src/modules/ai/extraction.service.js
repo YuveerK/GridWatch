@@ -59,12 +59,36 @@ async function fetchImage(url, { fetchFn = fetch } = {}) {
 }
 export const _fetchImageForTest = fetchImage;
 
+// A freshly posted picture may not be on X's image servers yet (404), and any network call can blip: those are worth another try a moment
+// later. A picture from the wrong host, one that is too large, or a real refusal (403) will not change, so it is not retried.
+const TRANSIENT_HTTP = new Set([404, 408, 425, 429, 500, 502, 503, 504]);
+export function isTransientImageError(err) {
+  const http = /^image (\d+)$/.exec(err?.message ?? '');
+  if (http) return TRANSIENT_HTTP.has(Number(http[1]));
+  return !/untrusted image host|image too large/.test(err?.message ?? '');
+}
+
+export async function fetchImageWithRetry(url, { fetchFn = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), delaysMs = [1500, 4000] } = {}) {
+  let last;
+  for (let i = 0; i <= delaysMs.length; i++) {
+    try {
+      return await fetchImage(url, { fetchFn });
+    } catch (err) {
+      last = err;
+      if (!isTransientImageError(err) || i === delaysMs.length) break;
+      await sleep(delaysMs[i]);
+    }
+  }
+  throw last;
+}
+
 async function loadImages(post) {
   const photos = post.PostMedia.filter((m) => m.mediaType === 'photo').slice(0, MAX_IMAGES);
-  const settled = await Promise.allSettled(photos.map((m) => fetchImage(m.url)));
+  const settled = await Promise.allSettled(photos.map((m) => fetchImageWithRetry(m.url)));
   const parts = settled.filter((s) => s.status === 'fulfilled').map((s) => s.value);
   const failed = settled.length - parts.length;
-  return { parts, failed };
+  const reasons = [...new Set(settled.filter((s) => s.status === 'rejected').map((s) => s.reason?.message ?? 'unknown'))];
+  return { parts, failed, reasons };
 }
 
 export async function extractPost(postId, { force = false, signal } = {}) {
@@ -75,7 +99,7 @@ export async function extractPost(postId, { force = false, signal } = {}) {
   const post = await prisma.sourcePost.findUniqueOrThrow({ where: { id: postId }, include: { PostMedia: true } });
   const text = postText(post);
   const started = Date.now();
-  const { parts: imageParts, failed } = await loadImages(post);
+  const { parts: imageParts, failed, reasons: imageFailures } = await loadImages(post);
   const knowledge = env.KNOWLEDGE_CONTEXT === 'on' ? await knowledgeContext(sdcFromText(text)) : null;
   const userText = buildUserText({
     post: { text, publishedAtLocal: sast(post.publishedAt), isReply: post.conversationId !== post.externalId },
@@ -114,7 +138,7 @@ export async function extractPost(postId, { force = false, signal } = {}) {
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     durationMs: Date.now() - started,
-    error: error ?? (failed ? `${failed} image(s) could not be fetched` : null),
+    error: error ?? (failed ? `${failed} image(s) could not be fetched (${imageFailures.join(', ')})` : null),
   };
   // A forced re-read that fails must not replace a good reading with a failure.
   if (!result && existing?.status === 'SUCCEEDED') {

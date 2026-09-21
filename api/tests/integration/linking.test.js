@@ -490,3 +490,24 @@ describe('planned work closed by a wrong date', () => {
     expect((await prisma.outage.findUnique({ where: { id: o.id } })).status).toBe('CLOSED');
   });
 });
+
+describe('a post held back because its picture would not download', () => {
+  it('is read again a few minutes later and linked, but only within the retry window', async () => {
+    const { retryImageFailures } = await import('../../src/modules/processing/processor.service.js');
+    const id = await addPost(0, 'Power out at Alpha', { ...reading('OUTAGE', 'INVESTIGATING', ['Alpha']), status: 'NEEDS_REVIEW', error: '1 image(s) could not be fetched (image 404)' });
+    await processPending();
+    expect((await prisma.sourcePost.findUnique({ where: { id } })).processingStatus).toBe('NEEDS_REVIEW');
+    await prisma.postExtraction.create({ data: { postId: id, promptVersion: 'v', model: 'm', status: 'NEEDS_REVIEW', relevance: 'OUTAGE', error: '1 image(s) could not be fetched (image 404)' } });
+
+    // too fresh (the first attempt just happened) and too old (a picture that is really gone): left alone
+    expect(await retryImageFailures({ now: at(1) })).toEqual({ tried: 0, fixed: 0 });
+    expect(await retryImageFailures({ now: at(120) })).toEqual({ tried: 0, fixed: 0 });
+
+    // the picture is there now: the next read succeeds
+    readings.set(id, reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    expect(await retryImageFailures({ now: at(10) })).toEqual({ tried: 1, fixed: 1 });
+    expect((await prisma.sourcePost.findUnique({ where: { id } })).processingStatus).toBe('RELEVANT');
+    expect(await outages()).toHaveLength(1);
+    expect(await retryImageFailures({ now: at(10) })).toEqual({ tried: 0, fixed: 0 }); // done: nothing left to retry
+  });
+});

@@ -5,7 +5,7 @@ import { ingestNewPosts } from '../ingestion/ingestion.service.js';
 import { sweepStaleOutages } from '../outages/linker.service.js';
 import { placeLocalities } from '../geo/geocode.service.js';
 import { withLease, PIPELINE } from '../coordination/lease.js';
-import { processPending } from './processor.service.js';
+import { processPending, retryImageFailures } from './processor.service.js';
 
 function friendly(err) {
   const m = String(err?.message ?? err);
@@ -20,7 +20,7 @@ function friendly(err) {
  * Single-flight (never two at once), with a cooldown on manual runs and a cap on posts read per run, because
  * every run spends money at X and at the AI provider. Dependencies are injected so it can be tested without either.
  */
-export function createCycle({ ingest, process, sweep, place, counts, lease = async (fn) => ({ acquired: true, value: await fn(undefined) }), now = () => Date.now(), cooldownMs = 90_000, maxPosts = 200 }) {
+export function createCycle({ ingest, process, retry, sweep, place, counts, lease = async (fn) => ({ acquired: true, value: await fn(undefined) }), now = () => Date.now(), cooldownMs = 90_000, maxPosts = 200 }) {
   let state = { state: 'idle', trigger: null, step: null, startedAt: null, finishedAt: null, progress: null, found: null, result: null, error: null };
   let lastManualAt = 0;
   let current = Promise.resolve();
@@ -49,6 +49,13 @@ export function createCycle({ ingest, process, sweep, place, counts, lease = asy
     } catch (err) {
       err.spent = true; // the AI may have been paid for before this failed
       throw err;
+    }
+    // posts held back only because a picture would not download are read again (bounded; never holds up or breaks a fetch)
+    let retried = { tried: 0, fixed: 0 };
+    try {
+      retried = (await retry?.({ ctx })) ?? retried;
+    } catch (err) {
+      logger.warn({ err: err?.message }, 'retrying posts with missing pictures failed; will try again next run');
     }
     state.step = 'tidying';
     // pin any suburbs learned from these posts on the map; capped and failure-proof, it can never hold up or break a fetch
@@ -79,6 +86,7 @@ export function createCycle({ ingest, process, sweep, place, counts, lease = asy
       updates: Math.max(0, after.outagePosts - before.outagePosts),
       capped: (proc?.remaining ?? 0) > 0,
       placed,
+      retriedPictures: retried.tried,
     };
   }
 
@@ -123,6 +131,7 @@ export function createCycle({ ingest, process, sweep, place, counts, lease = asy
 export const cycle = createCycle({
   ingest: ingestNewPosts,
   process: processPending,
+  retry: retryImageFailures,
   lease: (fn) => withLease(PIPELINE, fn),
   sweep: sweepStaleOutages,
   place: () => placeLocalities({ max: 8, budgetMs: 20_000 }),

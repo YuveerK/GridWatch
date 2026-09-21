@@ -191,6 +191,32 @@ export async function processPending({ limit, onPost, onStart, from, to, ctx } =
 }
 
 /**
+ * A post whose picture could not be downloaded is left "needs review", although the picture usually downloads fine minutes later. For a
+ * post published a few minutes to `maxAgeMs` ago, read it again (the picture is fetched afresh). Bounded on purpose: a post is tried on each
+ * run for at most that window, and only `limit` posts per run, so a picture that is really gone costs a handful of small AI calls, not more.
+ */
+export async function retryImageFailures({ ctx, now = new Date(), limit = 3, minAgeMs = 3 * 60_000, maxAgeMs = 40 * 60_000 } = {}) {
+  const posts = await prisma.sourcePost.findMany({
+    where: {
+      processingStatus: 'NEEDS_REVIEW',
+      publishedAt: { gte: new Date(now.getTime() - maxAgeMs), lte: new Date(now.getTime() - minAgeMs) },
+      extractions: { some: { status: 'NEEDS_REVIEW', error: { contains: 'could not be fetched' } } },
+    },
+    orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }],
+    take: limit,
+    select: { id: true, externalId: true },
+  });
+  let fixed = 0;
+  for (const p of posts) {
+    const r = await reprocessPost(p.id, { ctx, reextract: true });
+    const now2 = await prisma.sourcePost.findUnique({ where: { id: p.id }, select: { processingStatus: true } });
+    if (now2?.processingStatus !== 'NEEDS_REVIEW') fixed += 1;
+    logger.info({ postId: p.id, externalId: p.externalId, outcome: r.outcome, status: now2?.processingStatus }, 'retried a post whose picture could not be fetched');
+  }
+  return { tried: posts.length, fixed };
+}
+
+/**
  * Re-do one post. `reextract: false` (default) re-links using the stored reading: nothing is sent to the AI.
  * `reextract: true` also asks the AI to read the post again (and keeps the old reading if that fails).
  * The post's old contribution is removed first (its timeline entries, decisions, graph evidence), the outages it touched
