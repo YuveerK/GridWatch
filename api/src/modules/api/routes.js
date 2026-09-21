@@ -11,6 +11,7 @@ import { processPending, reprocessPost } from '../processing/processor.service.j
 import { authorize, checkToken, isSameOrigin, allowedOrigins, loginAllowed, recordLoginFailure, requireOperator, resetLoginFailures, sessionCookie } from './operator-auth.js';
 import { equipmentFlow, equipmentHubs } from '../geo/equipment-map.service.js';
 import { insights } from './insights.service.js';
+import { CATEGORY_IDS, dailyPostCounts, listPosts } from './post-activity.service.js';
 import { latestUpdates } from './updates.service.js';
 import { localityHistory } from './locality-history.service.js';
 
@@ -639,6 +640,21 @@ router.get('/v1/updates', wrap(async (req, res) => {
   const q = parse(z.object({ limit: intParam(1, 100, 30), days: intParam(1, 30, 7), locality: id.optional() }), req.query, res);
   if (!q) return;
   res.json({ data: await latestUpdates({ limit: q.limit, days: q.days, localityId: q.locality ?? null }) });
+}));
+
+/** How many posts City Power made each day (Johannesburg time), by kind. */
+router.get('/v1/posts/daily', wrap(async (req, res) => {
+  const q = parse(z.object({ days: intParam(1, 90, 14) }), req.query, res);
+  if (!q) return;
+  res.json(await dailyPostCounts({ days: q.days }));
+}));
+
+/** City Power's posts, newest first. Filter by day range (from/to, YYYY-MM-DD), kind and text. */
+const dayText = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((d) => !Number.isNaN(Date.parse(`${d}T00:00:00Z`)), 'not a date');
+router.get('/v1/posts', wrap(async (req, res) => {
+  const q = parse(z.object({ from: dayText.optional(), to: dayText.optional(), type: z.enum(CATEGORY_IDS).optional(), q: z.string().trim().max(100).optional(), limit: intParam(1, 100, 30), offset: intParam(0, 100_000, 0) }), req.query, res);
+  if (!q) return;
+  res.json(await listPosts({ from: q.from ?? null, to: q.to ?? null, type: q.type ?? null, q: q.q || null, limit: q.limit, offset: q.offset }));
 }));
 
 router.get('/v1/insights', wrap(async (req, res) => {

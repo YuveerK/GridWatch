@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
+import PostActivity from '../components/PostActivity.jsx';
 import { EmptyState, ErrorState, SectionHead, Skeleton } from '../components/ui.jsx';
 import { nice, plural, prettySdc, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
@@ -235,6 +236,11 @@ export default function Insights() {
           )}
         </div>
       )}
+
+      <section className="section" aria-labelledby="posts-h">
+        <SectionHead id="posts-h" title="How much City Power posts" sub="Posts per day by kind. Pick a day or a kind, or search, to read the posts themselves." />
+        <PostActivity days={days} />
+      </section>
     </div>
   );
 }
