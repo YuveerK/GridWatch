@@ -116,6 +116,256 @@
       "b": "2100955070640554283",
       "same": true,
       "why": "Full restoration of the 18-19 Sept Weltevredenpark outage (JG Strydom), not a separate fault"
+    },
+    {
+      "a": "2102382921919169006",
+      "b": "2101952647938900440",
+      "same": true,
+      "why": "Same Lombardy West cable fault the digest wrongly split into a second outage"
+    },
+    {
+      "a": "2102404949132845283",
+      "fa": 1,
+      "b": "2101952647938900440",
+      "same": true,
+      "why": "Same Lombardy West cable fault the digest wrongly split into a second outage"
+    },
+    {
+      "a": "2102283757973586116",
+      "fa": 1,
+      "b": "2101952647938900440",
+      "same": true,
+      "why": "Same Lombardy West cable fault the digest wrongly split into a second outage"
+    },
+    {
+      "a": "2102404949132845283",
+      "b": "2102283757973586116",
+      "same": true,
+      "why": "Same Wynberg indoor-transformer fault as the earlier digest item"
+    },
+    {
+      "a": "2102316525902254570",
+      "b": "2102283757973586116",
+      "same": true,
+      "why": "Same Wynberg indoor-transformer fault"
+    },
+    {
+      "a": "2102380378858098820",
+      "b": "2102283757973586116",
+      "same": true,
+      "why": "Same Wynberg indoor-transformer fault"
+    },
+    {
+      "a": "2102405893816041532",
+      "b": "2099499096721490225",
+      "same": true,
+      "why": "Same Klipfontein planned maintenance the outage wrongly closed while still ongoing (a schedule-reading bug, since fixed) forced apart"
+    },
+    {
+      "a": "2099931798084243877",
+      "fa": 0,
+      "b": "2101723566651707735",
+      "same": false,
+      "why": "Bree Street cable fault, separate from the John Ware fault"
+    },
+    {
+      "a": "2098675283838599210",
+      "fa": 0,
+      "b": "2098447239626535305",
+      "fb": 0,
+      "same": true,
+      "why": "Central substation fire, partial restoration: same fault as the 11 Sept Central posts"
+    },
+    {
+      "a": "2100679551311659093",
+      "fa": 0,
+      "b": "2100561374829060125",
+      "fb": 0,
+      "same": true,
+      "why": "Full restoration of the 17 Sept Northriding AH / Northgate outage (same suburbs, 8 hours later)"
+    },
+    {
+      "a": "2101909469168840731",
+      "fa": 2,
+      "b": "2100215350285512712",
+      "fb": 0,
+      "same": true,
+      "why": "Same Dale Lace Avenue vandalised mini-substation fault as 16 Sept, still waiting on procurement"
+    },
+    {
+      "a": "2100818320236621836",
+      "fa": 0,
+      "b": "2099499096721490225",
+      "fb": 0,
+      "same": true,
+      "why": "Same Klipfontein planned work (the earlier posts misspelled it Klipfotein)"
+    },
+    {
+      "a": "2101186765541220713",
+      "fa": 1,
+      "b": "2099499096721490225",
+      "fb": 0,
+      "same": true,
+      "why": "Same Klipfontein planned work (the earlier posts misspelled it Klipfotein)"
+    },
+    {
+      "a": "2101310933775557037",
+      "fa": 1,
+      "b": "2099499096721490225",
+      "fb": 0,
+      "same": true,
+      "why": "Same Klipfontein planned work (the earlier posts misspelled it Klipfotein)"
+    },
+    {
+      "a": "2101467791781937493",
+      "fa": 0,
+      "b": "2099499096721490225",
+      "fb": 0,
+      "same": true,
+      "why": "Same Klipfontein planned work (the earlier posts misspelled it Klipfotein)"
+    },
+    {
+      "a": "2101673562339746242",
+      "fa": 1,
+      "b": "2099499096721490225",
+      "fb": 0,
+      "same": true,
+      "why": "Same Klipfontein planned work (the earlier posts misspelled it Klipfotein)"
+    },
+    {
+      "a": "2101829013001912335",
+      "fa": 0,
+      "b": "2099499096721490225",
+      "fb": 0,
+      "same": true,
+      "why": "Same Klipfontein planned work (the earlier posts misspelled it Klipfotein)"
+    },
+    {
+      "a": "2101922729016410183",
+      "fa": 1,
+      "b": "2099499096721490225",
+      "fb": 0,
+      "same": true,
+      "why": "Same Klipfontein planned work (the earlier posts misspelled it Klipfotein)"
+    },
+    {
+      "a": "2101186765541220713",
+      "fa": 0,
+      "b": "2100817139552698749",
+      "fb": 0,
+      "same": true,
+      "why": "Greenstone Hill planned work: same outage (summary post reprocessed by mistake into a duplicate)"
+    },
+    {
+      "a": "2101310933775557037",
+      "fa": 0,
+      "b": "2100817139552698749",
+      "fb": 0,
+      "same": true,
+      "why": "Greenstone Hill planned work: same outage (summary post reprocessed by mistake into a duplicate)"
+    },
+    {
+      "a": "2101673562339746242",
+      "fa": 0,
+      "b": "2100817139552698749",
+      "fb": 0,
+      "same": true,
+      "why": "Greenstone Hill planned work: same outage (summary post reprocessed by mistake into a duplicate)"
+    },
+    {
+      "a": "2101929981739745284",
+      "fa": 5,
+      "b": "2101274153458286960",
+      "fb": 0,
+      "same": true,
+      "why": "Kazerne (misspelled Karzene on 19 Sept): same Droste Park outage"
+    },
+    {
+      "a": "2101939494538690759",
+      "fa": 1,
+      "b": "2101912402581127474",
+      "fb": 0,
+      "same": true,
+      "why": "Halfway House: equipment named after the suburb, same fault as the 07:52 report"
+    },
+    {
+      "a": "2102012216782242143",
+      "fa": 0,
+      "b": "2100215350285512712",
+      "fb": 0,
+      "same": true,
+      "why": "Dale Lace Avenue vandalised mini-substation: the new unit has been delivered (same fault; the post names the street in its text)"
+    },
+    {
+      "a": "2101312836492202191",
+      "fa": 0,
+      "b": "2100955070640554283",
+      "fb": 0,
+      "same": true,
+      "why": "Full restoration of the 18-19 Sept Weltevredenpark outage (JG Strydom), not a separate fault"
+    },
+    {
+      "a": "2102382921919169006",
+      "fa": 0,
+      "b": "2101952647938900440",
+      "fb": 0,
+      "same": true,
+      "why": "Same Lombardy West cable fault the digest wrongly split into a second outage"
+    },
+    {
+      "a": "2102404949132845283",
+      "fa": 1,
+      "b": "2101952647938900440",
+      "fb": 0,
+      "same": true,
+      "why": "Same Lombardy West cable fault the digest wrongly split into a second outage"
+    },
+    {
+      "a": "2102283757973586116",
+      "fa": 1,
+      "b": "2101952647938900440",
+      "fb": 0,
+      "same": true,
+      "why": "Same Lombardy West cable fault the digest wrongly split into a second outage"
+    },
+    {
+      "a": "2102283757973586116",
+      "fa": 0,
+      "b": "2101952647938900440",
+      "same": false,
+      "why": "Wynberg indoor-transformer fault: a separate, concurrent fault at the same substation, not the Lombardy West cable fault"
+    },
+    {
+      "a": "2102404949132845283",
+      "fa": 0,
+      "b": "2102283757973586116",
+      "fb": 0,
+      "same": true,
+      "why": "Same Wynberg indoor-transformer fault as the earlier digest item"
+    },
+    {
+      "a": "2102316525902254570",
+      "fa": 0,
+      "b": "2102283757973586116",
+      "fb": 0,
+      "same": true,
+      "why": "Same Wynberg indoor-transformer fault"
+    },
+    {
+      "a": "2102380378858098820",
+      "fa": 0,
+      "b": "2102283757973586116",
+      "fb": 0,
+      "same": true,
+      "why": "Same Wynberg indoor-transformer fault"
+    },
+    {
+      "a": "2102405893816041532",
+      "fa": 0,
+      "b": "2099499096721490225",
+      "fb": 0,
+      "same": true,
+      "why": "Same Klipfontein planned maintenance the outage wrongly closed while still ongoing (a schedule-reading bug, since fixed) forced apart"
     }
   ]
 }

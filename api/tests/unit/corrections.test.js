@@ -11,11 +11,23 @@ describe('B5: a correction becomes a test case', () => {
   it('a join is a "same" pair, a split with a contrast post is a "different" pair, and a bare split says it needs one', () => {
     const { pairs, needContrast } = pairsFromOverrides(rows);
     expect(pairs).toEqual([
-      { a: '111', b: '222', same: true, why: 'same fault' },
+      { a: '111', fa: 0, b: '222', fb: 0, same: true, why: 'same fault' },
       { a: '333', fa: 2, b: '444', fb: 1, same: true, why: 'a manual correction' },
-      { a: '555', b: '666', same: false, why: 'a different fault' },
+      { a: '555', fa: 0, b: '666', same: false, why: 'a different fault' },
     ]);
     expect(needContrast).toEqual(['777']);
+  });
+  it('fault 0 is recorded, not treated as "no fault given": a multi-fault post can share an outage through one fault while a specific fault of it must not (Gresswold, 22 Sept)', () => {
+    const rows2 = [{ postExternalId: 'p', faultIndex: 0, action: 'SPLIT', contrastExternalId: 'q', note: null }];
+    const { pairs } = pairsFromOverrides(rows2);
+    expect(pairs).toEqual([{ a: 'p', fa: 0, b: 'q', same: false, why: 'a manual correction' }]);
+    // without the fa, checking "different" against the post's OTHER fault (which does share an outage with q) would wrongly pass
+    const outagesOf = (id, fault) => {
+      if (id === 'p') return fault === 0 ? new Set(['wynberg']) : fault === 1 ? new Set(['lombardy']) : new Set(['wynberg', 'lombardy']);
+      return new Set(['lombardy']); // q
+    };
+    expect(evaluatePairs(pairs, outagesOf).passed).toHaveLength(1);
+    expect(evaluatePairs([{ a: 'p', b: 'q', same: false }], outagesOf).passed).toHaveLength(0); // the bug this fixes: no fa lets fault 1 slip through
   });
   it('merging never duplicates a pair, whichever way round it is written, and keeps the existing wording', () => {
     const existing = [{ a: '111', b: '222', same: true, why: 'first wording' }];

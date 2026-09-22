@@ -13,10 +13,13 @@ export function pairsFromOverrides(rows) {
   const pairs = [];
   const needContrast = [];
   for (const r of rows) {
+    // A post's faultIndex is a real, meaningful value even when it is 0 (a digest's FIRST fault is not "no particular fault"): omitting it
+    // whenever it happens to be 0 would make the pair check every fault of a multi-fault post instead of just the one this correction is
+    // about, and could pass by accident through one of its OTHER faults (Gresswold, 22 Sept: two of its faults went to different outages).
     if (r.action === 'JOIN' && r.anchorExternalId) {
-      pairs.push({ a: r.postExternalId, ...(r.faultIndex ? { fa: r.faultIndex } : {}), b: r.anchorExternalId, ...(r.anchorFaultIndex ? { fb: r.anchorFaultIndex } : {}), same: true, why: r.note ?? 'a manual correction' });
+      pairs.push({ a: r.postExternalId, ...(r.faultIndex != null ? { fa: r.faultIndex } : {}), b: r.anchorExternalId, ...(r.anchorFaultIndex != null ? { fb: r.anchorFaultIndex } : {}), same: true, why: r.note ?? 'a manual correction' });
     } else if (r.action === 'SPLIT') {
-      if (r.contrastExternalId) pairs.push({ a: r.postExternalId, ...(r.faultIndex ? { fa: r.faultIndex } : {}), b: r.contrastExternalId, same: false, why: r.note ?? 'a manual correction' });
+      if (r.contrastExternalId) pairs.push({ a: r.postExternalId, ...(r.faultIndex != null ? { fa: r.faultIndex } : {}), b: r.contrastExternalId, same: false, why: r.note ?? 'a manual correction' });
       else needContrast.push(r.postExternalId);
     }
   }
