@@ -41,7 +41,8 @@ const onPost = (res, n, total) => {
   if (n % 25 === 0) console.log(`\n=== ${n}/${total} done, ${freshCalls} fresh Gemini reads, ${((Date.now() - started) / 60000).toFixed(1)} min elapsed ===\n`);
 };
 
-const result = await processPending({ limit, onPost });
+// --sweep-as-of: replay history as if the hourly "gone quiet" marking had run in between (closer to live; see docs). Off by default.
+const result = await processPending({ limit, onPost, sweepAsOf: args.includes('--sweep-as-of') });
 console.log('\nFINISHED', result, `${freshCalls} fresh Gemini reads, ${((Date.now() - started) / 60000).toFixed(1)} min`);
 {
   const { aiUsage } = await import('../src/modules/ai/gemini.client.js');

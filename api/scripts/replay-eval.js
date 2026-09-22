@@ -54,7 +54,7 @@ try {
   await src.$disconnect();
   await dst.$disconnect();
 
-  const proc = run(['scripts/process.js']);
+  const proc = run(['scripts/process.js', ...(process.argv.includes('--sweep-as-of') ? ['--sweep-as-of'] : [])]);
   const tail = proc.stdout.trim().split('\n').slice(-3).join('\n');
   console.log(`\nreplay finished (exit ${proc.status}):\n${tail}${proc.stderr ? `\nstderr: ${proc.stderr.slice(0, 500)}` : ''}`);
 

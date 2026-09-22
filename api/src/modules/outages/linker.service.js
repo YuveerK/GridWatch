@@ -475,6 +475,9 @@ export async function sweepStaleOutages(now = new Date(), { ctx } = {}) {
   return outcome.acquired ? outcome.value : { skipped: true };
 }
 
+/** Only the "gone quiet" marking of the sweep, as of `now` (for replaying history; see processPending's sweepAsOf). */
+export const markQuietOutagesStale = (now) => prisma.outage.updateMany({ where: { kind: 'UNPLANNED', lastUpdateAt: { lt: new Date(now.getTime() - env.OUTAGE_AUTOCLOSE_HOURS * HOUR) }, status: { in: ['ACTIVE', 'PARTIALLY_RESTORED'] } }, data: { status: 'STALE' } });
+
 async function sweepLocked(now) {
   const cutoff = new Date(now.getTime() - env.OUTAGE_AUTOCLOSE_HOURS * HOUR);
   const plannedCutoff = new Date(now.getTime() - PLANNED_WINDOW_HOURS * HOUR);

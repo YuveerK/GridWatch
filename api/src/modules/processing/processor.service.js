@@ -6,7 +6,7 @@ import { LeaseLostError, assertLeaseInTx, exclusive, recoverStaleWork } from '..
 import { learnFromExtraction, removeContributions } from '../infrastructure/infrastructure.service.js';
 import { readingRevision } from '../../lib/reading-revision.js';
 import { MAX_RETRY_ATTEMPTS, nextRetryAt } from '../../lib/retry.js';
-import { linkPost, recordDecision } from '../outages/linker.service.js';
+import { linkPost, markQuietOutagesStale, recordDecision } from '../outages/linker.service.js';
 import { refoldOutage } from '../outages/outage-state.js';
 import { markRestoredPlaces } from '../../lib/restored-places.js';
 
@@ -163,7 +163,13 @@ export async function processPost(postId, { ctx, force = false } = {}) {
  * (their finished faults are kept, only the rest is redone). Posts waiting for review are left for a person.
  *   limit  undefined/null = everything, 0 = nothing, n = at most n. `remaining` reports what was left behind.
  */
-export async function processPending({ limit, onPost, onStart, from, to, ctx } = {}) {
+/**
+ * Process every waiting post, oldest first. `sweepAsOf`: for replaying HISTORY. Live, the cleanup sweep runs every cycle, so an outage that
+ * went quiet is marked STALE (and stays revivable) by the time a later post arrives. A replay would otherwise never sweep between posts,
+ * and quiet outages would simply fall out of the candidate window. With this on, the "gone quiet" marking runs as of each post's own time (at most
+ * hourly). Only that marking: the sweep's closing of restored and planned outages is deliberately NOT replayed (see docs).
+ */
+export async function processPending({ limit, onPost, onStart, from, to, ctx, sweepAsOf = false } = {}) {
   const outcome = await exclusive(ctx, async (held) => {
     await recoverStaleWork();
     const where = {
@@ -171,12 +177,17 @@ export async function processPending({ limit, onPost, onStart, from, to, ctx } =
       ...(from || to ? { publishedAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } } : {}),
     };
     const take = limit == null ? undefined : Math.max(0, Math.floor(limit));
-    const posts = take === 0 ? [] : await prisma.sourcePost.findMany({ where, orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }], select: { id: true }, ...(take ? { take } : {}) });
+    const posts = take === 0 ? [] : await prisma.sourcePost.findMany({ where, orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }], select: { id: true, publishedAt: true }, ...(take ? { take } : {}) });
+    let sweptAt = 0;
     onStart?.(posts.length);
     const tally = {};
     let done = 0;
     for (const [i, p] of posts.entries()) {
       if (held.lost || held.signal?.aborted) break;
+      if (sweepAsOf && p.publishedAt.getTime() - sweptAt >= 3_600_000) {
+        sweptAt = p.publishedAt.getTime();
+        await markQuietOutagesStale(p.publishedAt);
+      }
       let res = await processLocked(p.id, held);
       if (res.outcome === 'ERROR' && !held.lost) {
         // a one-off hiccup (database busy, network blip) should not lose an update: try once more, otherwise the next run picks it up
