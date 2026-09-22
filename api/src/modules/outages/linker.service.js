@@ -26,6 +26,16 @@ export const isDigest = (facts) => !facts.fromDigest && (facts.rootCount >= 3 ||
 export const mayBeNewFault = (post, top) =>
   Boolean(top && post.relevance === 'OUTAGE' && post.status === 'INVESTIGATING' && top.raw.status === 'PARTIALLY_RESTORED' && !top.reasons.includes('same thread'));
 
+// How close the runner-up can be to the top candidate before a "confident" score is no longer trusted on its own (Gresswold, 22 Sept: two
+// concurrent, unrelated faults at the same substation with no other distinguishing equipment scored 0.892 and 0.892 - an exact tie - and
+// the higher one alone clearing LINK_HIGH_SCORE picked between them by array order, not by evidence).
+const CLOSE_MARGIN = 0.005;
+/** The top candidate is not actually decisive: a real runner-up sits within CLOSE_MARGIN of it. A score alone cannot tell them apart. */
+export const tooCloseToCall = (candidates) => {
+  const [top, runnerUp] = candidates;
+  return Boolean(top && runnerUp && runnerUp.score >= env.LINK_LOW_SCORE && top.score - runnerUp.score < CLOSE_MARGIN);
+};
+
 /** Separate faults reported in one graphic are different outages by definition. */
 export const linkedToPost = (candidate, postId) => candidate.raw.posts.some((p) => p.postId === postId);
 
@@ -373,10 +383,14 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
   // being fixed or a NEW fault in the same streets (Newtown, 15 Sept: a Bree cable fault while the John Ware one sat at 98%).
   // A high score alone cannot tell them apart, so the tie-break decides (unless it is the same conversation thread).
   const maybeNewFault = mayBeNewFault(post, top);
+  // Two candidates scoring almost the same is itself ambiguity, whatever the top one's own score is: deciding between them by array
+  // order (whichever sorts first) is a guess dressed up as confidence. Let the tie-break choose, exactly as it does for a score in the
+  // ambiguous middle band.
+  const tooClose = tooCloseToCall(candidates);
   if (manual) {
     outageId = manual.action === 'JOIN' ? manual.outageId : null;
     reason = `manual: ${manual.action === 'JOIN' ? 'joined the outage of the anchor post' : 'kept as its own outage'}${manual.note ? ` (${manual.note})` : ''}`;
-  } else if (top && top.score >= env.LINK_HIGH_SCORE && !maybeNewFault) {
+  } else if (top && top.score >= env.LINK_HIGH_SCORE && !maybeNewFault && !tooClose) {
     outageId = top.id;
     reason = top.reasons.join(', ');
   } else if (top && top.score >= env.LINK_LOW_SCORE && (!isDigest(facts) || !(extraction.result.faults?.length >= 2))) {

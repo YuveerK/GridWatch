@@ -354,6 +354,36 @@ describe('A20: cached tie-breaks keep pointing at the same outage', () => {
 });
 
 
+describe('two candidates too close to call: score alone must not decide by array order (Gresswold, 22 Sept)', () => {
+  it('an exact tie between two live outages at the same equipment goes to the tie-break, not to whichever sorts first', async () => {
+    const { setOverride } = await import('../../src/modules/outages/overrides.js');
+    // two SEPARATE, concurrent faults at the same substation, in different (non-overlapping) suburbs, opened moments apart
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha'], { localities: [{ name: 'North', state: 'AFFECTED' }] }));
+    await processPost(a);
+    const b = await addPost(0, 'Power out at Alpha too', reading('OUTAGE', 'INVESTIGATING', ['Alpha'], { localities: [{ name: 'South', state: 'AFFECTED' }] }));
+    await setOverride({ postId: b, action: 'SPLIT' }); // a person already established these are two distinct faults
+    await processPost(b);
+    expect(await outages()).toHaveLength(2);
+    // a third update names only the shared equipment, no suburb either existing outage claims: both score identically (shared node alone)
+    const c = await addPost(0, 'Alpha update', reading('UPDATE', 'REPAIRING', ['Alpha'], { localities: [{ name: 'East', state: 'AFFECTED' }] }));
+    tieBreaks.pick = 0;
+    const r = await processPost(c);
+    expect(tieBreaks.calls).toBe(1); // decided by the tie-break, not silently picked
+    expect(r.detail.usedLlm).toBe(true);
+    expect(await outages()).toHaveLength(2); // still two distinct faults: nothing was invented or merged by a coin flip
+  });
+
+  it('a clearly better candidate is still picked deterministically (no needless tie-break)', async () => {
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha'], { localities: [{ name: 'North', state: 'AFFECTED' }] }));
+    await processPost(a);
+    const b = await addPost(60, 'Alpha update', reading('UPDATE', 'REPAIRING', ['Alpha'], { localities: [{ name: 'North', state: 'AFFECTED' }] }));
+    const r = await processPost(b);
+    expect(tieBreaks.calls).toBe(0);
+    expect(r.detail.usedLlm).toBe(false);
+    expect(await outages()).toHaveLength(1);
+  });
+});
+
 describe('a person\'s correction of a link', () => {
   it('a split keeps a post out of an outage the rules would join, and survives a full rebuild', async () => {
     const { setOverride } = await import('../../src/modules/outages/overrides.js');
