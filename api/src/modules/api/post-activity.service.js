@@ -12,10 +12,11 @@ export const CATEGORIES = [
   { id: 'PLANNED', label: 'Planned work' },
   { id: 'SUMMARY', label: 'Service-centre summaries' },
   { id: 'NOTICE', label: 'Notices' },
-  { id: 'REPLY', label: 'Replies to customers' },
   { id: 'OTHER', label: 'Other' },
 ];
 export const CATEGORY_IDS = CATEGORIES.map((c) => c.id);
+// Replies to individual customers ("@name Hi, we are following up") are not City Power's outage communication: they are left out of the counts
+// and the list altogether (categoryOf still recognises them).
 
 /** Pure: which kind is a post, from how it was processed and what the reading said it was. */
 export function categoryOf(processingStatus, relevance, reply = false) {
@@ -58,9 +59,10 @@ export function buildDaily(rows, { days, now = new Date() }) {
   for (const r of rows) {
     const day = by.get(r.day);
     if (!day) continue;
+    if (r.reply) continue;
     const n = Number(r.n);
     day.total += n;
-    day.byCategory[categoryOf(r.ps, r.rel, r.reply)] += n;
+    day.byCategory[categoryOf(r.ps, r.rel, false)] += n;
   }
   return list.map((d) => by.get(d));
 }
@@ -72,7 +74,7 @@ export async function dailyPostCounts({ days = 14, now = new Date() } = {}) {
     prisma.$queryRaw`
       SELECT to_char(sp."publishedAt" + interval '2 hours', 'YYYY-MM-DD') AS day, sp."processingStatus"::text AS ps, pe.relevance AS rel, (left(coalesce(sp."noteTweetText", sp."text"), 1) = '@') AS reply, count(*)::int AS n
       FROM "SourcePost" sp ${LATEST_READING}
-      WHERE sp."publishedAt" >= ${utc(start)}
+      WHERE sp."publishedAt" >= ${utc(start)} AND left(coalesce(sp."noteTweetText", sp."text"), 1) <> '@'
       GROUP BY 1, 2, 3, 4`,
     prisma.sourcePost.aggregate({ _min: { publishedAt: true } }),
   ]);
@@ -99,7 +101,7 @@ export const readable = (t, max = 360) => {
  * `total` is the number matching the filters (not just this page), so a screen can say "48 posts".
  */
 export async function listPosts({ from = null, to = null, type = null, q = null, limit = 30, offset = 0 } = {}) {
-  const parts = [Prisma.sql`TRUE`];
+  const parts = [Prisma.sql`left(coalesce(sp."noteTweetText", sp."text"), 1) <> '@'`]; // customer replies are left out (see CATEGORIES)
   if (from) parts.push(Prisma.sql`sp."publishedAt" >= ${utc(sastDayRange(from).start)}`);
   if (to) parts.push(Prisma.sql`sp."publishedAt" < ${utc(sastDayRange(to).end)}`);
   if (q) parts.push(Prisma.sql`coalesce(sp."noteTweetText", sp."text") ILIKE ${`%${escapeLike(q)}%`}`);

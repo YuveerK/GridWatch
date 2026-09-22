@@ -40,11 +40,11 @@ beforeEach(async () => {
 describe('GET /v1/posts/daily', () => {
   it('counts posts per Johannesburg day by kind, oldest day first', async () => {
     const r = await (await get('/v1/posts/daily?days=90')).json();
-    expect(r.total).toBe(5);
+    expect(r.total).toBe(4); // the customer reply is not counted
     const byDay = Object.fromEntries(r.daily.filter((d) => d.total).map((d) => [d.date, d]));
     expect(byDay['2026-09-20'].total).toBe(1); // 23:30 is still the 20th in Johannesburg
-    expect(byDay['2026-09-21']).toMatchObject({ total: 4, byCategory: { UPDATE: 1, RESTORATION: 1, REPLY: 1, NOTICE: 1 } });
-    expect(r.categories.map((c) => c.id)).toContain('REPLY');
+    expect(byDay['2026-09-21']).toMatchObject({ total: 3, byCategory: { UPDATE: 1, RESTORATION: 1, NOTICE: 1 } });
+    expect(r.categories.map((c) => c.id)).not.toContain('REPLY');
     expect(r.daily.at(-1).date >= r.daily[0].date).toBe(true);
   });
   it('rejects a silly window', async () => {
@@ -56,18 +56,18 @@ describe('GET /v1/posts/daily', () => {
 describe('GET /v1/posts', () => {
   it('lists newest first with the total, a day filter and paging', async () => {
     const all = await (await get('/v1/posts')).json();
-    expect(all.total).toBe(5);
+    expect(all.total).toBe(4); // customer replies are left out
     expect(all.data[0].text).toMatch(/vandalism/); // newest first
     const day = await (await get('/v1/posts?from=2026-09-21&to=2026-09-21')).json();
-    expect(day.total).toBe(4);
+    expect(day.total).toBe(3);
     const page = await (await get('/v1/posts?limit=2&offset=0')).json();
-    expect(page).toMatchObject({ total: 5, hasMore: true });
+    expect(page).toMatchObject({ total: 4, hasMore: true });
     expect(page.data).toHaveLength(2);
-    expect((await (await get('/v1/posts?limit=2&offset=4')).json()).hasMore).toBe(false);
+    expect((await (await get('/v1/posts?limit=2&offset=3')).json()).hasMore).toBe(false);
   });
   it('filters by kind and searches the text, with % and _ treated as plain characters', async () => {
     expect((await (await get('/v1/posts?type=RESTORATION')).json()).data.map((p) => p.text)).toEqual(['Power restored at Westbury']);
-    expect((await (await get('/v1/posts?type=REPLY')).json()).total).toBe(1);
+    expect((await get('/v1/posts?type=REPLY')).status).toBe(400); // replies are not a kind any more
     expect((await (await get('/v1/posts?q=fort')).json()).total).toBe(2);
     expect((await (await get('/v1/posts?q=100%25%20vandalism_now')).json()).total).toBe(1);
     expect((await (await get('/v1/posts?q=100%25%20vandalismXnow')).json()).total).toBe(0);

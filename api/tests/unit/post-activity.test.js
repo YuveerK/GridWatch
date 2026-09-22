@@ -46,7 +46,7 @@ describe('counts per day', () => {
     expect(d[1].total).toBe(0);
   });
   it('totals and per-kind counts add up', () => {
-    expect(d[2]).toMatchObject({ total: 5, byCategory: { OUTAGE: 3, REPLY: 2, NOTICE: 0 } });
+    expect(d[2]).toMatchObject({ total: 3, byCategory: { OUTAGE: 3, NOTICE: 0 } }); // the 2 replies are not counted
     expect(d[0]).toMatchObject({ total: 4, byCategory: { NOTICE: 4 } });
   });
 });
