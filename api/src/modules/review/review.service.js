@@ -24,7 +24,7 @@ export async function detectSuspicious({ prisma, postIds, now = new Date() }) {
       retries: { select: { faultIndex: true, nextRetryAt: true, kind: true } },
       outagePosts: {
         select: {
-          faultIndex: true, role: true, effect: true,
+          faultIndex: true, role: true, effect: true, postedAt: true,
           outage: { select: { id: true, title: true, kind: true, status: true, startedAt: true, retroactive: true, localities: { select: { localityId: true } }, nodes: { select: { nodeId: true, node: { select: { id: true, name: true, type: true, normalizedKey: true, evidenceCount: true } } } }, posts: { select: { postId: true, faultIndex: true, effect: true } } } },
         },
       },
@@ -76,6 +76,20 @@ export async function detectSuspicious({ prisma, postIds, now = new Date() }) {
           const conflict = others.filter((p) => p.kind !== o.kind && p.status !== 'CANCELLED' && p.nodes.some((n) => nodeIds.includes(n.nodeId)));
           if (conflict.length) add(x.id, op.faultIndex, 'KIND_CONFLICT', `${conflict[0].kind.toLowerCase()}: "${conflict[0].title}"`);
         }
+      }
+      // A restoration placed by its EQUIPMENT while an older, still-open report that named only suburbs (no equipment) covers the same suburbs:
+      // the restoration may really close that older report (Northriding, 17 Sept). Only pointed out; nothing is moved.
+      if (op.effect?.status === 'RESTORED' && nodeIds.length && locIds.length >= 2) {
+        const older = await prisma.outage.findMany({
+          where: {
+            id: { not: o.id }, kind: o.kind, status: { in: ['ACTIVE', 'PARTIALLY_RESTORED', 'STALE'] }, nodes: { none: {} },
+            startedAt: { lte: op.postedAt, gte: new Date(op.postedAt.getTime() - 72 * HOUR) },
+            localities: { some: { localityId: { in: locIds } } },
+          },
+          select: { title: true, localities: { select: { localityId: true } } },
+        });
+        const twin = older.find((p) => p.localities.filter((l) => locIds.includes(l.localityId)).length >= 2);
+        if (twin) add(x.id, op.faultIndex, 'RESTORATION_OTHER_SUBURB_ONLY_OPEN', `still open, no equipment named: "${twin.title}"`);
       }
       // equipment with a name very like a known station, seen only once
       for (const n of o.nodes) {

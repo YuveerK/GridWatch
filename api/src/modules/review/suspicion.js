@@ -14,6 +14,7 @@ export const REASONS = {
   CHANGED_SCOPE: { weight: 1, label: 'this post added many new suburbs to an existing outage' },
   RESTORATION_NO_PRECEDING_INCIDENT: { weight: 1, label: 'a restoration with no earlier incident on record' },
   TIEBREAK_GAVE_UP: { weight: 3, label: 'the AI tie-break kept failing; the decision needs a person' },
+  RESTORATION_OTHER_SUBURB_ONLY_OPEN: { weight: 3, label: 'a restoration was placed by its equipment, but an older report naming only the same suburbs is still open' },
   SAMPLE: { weight: 0, label: 'a routine spot check of an apparently clean post' },
 };
 

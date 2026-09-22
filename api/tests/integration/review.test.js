@@ -79,6 +79,32 @@ describe('B4: what is flagged, and what is not', () => {
     expect(got[`${restoreB}:0`]).toEqual(['RESTORATION_NO_PRECEDING_INCIDENT']);
   });
 
+  it('a restoration placed by its equipment while an older suburb-only report of the same suburbs is still open', async () => {
+    const now = new Date();
+    await prisma.infraNode.create({ data: { id: 'n1', type: 'SUBSTATION', name: 'Northriding', normalizedKey: 'northriding', firstSeenAt: now, lastSeenAt: now } });
+    const vague = await outage({ title: 'Northriding AH, Northgate', localityIds: ['l1', 'l2', 'l3'], h: -8 });
+    const named = await outage({ title: 'Northriding (Precision)', status: 'RESTORED', localityIds: ['l1', 'l2'], nodes: ['n1'], h: -1 });
+    const restore = await post({ relevance: 'RESTORATION' });
+    await join(named.id, restore, { role: 'RESTORATION', effect: { status: 'RESTORED', locs: [] } });
+    const got = await reasonsOf([restore]);
+    expect(got[`${restore}:0`]).toEqual(['RESTORATION_OTHER_SUBURB_ONLY_OPEN']);
+    // nothing is changed: it only points
+    expect((await prisma.outage.findUnique({ where: { id: vague.id } })).status).toBe('ACTIVE');
+    expect(await prisma.outagePost.count()).toBe(1);
+  });
+
+  it('...but not when the older report shares only one suburb, already names equipment, or is closed', async () => {
+    const now = new Date();
+    await prisma.infraNode.createMany({ data: ['n1', 'n2'].map((id) => ({ id, type: 'SUBSTATION', name: id, normalizedKey: id, firstSeenAt: now, lastSeenAt: now })) });
+    await outage({ title: 'one suburb only', localityIds: ['l1', 'l5'], h: -8 });
+    await outage({ title: 'has equipment', localityIds: ['l1', 'l2'], nodes: ['n2'], h: -8 });
+    await outage({ title: 'closed', status: 'RESTORED', localityIds: ['l1', 'l2'], h: -8 });
+    const named = await outage({ title: 'named restored', status: 'RESTORED', localityIds: ['l1', 'l2'], nodes: ['n1'], h: -1 });
+    const restore = await post({ relevance: 'RESTORATION' });
+    await join(named.id, restore, { role: 'RESTORATION', effect: { status: 'RESTORED', locs: [] } });
+    expect(await reasonsOf([restore])).toEqual({});
+  });
+
   it('planned work and a fault on the same equipment', async () => {
     const node = await prisma.infraNode.create({ data: { type: 'SUBSTATION', name: 'Glenanda', normalizedKey: 'glenanda', firstSeenAt: T, lastSeenAt: T } });
     await outage({ title: 'Glenanda isolation', kind: 'PLANNED', status: 'PLANNED', localityIds: ['l4'], nodes: [node.id], h: -20 });
