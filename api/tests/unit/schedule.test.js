@@ -107,6 +107,21 @@ describe('a summary picture whose planned item states its own date', () => {
   });
 });
 
+describe('a digest of unrelated items: an earlier item\'s own date must not be borrowed by a later one (Klipfontein, 22 Sept)', () => {
+  // The real picture: an "Active outage" paragraph about James Crescent (mentioning when IT was reported, "Monday, 21 September 2026")
+  // is followed by an unrelated "Planned Maintenance" paragraph about Klipfontein, whose own words say only "today" with no month name.
+  const image = "OUTAGE UPDATE Midrand SDC 22 September 2026 08:40 Warning: The power system is constrained. The Service Delivery Centre (SDC) is sitting with 26 open calls, with 10 calls over 24hrs. Active outage James Crescent Switching Station: Approximately 98% of the power supply has been restored following the outage reported on Monday, 21 September 2026. One mini-substation (MSS) remains off due to a lack of access. Our team is working to obtain the key to the MSS and will attend to the fault today. Planned Maintenance Customers are hereby reminded of a planned power interruption at Klipfontein Substation, which is scheduled to take place today, 22 September 2026. The interruption will take place from 09h00 until 17h00. The area mentioned below will be affected. Klipfontein Note: Loadshedding has been suspended until further notice.";
+  const item = { result: { image_text: image, eta_text: '09h00 until 17h00', update_summary: 'Planned power interruption at Klipfontein Substation scheduled for today between 09h00 and 17h00.', entities: [{ type: 'SUBSTATION', name: 'Klipfontein' }] } };
+
+  it('gives no window (not the earlier, unrelated item\'s date), so it cannot overwrite a correct window from another post', () => {
+    expect(scheduleWindow(item, '', new Date('2026-09-22T06:47:08Z'))).toBeNull();
+  });
+  it('a nearby heading (a real weekly-schedule item) still works', () => {
+    const nearby = { result: { image_text: 'Monday, 21 September 2026 • Klipfontein Substation from 09h00 until 17h00', eta_text: null, update_summary: null, entities: [{ type: 'SUBSTATION', name: 'Klipfontein' }] } };
+    expect(scheduleWindow(nearby, '', new Date('2026-09-20T06:00:00Z'))).toEqual({ start: '2026-09-21T07:00:00.000Z', end: '2026-09-21T15:00:00.000Z' });
+  });
+});
+
 describe('a daily summary picture: its header date is the issue date, not the date of the work', () => {
   const daily = 'Midrand SDC Outage Update 21 September 2026 14:50 PLANNED MAINTENANCE: Klipfontein Substation: planned interruption from 09h00 until 17h00 affecting Klipfontein.';
   const item = { result: { image_text: daily, eta_text: 'from 09h00 until 17h00', update_summary: 'A planned power interruption is scheduled at Klipfontein Substation from 09h00 until 17h00.', entities: [{ type: 'SUBSTATION', name: 'Klipfontein' }] } };

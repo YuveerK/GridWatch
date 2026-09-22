@@ -73,8 +73,14 @@ export function anchoredSchedule(imageText, names, etaText, refDate = new Date()
   if (at < 0) return null;
   // Only a WEEKDAY heading counts ("Wednesday, 23 September"). A bare date before the item is usually the issue date of the picture
   // ("Update 21 September 2026 15:50") or an unrelated sentence ("the outage occurred yesterday, 20 September"), not when this item happens.
+  // It must also sit close by: a digest that reports several unrelated items in turn can mention a full date in an EARLIER item's own
+  // sentence ("...restored, following the outage reported on Monday, 21 September..."), and that date belongs to that other item, not
+  // to this one, however far back it happens to be the nearest one found. A real heading sits right before its item (a bullet or a dash).
+  const NEARBY_CHARS = 200;
   let heading = null;
-  for (const m of imageText.slice(0, at).matchAll(WEEKDAY_HEADING)) heading = m[0];
+  for (const m of imageText.slice(0, at).matchAll(WEEKDAY_HEADING)) {
+    if (at - (m.index + m[0].length) <= NEARBY_CHARS) heading = m[0];
+  }
   const sch = heading ? parseSchedule(heading, refDate) : null;
   if (!sch) return null;
   const times = parseTimes(etaText) ?? parseTimes(imageText.slice(at, at + 260));
