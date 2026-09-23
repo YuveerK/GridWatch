@@ -45,6 +45,8 @@ try {
     for (const c of chunks(rows)) await create(c);
     console.log(`copied ${rows.length} ${label}`);
   };
+  // migrate deploy already seeds the City of Johannesburg row on the fresh target; skip it, add any others (Tshwane, ...)
+  await copy('municipalities', await src.municipality.findMany(), (data) => dst.municipality.createMany({ data, skipDuplicates: true }));
   await copy('regions', await src.region.findMany(), (data) => dst.region.createMany({ data }));
   await copy('suburbs', await src.locality.findMany(), (data) => dst.locality.createMany({ data }));
   await copy('suburb aliases', await src.localityAlias.findMany(), (data) => dst.localityAlias.createMany({ data }));

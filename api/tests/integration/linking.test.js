@@ -447,6 +447,26 @@ describe('a summary picture that opens with one piece of equipment', () => {
   });
 });
 
+describe('one fault cascading across several same-type stations (Tshwane, 22 Sept: a substation trip named 3 downstream substations)', () => {
+  it('is ONE outage, not a discarded "digest": a same-type parent, explicitly named, is trusted', async () => {
+    const cascade = reading('OUTAGE', 'CREW_DISPATCHED', [], {
+      entities: [
+        { type: 'SUBSTATION', name: 'Hartebeespoort', parent_name: null },
+        { type: 'SUBSTATION', name: 'PMP', parent_name: 'Hartebeespoort' },
+        { type: 'SUBSTATION', name: 'Yskor Sandwerk', parent_name: 'Hartebeespoort' },
+        { type: 'SUBSTATION', name: 'Swartspruit', parent_name: 'Hartebeespoort' },
+      ],
+    });
+    const a = await addPost(0, 'Trip from Hartebeespoort substation', cascade);
+    await processPending();
+    const all = await outages();
+    expect(all).toHaveLength(1); // not discarded as "several faults, no outage created"
+    const withNodes = await prisma.outage.findUnique({ where: { id: all[0].id }, include: { nodes: { include: { node: true } } } });
+    expect(withNodes.nodes.map((n) => n.node.name).sort()).toEqual(['Hartebeespoort', 'PMP', 'Swartspruit', 'Yskor Sandwerk'].sort());
+    expect(a).toBeTruthy();
+  });
+});
+
 describe('an outage that went quiet for days', () => {
   it('is picked up again by a post naming its exact equipment (via the tie-break), and is live again', async () => {
     await addPost(0, 'Vandalism at Alpha, replacement mini substation being procured', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));

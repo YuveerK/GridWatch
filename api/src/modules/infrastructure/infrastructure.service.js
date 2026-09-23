@@ -261,7 +261,11 @@ export function pickParent(node, candidates) {
   const options = candidates.filter((c) => c.node.id !== node.id);
   if (!options.length) return null;
   const higher = options.filter((c) => (RANK[c.node.type] ?? 9) < (RANK[node.type] ?? 9));
-  const pool = higher.length ? higher : options.filter((c) => c.node.type !== node.type);
+  const differentType = options.filter((c) => c.node.type !== node.type);
+  // A post can name its parent explicitly even when the network cascades within one type (a substation feeding other substations,
+  // as Tshwane's posts do) - the post SAID so, so it is trusted like any other named parent, not silently dropped for lacking a rank
+  // difference. Still never guessed: several equally plausible candidates at the same type fall through to "ambiguous" below as before.
+  const pool = higher.length ? higher : differentType.length ? differentType : options;
   if (!pool.length) return null;
   const best = Math.min(...pool.map((c) => RANK[c.node.type] ?? 9));
   const top = pool.filter((c) => (RANK[c.node.type] ?? 9) === best);
