@@ -566,6 +566,33 @@ describe('planned work closed by a wrong date', () => {
   });
 });
 
+describe('a same-day reminder must not shrink an already-announced wider window (Klipfontein, 22 Sept)', () => {
+  const wide = reading('PLANNED_OUTAGE', 'PLANNED', ['Alpha'], { update_summary: 'rescheduled for Tuesday and Wednesday, 22 and 23 September 2026 from 09h00 until 17h00' });
+  const narrowReminder = reading('PLANNED_OUTAGE', 'PLANNED', ['Alpha'], { update_summary: 'reminded of a planned power interruption which is scheduled to take place today, 22 September 2026 from 09h00 until 17h00' });
+  const narrowReschedule = reading('PLANNED_OUTAGE', 'PLANNED', ['Alpha'], { update_summary: 'the interruption has been rescheduled to 22 September 2026 from 09h00 until 17h00' });
+
+  it('a later day-of reminder with no reschedule wording keeps the wider window', async () => {
+    await addPost(0, 'Klipfontein: rescheduled for 22-23 September', wide);
+    await processPending();
+    const before = (await outages())[0];
+    expect(before.scheduledEnd.toISOString().slice(0, 10)).toBe('2026-09-23');
+
+    await addPost(60, 'Klipfontein: reminder for today', narrowReminder);
+    await processPending();
+    const after = (await outages())[0];
+    expect(after.scheduledEnd.toISOString().slice(0, 10)).toBe('2026-09-23'); // the 23rd was not silently dropped
+  });
+
+  it('an explicit reschedule to a narrower window is still trusted in full', async () => {
+    await addPost(0, 'Klipfontein: rescheduled for 22-23 September', wide);
+    await processPending();
+    await addPost(60, 'Klipfontein: now rescheduled to just the 22nd', narrowReschedule);
+    await processPending();
+    const after = (await outages())[0];
+    expect(after.scheduledEnd.toISOString().slice(0, 10)).toBe('2026-09-22'); // a real change of plan is honoured
+  });
+});
+
 describe('a post held back because its picture would not download', () => {
   it('is read again a few minutes later and linked, but only within the retry window', async () => {
     const { retryImageFailures } = await import('../../src/modules/processing/processor.service.js');

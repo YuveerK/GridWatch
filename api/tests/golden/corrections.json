@@ -366,6 +366,30 @@
       "fb": 0,
       "same": true,
       "why": "Same Klipfontein planned maintenance the outage wrongly closed while still ongoing (a schedule-reading bug, since fixed) forced apart"
+    },
+    {
+      "a": "2102165544690721043",
+      "fa": 0,
+      "b": "2099499096721490225",
+      "fb": 0,
+      "same": true,
+      "why": "Same Klipfontein planned maintenance; reprocessing to pick up the fixed schedule reading briefly scored it below threshold alone"
+    },
+    {
+      "a": "2102283363457409518",
+      "fa": 0,
+      "b": "2099499096721490225",
+      "fb": 0,
+      "same": true,
+      "why": "Same Klipfontein planned maintenance; reprocessing alone briefly scored it below threshold"
+    },
+    {
+      "a": "2102288572095029411",
+      "fa": 1,
+      "b": "2099499096721490225",
+      "fb": 0,
+      "same": true,
+      "why": "Same Klipfontein planned maintenance; reprocessing alone briefly scored it below threshold"
     }
   ]
 }

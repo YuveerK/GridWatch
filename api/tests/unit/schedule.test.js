@@ -28,29 +28,34 @@ describe('scheduleWindow (A09): the announced window as UTC instants, Johannesbu
   const at = new Date('2026-09-10T08:00:00Z');
   const w = (text, extraction = null, ref = at) => scheduleWindow(extraction, text, ref);
   it('converts SAST to UTC', () => {
-    expect(w('planned on 16 September 2026 from 09:00-17:00')).toEqual({ start: '2026-09-16T07:00:00.000Z', end: '2026-09-16T15:00:00.000Z' });
+    expect(w('planned on 16 September 2026 from 09:00-17:00')).toEqual({ start: '2026-09-16T07:00:00.000Z', end: '2026-09-16T15:00:00.000Z', reschedule: false });
   });
   it('an overnight window ends the next day; no time means the whole local day', () => {
-    expect(w('scheduled for 16 September 2026 from 22:00 - 04:00')).toEqual({ start: '2026-09-16T20:00:00.000Z', end: '2026-09-17T02:00:00.000Z' });
-    expect(w('planned maintenance on 16 September 2026')).toEqual({ start: '2026-09-15T22:00:00.000Z', end: '2026-09-16T22:00:00.000Z' });
+    expect(w('scheduled for 16 September 2026 from 22:00 - 04:00')).toEqual({ start: '2026-09-16T20:00:00.000Z', end: '2026-09-17T02:00:00.000Z', reschedule: false });
+    expect(w('planned maintenance on 16 September 2026')).toEqual({ start: '2026-09-15T22:00:00.000Z', end: '2026-09-16T22:00:00.000Z', reschedule: false });
   });
   it('uses the last date and the time stated after it (rescheduling)', () => {
-    expect(w('was 09:00-12:00 on 1 October 2026, now moved to 3 October 2026 from 10:00-14:00')).toEqual({ start: '2026-10-03T08:00:00.000Z', end: '2026-10-03T12:00:00.000Z' });
+    expect(w('was 09:00-12:00 on 1 October 2026, now moved to 3 October 2026 from 10:00-14:00')).toEqual({ start: '2026-10-03T08:00:00.000Z', end: '2026-10-03T12:00:00.000Z', reschedule: true });
   });
   it('a yearless January notice posted in December is next year; impossible dates and times are rejected', () => {
     expect(w('planned on 5 January', null, new Date('2026-12-20T08:00:00Z')).start).toBe('2027-01-04T22:00:00.000Z');
     expect(w('planned on 31 February 2026')).toBeNull();
-    expect(w('planned on 16 September 2026 from 25:00-27:00')).toEqual({ start: '2026-09-15T22:00:00.000Z', end: '2026-09-16T22:00:00.000Z' }); // bad times ignored, date kept
+    expect(w('planned on 16 September 2026 from 25:00-27:00')).toEqual({ start: '2026-09-15T22:00:00.000Z', end: '2026-09-16T22:00:00.000Z', reschedule: false }); // bad times ignored, date kept
   });
   it('finds the schedule in an image transcription when the post text has none', () => {
-    expect(w('See the graphic', { imageText: 'Planned outage 20 September 2026 08:00-16:00' })).toEqual({ start: '2026-09-20T06:00:00.000Z', end: '2026-09-20T14:00:00.000Z' });
+    expect(w('See the graphic', { imageText: 'Planned outage 20 September 2026 08:00-16:00' })).toEqual({ start: '2026-09-20T06:00:00.000Z', end: '2026-09-20T14:00:00.000Z', reschedule: false });
+  });
+  it('flags explicit reschedule wording, so a later, narrower window can be trusted to replace rather than just supplement', () => {
+    expect(w('reminded of a planned power interruption which is scheduled to take place on 16 September 2026').reschedule).toBe(false);
+    expect(w('the interruption has been rescheduled to 16 September 2026').reschedule).toBe(true);
+    expect(w('the interruption has been postponed to 16 September 2026').reschedule).toBe(true);
   });
 });
 
 describe('a planned window with the date in one place and the hours in another (Greenstone Hill)', () => {
   it('takes the date from the post text and the hours from the estimate', () => {
     const w = scheduleWindow({ result: { eta_text: '09h00 until 17h00' } }, 'planned power interruption which is scheduled to take place on Monday, 21 September 2026.', new Date('2026-09-20T06:00:00Z'));
-    expect(w).toEqual({ start: '2026-09-21T07:00:00.000Z', end: '2026-09-21T15:00:00.000Z' });
+    expect(w).toEqual({ start: '2026-09-21T07:00:00.000Z', end: '2026-09-21T15:00:00.000Z', reschedule: false });
   });
 });
 
@@ -59,7 +64,7 @@ describe('a date range (Klipfontein: 22 and 23 September)', () => {
   it('starts on the first day and ends on the last, at the daily hours', () => {
     expect(parseSchedule('rescheduled for Tuesday and Wednesday, 22 and 23 September 2026 from 09h00 until 17h00.', ref)).toMatchObject({ date: '2026-09-22', endDate: '2026-09-23', from: '09:00', to: '17:00' });
     expect(scheduleWindow(null, 'rescheduled for September 22-23, 2026, from 09h00 until 17h00.', ref)).toBeNull(); // month before the day is a format we do not read: no guess
-    expect(scheduleWindow(null, 'rescheduled for 22 and 23 September 2026 from 09h00 until 17h00.', ref)).toEqual({ start: '2026-09-22T07:00:00.000Z', end: '2026-09-23T15:00:00.000Z' });
+    expect(scheduleWindow(null, 'rescheduled for 22 and 23 September 2026 from 09h00 until 17h00.', ref)).toEqual({ start: '2026-09-22T07:00:00.000Z', end: '2026-09-23T15:00:00.000Z', reschedule: true });
   });
   it('an ordinary single date is unchanged', () => {
     expect(parseSchedule('take place on 16 September 2026, from 09:00-17:00', ref)).toEqual({ date: '2026-09-16', from: '09:00', to: '17:00' });
@@ -75,17 +80,17 @@ describe('a weekly schedule graphic: each item takes its own day', () => {
   const win = (name, eta) => scheduleWindow(item(name, eta), '', new Date('2026-09-21T06:00:00Z'));
 
   it('one day, a two-day range, and the last day of the week', () => {
-    expect(win('Beyers', 'from 09h00 until 17h00')).toEqual({ start: '2026-09-22T07:00:00.000Z', end: '2026-09-22T15:00:00.000Z' });
-    expect(win('Klipfontein', 'from 09h00 until 17h00')).toEqual({ start: '2026-09-22T07:00:00.000Z', end: '2026-09-23T15:00:00.000Z' });
-    expect(win('Sebenza', 'from 09h00 until 17h00')).toEqual({ start: '2026-09-27T07:00:00.000Z', end: '2026-09-27T15:00:00.000Z' });
+    expect(win('Beyers', 'from 09h00 until 17h00')).toEqual({ start: '2026-09-22T07:00:00.000Z', end: '2026-09-22T15:00:00.000Z', reschedule: true });
+    expect(win('Klipfontein', 'from 09h00 until 17h00')).toEqual({ start: '2026-09-22T07:00:00.000Z', end: '2026-09-23T15:00:00.000Z', reschedule: true });
+    expect(win('Sebenza', 'from 09h00 until 17h00')).toEqual({ start: '2026-09-27T07:00:00.000Z', end: '2026-09-27T15:00:00.000Z', reschedule: true });
   });
   it('items under the same heading share its day, each with its own hours', () => {
-    expect(win('Heriotdale', 'from 08h00 until 16h00')).toEqual({ start: '2026-09-23T06:00:00.000Z', end: '2026-09-23T14:00:00.000Z' });
-    expect(win('Nancefield', 'from 09h00 until 17h00')).toEqual({ start: '2026-09-23T07:00:00.000Z', end: '2026-09-23T15:00:00.000Z' });
-    expect(win('Mayfair', 'from 09h30 until 17h00')).toEqual({ start: '2026-09-26T07:30:00.000Z', end: '2026-09-26T15:00:00.000Z' });
+    expect(win('Heriotdale', 'from 08h00 until 16h00')).toEqual({ start: '2026-09-23T06:00:00.000Z', end: '2026-09-23T14:00:00.000Z', reschedule: true });
+    expect(win('Nancefield', 'from 09h00 until 17h00')).toEqual({ start: '2026-09-23T07:00:00.000Z', end: '2026-09-23T15:00:00.000Z', reschedule: true });
+    expect(win('Mayfair', 'from 09h30 until 17h00')).toEqual({ start: '2026-09-26T07:30:00.000Z', end: '2026-09-26T15:00:00.000Z', reschedule: true });
   });
   it('takes the hours from the graphic when the item has none of its own', () => {
-    expect(win('Heriotdale', null)).toEqual({ start: '2026-09-23T06:00:00.000Z', end: '2026-09-23T14:00:00.000Z' });
+    expect(win('Heriotdale', null)).toEqual({ start: '2026-09-23T06:00:00.000Z', end: '2026-09-23T14:00:00.000Z', reschedule: true });
   });
   it('an item that is not in the graphic gets no window; post text is never overridden', () => {
     expect(win('Unknown Place', null)).toBeNull(); // no guess from the last date in the picture
@@ -99,7 +104,7 @@ describe('a summary picture whose planned item states its own date', () => {
   const item = { result: { image_text: image, eta_text: '23 September 2026 from 09h00 until 17h00', update_summary: 'Planned maintenance is scheduled at Nancefield Substation on Wednesday, 23 September 2026 from 09h00 until 17h00.', entities: [{ type: 'SDC', name: 'Lenasia' }, { type: 'SUBSTATION', name: 'Nancefield' }] } };
 
   it("takes the item's own date, not an unrelated date that happens to come before it", () => {
-    expect(scheduleWindow(item, '', new Date('2026-09-21T13:00:00Z'))).toEqual({ start: '2026-09-23T07:00:00.000Z', end: '2026-09-23T15:00:00.000Z' });
+    expect(scheduleWindow(item, '', new Date('2026-09-21T13:00:00Z'))).toEqual({ start: '2026-09-23T07:00:00.000Z', end: '2026-09-23T15:00:00.000Z', reschedule: true });
   });
   it('an item with no date of its own still takes its heading in a weekly schedule', () => {
     const weekly = { result: { image_text: 'Tuesday, 22 September • Beyers Substation from 09h00 until 17h00 Wednesday, 23 September 2026 • Heriotdale Substation from 08h00 until 16h00', eta_text: 'from 08h00 until 16h00', update_summary: 'A planned power interruption is scheduled at Heriotdale Substation.', entities: [{ type: 'SUBSTATION', name: 'Heriotdale' }] } };
@@ -118,7 +123,7 @@ describe('a digest of unrelated items: an earlier item\'s own date must not be b
   });
   it('a nearby heading (a real weekly-schedule item) still works', () => {
     const nearby = { result: { image_text: 'Monday, 21 September 2026 • Klipfontein Substation from 09h00 until 17h00', eta_text: null, update_summary: null, entities: [{ type: 'SUBSTATION', name: 'Klipfontein' }] } };
-    expect(scheduleWindow(nearby, '', new Date('2026-09-20T06:00:00Z'))).toEqual({ start: '2026-09-21T07:00:00.000Z', end: '2026-09-21T15:00:00.000Z' });
+    expect(scheduleWindow(nearby, '', new Date('2026-09-20T06:00:00Z'))).toEqual({ start: '2026-09-21T07:00:00.000Z', end: '2026-09-21T15:00:00.000Z', reschedule: true });
   });
 });
 

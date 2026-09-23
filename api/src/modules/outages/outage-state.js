@@ -98,7 +98,11 @@ export function foldEffects(posts) {
     if (e.cause) cause = e.cause;
     if (e.eta) eta = e.eta;
     if (e.sdcName) sdcName = e.sdcName;
-    if (e.schedule) schedule = e.schedule;
+    // A later, narrower window that is entirely INSIDE the one already known, and gives no reschedule wording of its own, reads as a
+    // same-day reminder about part of that window, not a shrinking of it (Klipfontein, 22 Sept: "reminded... today, 22 September" the
+    // day after "rescheduled for Tuesday and Wednesday, 22 and 23 September" must not silently drop the 23rd). An explicit reschedule,
+    // or a window that is not simply nested inside the known one, always replaces it - unchanged from before.
+    if (e.schedule && (!schedule || e.schedule.reschedule || !(new Date(e.schedule.start) >= new Date(schedule.start) && new Date(e.schedule.end) <= new Date(schedule.end)))) schedule = e.schedule;
 
     const partial = e.pct != null && e.pct < 100 && status !== 'RESTORED';
     for (const l of e.locs ?? []) {

@@ -87,6 +87,13 @@ export function anchoredSchedule(imageText, names, etaText, refDate = new Date()
   return { ...sch, from: times?.from ?? null, to: times?.to ?? null };
 }
 
+// Explicit rescheduling language. A window flagged this way is trusted to REPLACE whatever was known before, in full, even when it is
+// narrower (a real change of plan). A window WITHOUT it that turns out to be a strict subset of the already-known window (same city,
+// same equipment, still within the previously announced days) is instead read as a same-day reminder about PART of that known window,
+// not a shrinking of it (Klipfontein, 22 Sept: "reminded... scheduled to take place today, 22 September" the day after a post that said
+// "rescheduled for Tuesday and Wednesday, 22 and 23 September" must not silently drop the 23rd).
+const RESCHEDULE_WORDS = /\b(reschedul\w*|postpon\w*|moved to|now (?:scheduled|planned)|new date|updated (?:date|schedule)|changed? to)\b/i;
+
 export function scheduleWindow(extraction, text, refDate = new Date()) {
   const r = extraction?.result ?? {};
   const sources = [text, extraction?.imageText, r.image_text, r.update_summary, r.eta_text];
@@ -97,8 +104,11 @@ export function scheduleWindow(extraction, text, refDate = new Date()) {
   const ownWords = fromGraphic ? [r.eta_text, r.update_summary].map((x) => parseSchedule(x, refDate)) : [];
   const heading = fromGraphic ? anchoredSchedule(r.image_text, (r.entities ?? []).filter((e) => e.type !== 'SDC').map((e) => e.name), r.eta_text, refDate) : null;
   // (no date of its own and no weekday heading: no window at all, so it cannot overwrite the window the planned posts gave)
-  const candidates = fromGraphic ? [...ownWords, heading] : sources.map((s) => parseSchedule(s, refDate));
-  for (const found of candidates) {
+  // A graphic's own dated layout is explicit either way, so it is always trusted like a stated reschedule.
+  const candidates = fromGraphic
+    ? [...ownWords, heading].map((sch) => ({ sch, reschedule: true }))
+    : sources.map((s) => ({ sch: parseSchedule(s, refDate), reschedule: RESCHEDULE_WORDS.test(s ?? '') }));
+  for (const { sch: found, reschedule } of candidates) {
     let sch = found;
     if (!sch) continue;
     // the date is in the post text but the hours are often only in the graphic or the estimate: take them from wherever they are
@@ -116,7 +126,7 @@ export function scheduleWindow(extraction, text, refDate = new Date()) {
     const endDay = sch.endDate ? Number(sch.endDate.split('-')[2]) : d;
     let end = local(endDay, sch.to ?? '24:00');
     if (!sch.endDate && sch.from && sch.to && end <= start) end = local(d + 1, sch.to);
-    return { start: start.toISOString(), end: end.toISOString() };
+    return { start: start.toISOString(), end: end.toISOString(), reschedule };
   }
   return null;
 }
