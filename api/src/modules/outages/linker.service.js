@@ -449,8 +449,15 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     }
   }
 
-  // A multi-fault digest graphic must not open an umbrella outage; it may only join one on a strong match.
-  if (!manual && !outageId && isDigest(facts)) {
+  // A multi-fault digest graphic, or a prose update naming a genuine handful of stations that just failed to be split into faults[],
+  // must not open an umbrella outage; it may only join one on a strong match (an SDC_SUMMARY reading never reaches here at all - it is
+  // refused above as not linkable). But a SINGLE incident report that simply names a FEW co-affected pieces of equipment with no stated
+  // hierarchy between them IS one fault, whatever the raw root count alone suggests - the model already said so, by leaving faults[]
+  // empty (Tshwane, 23 Sept: "a medium voltage outage affecting: Plantana, Margareta/Boom, Dieretuin" - one outage, three named points,
+  // no claimed cause among them). Opened with no invented parent: the equipment stands as co-equal, exactly as the post stated it. A
+  // LARGE count (DIGEST_NODES+) still reads as a digest that missed its split - a handful of names is very different from several dozen.
+  const genuineDigest = (extraction.result.faults?.length ?? 0) >= 2 || facts.nodes.length >= DIGEST_NODES;
+  if (!manual && !outageId && isDigest(facts) && genuineDigest) {
     return decide({ outcome: 'NEW', topScore: top?.score ?? null, reason: 'digest post covering several faults: no outage created', candidates: summary });
   }
 

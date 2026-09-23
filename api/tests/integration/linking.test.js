@@ -447,6 +447,36 @@ describe('a summary picture that opens with one piece of equipment', () => {
   });
 });
 
+describe('one incident naming a few co-affected points with no stated hierarchy (Tshwane, 23 Sept)', () => {
+  const incident = reading('OUTAGE', 'INVESTIGATING', ['Plantana', 'Margareta/Boom', 'Dieretuin']); // no parent_name among them
+
+  it('is ONE outage covering all three, with no invented parent, not discarded as a digest', async () => {
+    const a = await addPost(0, 'A medium voltage outage affecting: Plantana, Margareta/Boom, Dieretuin', incident);
+    await processPending();
+    expect((await prisma.linkDecision.findFirst({ where: { postId: a } })).reason).not.toMatch(/digest post covering several faults/);
+    const all = await outages();
+    expect(all).toHaveLength(1);
+    const withNodes = await prisma.outage.findUnique({ where: { id: all[0].id }, include: { nodes: { include: { node: true } } } });
+    expect(withNodes.nodes.map((n) => n.node.name).sort()).toEqual(['Dieretuin', 'Margareta/Boom', 'Plantana']);
+  });
+
+  it('but a genuinely large, unsplit list of stations still reads as a digest and opens nothing (the model missed the split, not one incident)', async () => {
+    const big = reading('UPDATE', 'PARTIALLY_RESTORED', ['Alpha', 'Beta', 'Gamma', 'Delta', 'Eta']); // DIGEST_NODES = 5: a real risk of an unsplit summary
+    const a = await addPost(0, 'Update on several stations', big);
+    await processPending();
+    expect((await prisma.linkDecision.findFirst({ where: { postId: a } })).reason).toMatch(/digest post covering several faults/);
+    expect(await outages()).toHaveLength(0);
+  });
+
+  it('an SDC_SUMMARY reading never reaches this rule at all: it is refused earlier as not linkable', async () => {
+    const summary = reading('SDC_SUMMARY', 'UNKNOWN', ['Plantana', 'Margareta/Boom', 'Dieretuin']);
+    const a = await addPost(0, 'SDC has 40 open calls, including at Plantana, Margareta/Boom, Dieretuin', summary);
+    await processPending();
+    expect((await prisma.linkDecision.findFirst({ where: { postId: a } })).reason).toBe('not linkable (SDC_SUMMARY)');
+    expect(await outages()).toHaveLength(0);
+  });
+});
+
 describe('one fault cascading across several same-type stations (Tshwane, 22 Sept: a substation trip named 3 downstream substations)', () => {
   it('is ONE outage, not a discarded "digest": a same-type parent, explicitly named, is trusted', async () => {
     const cascade = reading('OUTAGE', 'CREW_DISPATCHED', [], {
