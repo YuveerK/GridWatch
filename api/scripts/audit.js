@@ -86,8 +86,8 @@ for (const c of checks) {
   console.log(`${n === 0 ? 'OK  ' : c.informational ? 'INFO' : 'FAIL'}  ${c.name}: ${n}   (${c.why})`);
   for (const o of c.hits.slice(0, 4)) console.log(`        - ${o.title} [${o.status}] last update ${o.lastUpdateAt.toISOString().slice(0, 16)} | ${short(o.posts.at(-1)?.post.noteTweetText || o.posts.at(-1)?.post.text)}`);
 }
-const readings = await prisma.postExtraction.findMany({ where: { promptVersion: env.AI_PROMPT_VERSION }, select: { model: true, result: true } });
-const stale = readings.filter(isStale).length;
+const readings = await prisma.postExtraction.findMany({ where: { promptVersion: env.AI_PROMPT_VERSION }, select: { model: true, result: true, post: { select: { sourceAccount: true } } } });
+const stale = readings.filter((r) => isStale(r, r.post.sourceAccount)).length;
 console.log(`\n${stale === 0 ? 'OK  ' : 'WARN'}  Readings made with older instructions or another model: ${stale} of ${readings.length}${stale ? '   (run: npm run reread)' : ''}`);
 console.log(`Posts needing review/errored: ${review}   Unprocessed posts: ${unprocessed}   Stuck in PROCESSING: ${stuck.length}`);
 for (const p of ingest) console.log(`WARN  Ingestion: ${p}`);

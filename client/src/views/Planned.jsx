@@ -3,6 +3,7 @@ import Icon from '../components/Icon.jsx';
 import { CardSkeleton, EmptyState, ErrorState, StatusBadge } from '../components/ui.jsx';
 import { dayDiff, nice, prettySdc, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
+import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
 
 const GROUPS = [
   ['today', 'Today', (d) => d === 0],
@@ -35,7 +36,8 @@ function Row({ o }) {
 
 export default function Planned() {
   useDocumentTitle('Planned maintenance');
-  const { data, error, loading } = useApi('/v1/outages?status=PLANNED&limit=100&sort=updated');
+  const { param: muniParam, name } = useMunicipality();
+  const { data, error, loading } = useApi(withMunicipality('/v1/outages?status=PLANNED&limit=100&sort=updated', muniParam));
 
   const rows = data?.data ?? [];
   const dated = rows.filter((o) => o.scheduled).map((o) => ({ o, d: dayDiff(o.scheduled.date) }));
@@ -45,11 +47,11 @@ export default function Planned() {
     <div className="container page">
       <header className="page-head">
         <h1>Planned maintenance</h1>
-        <p>Scheduled power interruptions that City Power has announced. Dates and times come from City Power's posts.</p>
+        <p>Scheduled power interruptions{name ? ` announced for ${name}` : ' that have been announced'}. Dates and times come from the utility's own posts.</p>
       </header>
       {error && !data && <ErrorState error={error} />}
       {loading && !data && <CardSkeleton n={3} />}
-      {data && rows.length === 0 && <EmptyState icon="calendar" title="Nothing scheduled">City Power hasn't announced any planned maintenance that we know of.</EmptyState>}
+      {data && rows.length === 0 && <EmptyState icon="calendar" title="Nothing scheduled">No planned maintenance{name ? ` for ${name}` : ''} that we know of.</EmptyState>}
       {data && rows.length > 0 && (
         <>
           {GROUPS.map(([key, label, test]) => {
@@ -68,7 +70,7 @@ export default function Planned() {
               <div className="card"><ul className="rows">{undated.map((o) => <Row key={o.id} o={o} />)}</ul></div>
             </section>
           )}
-          <p className="small faint" style={{ marginTop: 22 }}><StatusBadge status="PLANNED" /> &nbsp;Plans can change. Check City Power's latest notice before relying on a date.</p>
+          <p className="small faint" style={{ marginTop: 22 }}><StatusBadge status="PLANNED" /> &nbsp;Plans can change. Check the utility's latest notice before relying on a date.</p>
         </>
       )}
     </div>

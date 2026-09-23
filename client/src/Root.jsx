@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import Icon from './components/Icon.jsx';
+import MunicipalitySwitcher from './components/MunicipalitySwitcher.jsx';
 import RefreshButton, { OperatorSignIn } from './components/RefreshButton.jsx';
 import SearchBox from './components/SearchBox.jsx';
 import { EmptyState } from './components/ui.jsx';
@@ -88,6 +89,7 @@ export default function Root() {
             {NAV.map(([to, label, , end]) => <NavLink key={to} to={to} end={end}>{label}</NavLink>)}
           </nav>
           <div className="header-actions">
+            <MunicipalitySwitcher />
             <RefreshButton compact />
             <button className="icon-btn" onClick={() => setSearching(true)} aria-label="Search">
               <Icon name="search" /><span className="label">Search</span><span className="kbd">/</span>
@@ -120,7 +122,7 @@ export default function Root() {
 
       <footer className="site-footer">
         <div className="container row">
-          <p>GridWatch is an independent project. It reads City Power's public posts on X (@CityPowerJhb) and may lag behind or contain mistakes. It is not affiliated with City Power.</p>
+          <p>GridWatch is an independent project. It reads each city's own public outage posts on X and may lag behind or contain mistakes. It is not affiliated with City Power, the City of Tshwane, or any other municipality or utility it covers.</p>
           <div className="row" style={{ gap: 18 }}>
             <Link to="/planned" className="link">Planned maintenance</Link>
             <Link to="/activity" className="link">What changed</Link>

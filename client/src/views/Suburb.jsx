@@ -92,8 +92,8 @@ export default function Suburb() {
           <div>
             <h1>{s.name}</h1>
             <p style={{ marginTop: 4, fontSize: 15 }}>
-              {s.region ? `Region ${s.region} of Johannesburg` : 'Johannesburg'}
-              {s.learned && ' · added automatically from City Power posts'}
+              {s.region ? `Region ${s.region} of ${s.municipality ?? 'Johannesburg'}` : (s.municipality ?? 'Johannesburg')}
+              {s.learned && ' · added automatically from outage posts'}
             </p>
           </div>
           <button className={`btn ${saved ? '' : 'primary'}`} onClick={() => (saved ? clear() : setArea({ id: s.id, name: s.name }))} aria-pressed={saved}>

@@ -6,20 +6,21 @@ import { logger } from '../../lib/logger.js';
 import { knowledgeContext, sdcFromText } from '../infrastructure/knowledge-context.js';
 import { generateJson } from './gemini.client.js';
 import { extractionJsonSchema, extractionSchema } from './extraction.schema.js';
-import { SYSTEM_PROMPT, buildUserText } from './prompt.js';
+import { buildSystemPrompt, buildUserText } from './prompt.js';
 
 const MAX_IMAGES = 4;
 
 /**
- * Fingerprint of what produces a reading: the instructions, the output schema and the model.
- * It is stored with every reading, so editing the instructions makes older readings show up as stale
- * (npm run audit) and `npm run reread` refreshes exactly those.
+ * Fingerprint of what produces a reading: the instructions (including that post's account-specific hint),
+ * the output schema and the model. It is stored with every reading, so editing the instructions - or adding/
+ * changing a per-account hint in prompt.js - makes older readings show up as stale (npm run audit) and
+ * `npm run reread` refreshes exactly those. `sourceAccountName` is SourcePost.sourceAccount.
  */
-export function readingStamp() {
-  const prompt = createHash('sha1').update(SYSTEM_PROMPT).update(JSON.stringify(extractionJsonSchema)).digest('hex').slice(0, 10);
+export function readingStamp(sourceAccountName) {
+  const prompt = createHash('sha1').update(buildSystemPrompt(sourceAccountName)).update(JSON.stringify(extractionJsonSchema)).digest('hex').slice(0, 10);
   return { prompt, model: env.GEMINI_MODEL };
 }
-export const isStale = (row) => row?.result?.__reading?.prompt !== readingStamp().prompt || row?.model !== env.GEMINI_MODEL;
+export const isStale = (row, sourceAccountName) => row?.result?.__reading?.prompt !== readingStamp(sourceAccountName).prompt || row?.model !== env.GEMINI_MODEL;
 
 export function postText(post) {
   return post.noteTweetText || post.text;
@@ -114,14 +115,14 @@ export async function extractPost(postId, { force = false, signal } = {}) {
   for (let attempt = 1; attempt <= 2 && !result; attempt++) {
     try {
       const out = await generateJson({
-        systemInstruction: SYSTEM_PROMPT,
+        systemInstruction: buildSystemPrompt(post.sourceAccount),
         parts: [{ text: userText }, ...imageParts],
         jsonSchema: extractionJsonSchema,
         hasImages: imageParts.length > 0,
         signal,
       });
       usage = { inputTokens: (usage.inputTokens ?? 0) + (out.inputTokens ?? 0), outputTokens: (usage.outputTokens ?? 0) + (out.outputTokens ?? 0) };
-      result = { ...extractionSchema.parse(JSON.parse(out.text)), __reading: readingStamp() };
+      result = { ...extractionSchema.parse(JSON.parse(out.text)), __reading: readingStamp(post.sourceAccount) };
       error = null;
     } catch (err) {
       error = err.message;

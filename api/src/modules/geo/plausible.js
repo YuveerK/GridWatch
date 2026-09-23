@@ -17,8 +17,12 @@ const median = (xs) => {
   return s[Math.floor(s.length / 2)];
 };
 
-/** Roughly which town each numbered region is in: a hint that turns "Willowbrook" into "Willowbrook, Roodepoort". */
-export const REGION_TOWN = { A: 'Midrand', B: 'Randburg', C: 'Roodepoort', D: 'Soweto', E: 'Sandton', F: 'Johannesburg', G: 'Orange Farm' };
+/** Roughly which town each municipality's numbered/lettered region is in: a hint that turns "Willowbrook" into
+ * "Willowbrook, Roodepoort". Keyed by municipality code first since regions are only unique within one municipality
+ * (Johannesburg's "A" and a future municipality's "A" are different places). */
+export const REGION_TOWN = {
+  JOHANNESBURG: { A: 'Midrand', B: 'Randburg', C: 'Roodepoort', D: 'Soweto', E: 'Sandton', F: 'Johannesburg', G: 'Orange Farm' },
+};
 
 export const REGION_RADIUS_KM = 12; // how far from the middle of its region a suburb may be
 export const NEIGHBOUR_KM = 4; // ...unless another suburb of the same region is this close (regions have outlying edges)

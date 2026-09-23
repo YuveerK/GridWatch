@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { get, nice, prettySdc, statusMeta, typeLabel } from '../lib/api.js';
+import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
 import Icon from './Icon.jsx';
 
 /**
@@ -18,6 +19,7 @@ export default function SearchBox({ autoFocus, placeholder = 'Search your suburb
   const navigate = useNavigate();
   const box = useRef(null);
   const listId = useId();
+  const { param: muniParam } = useMunicipality();
 
   useEffect(() => {
     if (q.trim().length < 2) {
@@ -26,7 +28,7 @@ export default function SearchBox({ autoFocus, placeholder = 'Search your suburb
     }
     setBusy(true);
     const t = setTimeout(() => {
-      get(`/v1/search?q=${encodeURIComponent(q)}`)
+      get(withMunicipality(`/v1/search?q=${encodeURIComponent(q)}`, muniParam))
         .then((r) => {
           setRes(r);
           setActive(0);
@@ -35,7 +37,7 @@ export default function SearchBox({ autoFocus, placeholder = 'Search your suburb
         .finally(() => setBusy(false));
     }, 160);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, muniParam]);
 
   useEffect(() => {
     const close = (e) => box.current && !box.current.contains(e.target) && setOpen(false);
@@ -46,7 +48,7 @@ export default function SearchBox({ autoFocus, placeholder = 'Search your suburb
   // flat list drives keyboard navigation
   const items = useMemo(() => {
     const out = [];
-    res.suburbs.forEach((s) => out.push({ kind: 'suburb', id: s.id, lat: s.lat, lon: s.lon, title: nice(s.name), sub: s.region ? `Suburb · Region ${s.region}` : 'Suburb', icon: 'pin' }));
+    res.suburbs.forEach((s) => out.push({ kind: 'suburb', id: s.id, lat: s.lat, lon: s.lon, title: nice(s.name), sub: s.municipality ? `Suburb · ${s.municipality}` : s.region ? `Suburb · Region ${s.region}` : 'Suburb', icon: 'pin' }));
     if (!suburbsOnly) {
       res.outages.forEach((o) => out.push({ kind: 'outage', id: o.id, title: nice(o.title), sub: `${statusMeta(o.status).label}${o.sdc ? ` · ${prettySdc(o.sdc)}` : ''}`, icon: statusMeta(o.status).icon }));
       res.equipment.forEach((n) => out.push({ kind: 'equipment', id: n.id, title: n.name, sub: `Equipment · ${typeLabel(n.type)}`, icon: 'plug' }));

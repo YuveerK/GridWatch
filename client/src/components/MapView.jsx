@@ -94,7 +94,8 @@ const at = (pts, u) => {
 
 /**
  * The map. Everything is data in, events out:
- *  points    one dot per suburb: { id, name, lat, lon, tone, groups[], dim, inferred, note }
+ *  points    one dot per suburb: { id, name, lat, lon, tone, groups[], dim, inferred, note, boundary? }
+ *            boundary (a GeoJSON Polygon/MultiPolygon, when known) draws the suburb's real shape under its dot
  *  hubs      equipment at its inferred position: { id, name, type, lon, lat, live, served }
  *  flow      { key, origin, edges[{from,to,kind,live}] } -> animated "power flow"; null for none
  *  focus     { key, bounds } -> fly to these bounds
@@ -124,6 +125,17 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
       })),
     };
   };
+  const boundaryCollection = () => {
+    const c = colors();
+    return {
+      type: 'FeatureCollection',
+      features: latest.current.points.filter((p) => p.boundary).map((p) => ({
+        type: 'Feature',
+        geometry: p.boundary,
+        properties: { id: p.id, color: c[p.tone] ?? c.idle, dim: p.dim ? 1 : 0 },
+      })),
+    };
+  };
   const hubCollection = () => ({
     type: 'FeatureCollection',
     features: latest.current.hubs.map((h) => ({
@@ -144,7 +156,7 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
     if (!map || !readyRef.current) return;
     const { layers: l, selectedHub: sel, flow: fl } = latest.current;
     const vis = (ids, on) => ids.forEach((id) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'));
-    vis(['cluster-halo', 'cluster', 'cluster-count', 'dots-halo', 'dots', 'dot-labels'], l.outages);
+    vis(['cluster-halo', 'cluster', 'cluster-count', 'dots-halo', 'dots', 'dot-labels', 'suburb-boundary-fill', 'suburb-boundary-outline'], l.outages);
     vis(['hubs'], l.equipment || sel != null || fl != null);
   };
 
@@ -170,6 +182,11 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
       map.addSource('coverage', { type: 'geojson', data: latest.current.coverage?.data ?? EMPTY });
       map.addLayer({ id: 'coverage-fill', type: 'fill', source: 'coverage', paint: { 'fill-color': c.plan, 'fill-opacity': 0.16 } });
       map.addLayer({ id: 'coverage-outline', type: 'line', source: 'coverage', paint: { 'line-color': c.plan, 'line-width': 2, 'line-dasharray': [3, 2], 'line-opacity': 0.85 } });
+
+      // Real suburb shape (not an estimate, so solid rather than dashed) for suburbs a live outage touches.
+      map.addSource('suburb-boundaries', { type: 'geojson', data: boundaryCollection() });
+      map.addLayer({ id: 'suburb-boundary-fill', type: 'fill', source: 'suburb-boundaries', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'dim'], 1], 0.05, 0.22] } });
+      map.addLayer({ id: 'suburb-boundary-outline', type: 'line', source: 'suburb-boundaries', paint: { 'line-color': ['get', 'color'], 'line-width': 1.6, 'line-opacity': ['case', ['==', ['get', 'dim'], 1], 0.25, 0.9] } });
 
       // equipment
       map.addSource('hubs', { type: 'geojson', data: hubCollection() });
@@ -271,7 +288,9 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
 
   // ── keep the sources in step with the data
   useEffect(() => {
-    if (readyRef.current) setData('pts', pointCollection());
+    if (!readyRef.current) return;
+    setData('pts', pointCollection());
+    setData('suburb-boundaries', boundaryCollection());
   }, [points, ready]);
   useEffect(() => {
     if (!readyRef.current) return;

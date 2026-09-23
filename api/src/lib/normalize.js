@@ -57,9 +57,9 @@ export function tailPlace(name) {
 
 const STREET_WORDS = /\b(street|st|str|road|rd|avenue|ave|drive|dr|lane|ln|close|crescent|cres|boulevard|way|highway|between)\b/i;
 const FACILITY_WORDS = /\b(centre|center|clinic|hospital|school|college|university|campus|stadium|mall|shopping|station|hotel|police|laboratory|wastewater|treatment|golf|shooting range|old age|church|mosque|water|standby|feederboard|substation|transformer|kiosk)\b/i;
-const ORG_WORDS = /\b(transnet|eskom|absa|sabc|standard bank|nedbank|fnb|coca-?cola|rand daily mail|city power|johannesburg water|telkom)\b/i;
+const ORG_WORDS = /\b(transnet|eskom|absa|sabc|standard bank|nedbank|fnb|coca-?cola|rand daily mail|city power|johannesburg water|telkom|city of tshwane|tshwane)\b/i;
 
-/** True for streets, facilities and companies that City Power lists next to real suburbs. */
+/** True for streets, facilities and companies that a utility lists next to real suburbs. */
 export function isNotSuburbName(name) {
   const n = String(name ?? '').trim();
   return n.length < 3 || /^\d/.test(n) || /[,/&]/.test(n) || /\b(to|and|parts? of|surrounding|ward)\b/i.test(n) || /\s\d{3,}$/.test(n) || STREET_WORDS.test(n) || FACILITY_WORDS.test(n) || ORG_WORDS.test(n);

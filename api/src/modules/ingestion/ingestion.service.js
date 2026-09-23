@@ -23,23 +23,30 @@ export async function currentCheckpoint(sourceAccount = env.X_SOURCE_ACCOUNT_NAM
   return rows[0]?.max ?? null;
 }
 
-async function getSourceAccount() {
-  return prisma.sourceAccount.upsert({
-    where: { externalId: env.X_SOURCE_ACCOUNT_ID },
-    create: { id: randomUUID(), platform: 'X', externalId: env.X_SOURCE_ACCOUNT_ID, displayName: env.X_SOURCE_ACCOUNT_NAME, updatedAt: new Date() },
-    update: {},
-  });
+/** Every account this deployment polls. A brand-new database (no SourceAccount rows at all) is bootstrapped
+ * from the env-configured account, exactly as before; once any account exists, new ones are added as
+ * SourceAccount rows directly (e.g. via a seed script), not through env vars. */
+async function getActiveAccounts() {
+  if ((await prisma.sourceAccount.count()) === 0) {
+    const seeded = await prisma.sourceAccount.upsert({
+      where: { externalId: env.X_SOURCE_ACCOUNT_ID },
+      create: { id: randomUUID(), platform: 'X', externalId: env.X_SOURCE_ACCOUNT_ID, displayName: env.X_SOURCE_ACCOUNT_NAME, updatedAt: new Date() },
+      update: {},
+    });
+    return [seeded];
+  }
+  return prisma.sourceAccount.findMany({ where: { active: true } });
 }
 
-function toRows({ tweet, media }) {
+function toRows({ tweet, media }, account) {
   const note = tweet.note_tweet?.text ?? null;
   return {
     post: {
       id: randomUUID(),
       platform: 'X',
-      sourceAccount: env.X_SOURCE_ACCOUNT_NAME,
+      sourceAccount: account.displayName,
       externalId: tweet.id,
-      authorId: tweet.author_id ?? env.X_SOURCE_ACCOUNT_ID,
+      authorId: tweet.author_id ?? account.externalId,
       conversationId: tweet.conversation_id ?? tweet.id,
       text: tweet.text,
       noteTweetText: note,
@@ -54,9 +61,9 @@ function toRows({ tweet, media }) {
   };
 }
 
-/** Where ingestion stands, for the status endpoint and the audit. */
-export async function ingestionStatus() {
-  const state = await prisma.ingestionState.findUnique({ where: { accountId: env.X_SOURCE_ACCOUNT_ID } });
+/** Where ingestion stands, for the status endpoint and the audit. Defaults to the env-configured account. */
+export async function ingestionStatus(accountExternalId = env.X_SOURCE_ACCOUNT_ID) {
+  const state = await prisma.ingestionState.findUnique({ where: { accountId: accountExternalId } });
   const unprocessed = await prisma.sourcePost.count({ where: { processingStatus: { in: ['UNPROCESSED', 'PROCESSING_ERROR'] } } });
   return {
     completedHighWater: state?.completedHighWater ?? null,
@@ -68,7 +75,7 @@ export async function ingestionStatus() {
 }
 
 /** Store one page and the cursor that points past it in a single transaction: both happen or neither does. */
-async function persistPage(tx, { run, page, state }) {
+async function persistPage(tx, { run, page, state, account }) {
   const ids = page.posts.map((p) => p.tweet.id);
   const existing = new Set((await tx.sourcePost.findMany({ where: { platform: 'X', externalId: { in: ids } }, select: { externalId: true } })).map((r) => r.externalId));
   let inserted = 0;
@@ -79,7 +86,7 @@ async function persistPage(tx, { run, page, state }) {
       continue;
     }
     existing.add(item.tweet.id); // the same id twice inside one page
-    const { post, media } = toRows(item);
+    const { post, media } = toRows(item, account);
     await tx.sourcePost.create({
       data: {
         ...post,
@@ -100,22 +107,29 @@ async function persistPage(tx, { run, page, state }) {
     inserted += 1;
   }
   await tx.ingestionState.upsert({
-    where: { accountId: env.X_SOURCE_ACCOUNT_ID },
-    create: { accountId: env.X_SOURCE_ACCOUNT_ID, ...state },
+    where: { accountId: account.externalId },
+    create: { accountId: account.externalId, ...state },
     update: state,
   });
   return { inserted, deduped };
 }
 
 /**
- * Pull everything newer than the completed high-water mark and store it. Safe to run repeatedly, concurrently
- * (only one runs; the others return { skipped: true }) and after any interruption.
- *   maxPages   the fetch budget: pages (up to 100 posts, billed per post) one run may pull. Hitting it leaves the run
- *              `incomplete`, with its cursor saved, and the next run carries on.
+ * Pull everything newer than the completed high-water mark and store it, for every active account. Safe to
+ * run repeatedly, concurrently (only one runs; the others return { skipped: true }) and after any
+ * interruption. Accounts are polled one after another inside a single held lease, not concurrently: the
+ * linker needs to see posts in time order, and per-post-volume today doesn't need true concurrency.
+ *   maxPages   the fetch budget: pages (up to 100 posts, billed per post) one run may pull, per account.
  *   fetchPage  injectable for tests
  */
 export async function ingestNewPosts({ ctx, maxPages = env.X_MAX_PAGES_PER_RUN, fetchPage = fetchTimelinePage } = {}) {
-  const outcome = await exclusive(ctx, (held) => runIngestion(held, { maxPages, fetchPage }));
+  const outcome = await exclusive(ctx, async (held) => {
+    await recoverStaleWork();
+    const accounts = await getActiveAccounts();
+    const results = [];
+    for (const account of accounts) results.push(await runIngestion(held, account, { maxPages, fetchPage }));
+    return combineResults(results);
+  });
   if (!outcome.acquired) {
     logger.info('another worker holds the pipeline lease, skipping ingestion');
     return { skipped: true };
@@ -123,13 +137,37 @@ export async function ingestNewPosts({ ctx, maxPages = env.X_MAX_PAGES_PER_RUN, 
   return outcome.value;
 }
 
-async function runIngestion(ctx, { maxPages, fetchPage }) {
-  await recoverStaleWork();
-  const account = await getSourceAccount();
-  let state = await prisma.ingestionState.findUnique({ where: { accountId: env.X_SOURCE_ACCOUNT_ID } });
+/** Reduces one result per account to the single shape callers (the cycle, /admin/ingest, scripts/ingest.js)
+ * expect - for the common one-account case this is exactly that account's own result. `perAccount` carries
+ * the detail. `runId` is the last account's run (quality/review records are tied to one run today; a cycle
+ * touching several accounts' runs is a simplification worth revisiting if that ever becomes a problem). */
+function combineResults(results) {
+  const status = results.some((r) => r.status === 'FAILED') ? 'FAILED' : results.some((r) => r.status === 'RATE_LIMITED') ? 'RATE_LIMITED' : 'SUCCEEDED';
+  const failed = status === 'SUCCEEDED' ? null : (results.find((r) => r.status === status) ?? results[0]);
+  const sum = (key) => results.reduce((n, r) => n + (r[key] ?? 0), 0);
+  return {
+    runId: results.at(-1)?.runId ?? null,
+    runIds: results.map((r) => r.runId),
+    status,
+    pagesFetched: sum('pagesFetched'),
+    postsFetched: sum('postsFetched'),
+    postsInserted: sum('postsInserted'),
+    postsDeduplicated: sum('postsDeduplicated'),
+    checkpointBefore: results[0]?.checkpointBefore ?? null,
+    complete: results.every((r) => r.complete),
+    incomplete: results.some((r) => r.incomplete),
+    resumedFromCursor: results.some((r) => r.resumedFromCursor),
+    tokenExpired: results.some((r) => r.tokenExpired),
+    error: failed?.error ?? null,
+    perAccount: results,
+  };
+}
+
+async function runIngestion(ctx, account, { maxPages, fetchPage }) {
+  let state = await prisma.ingestionState.findUnique({ where: { accountId: account.externalId } });
   // Only a database with NO ingestion state at all (one that predates the mark) is seeded from what is stored, as before.
   // Once state exists a null mark means "nothing completed yet": falling back to the highest stored id would skip older posts.
-  const sinceId = state ? state.completedHighWater ?? null : (await currentCheckpoint()) ?? null;
+  const sinceId = state ? state.completedHighWater ?? null : (await currentCheckpoint(account.displayName)) ?? null;
 
   const resumable = state?.cursorToken && (state.cursorSinceId ?? null) === sinceId;
   let token = resumable ? state.cursorToken : null;
@@ -147,7 +185,7 @@ async function runIngestion(ctx, { maxPages, fetchPage }) {
       ctx?.assertHeld();
       let page;
       try {
-        page = await fetchPage({ userId: env.X_SOURCE_ACCOUNT_ID, sinceId, paginationToken: token });
+        page = await fetchPage({ userId: account.externalId, sinceId, paginationToken: token });
       } catch (err) {
         if (err instanceof XInvalidTokenError && token && !diag.tokenExpired) {
           // the saved position is no longer valid: start the interval over from the last completed mark (no duplicates: posts are unique)
@@ -157,8 +195,8 @@ async function runIngestion(ctx, { maxPages, fetchPage }) {
           await prisma.$transaction(async (tx) => {
             await assertLeaseInTx(tx, ctx);
             await tx.ingestionState.upsert({
-              where: { accountId: env.X_SOURCE_ACCOUNT_ID },
-              create: { accountId: env.X_SOURCE_ACCOUNT_ID, completedHighWater: sinceId, incomplete: true },
+              where: { accountId: account.externalId },
+              create: { accountId: account.externalId, completedHighWater: sinceId, incomplete: true },
               update: { cursorToken: null, cursorSinceId: null, cursorNewest: null, incomplete: true },
             });
           });
@@ -176,7 +214,7 @@ async function runIngestion(ctx, { maxPages, fetchPage }) {
         : { completedHighWater: sinceId, cursorToken: page.nextToken, cursorSinceId: sinceId, cursorNewest: newest, incomplete: true };
       const saved = await prisma.$transaction(async (tx) => {
         await assertLeaseInTx(tx, ctx); // the page and the checkpoint only commit while we still own the lease
-        return persistPage(tx, { run, page, state: next });
+        return persistPage(tx, { run, page, state: next, account });
       }, { timeout: 60_000 });
       stats.postsInserted += saved.inserted;
       stats.postsDeduplicated += saved.deduped;
@@ -188,16 +226,16 @@ async function runIngestion(ctx, { maxPages, fetchPage }) {
     if (!complete && !state?.incomplete) {
       await prisma.$transaction(async (tx) => {
         await assertLeaseInTx(tx, ctx);
-        await tx.ingestionState.upsert({ where: { accountId: env.X_SOURCE_ACCOUNT_ID }, create: { accountId: env.X_SOURCE_ACCOUNT_ID, completedHighWater: sinceId, incomplete: true }, update: { incomplete: true } });
+        await tx.ingestionState.upsert({ where: { accountId: account.externalId }, create: { accountId: account.externalId, completedHighWater: sinceId, incomplete: true }, update: { incomplete: true } });
       });
     }
   } catch (err) {
     status = err instanceof XRateLimitError ? 'RATE_LIMITED' : 'FAILED';
     error = err;
-    logger.error({ err: err.message }, 'ingestion stopped early; it will resume from its saved position');
+    logger.error({ err: err.message, account: account.displayName }, 'ingestion stopped early; it will resume from its saved position');
   } finally {
     try {
-      const final = await prisma.ingestionState.findUnique({ where: { accountId: env.X_SOURCE_ACCOUNT_ID } });
+      const final = await prisma.ingestionState.findUnique({ where: { accountId: account.externalId } });
       await prisma.ingestionRun.update({
         where: { id: run.id },
         data: { ...stats, status, checkpointAfter: final?.completedHighWater ?? sinceId, diagnostics: { ...diag, incomplete: !diag.complete, newestSeen: newest }, completedAt: new Date(), errorMessage: error?.message ?? null, errorCategory: error ? status : null },

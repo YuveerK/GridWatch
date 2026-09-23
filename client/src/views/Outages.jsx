@@ -4,6 +4,7 @@ import { OutageRow } from '../components/OutageCard.jsx';
 import { CardSkeleton, EmptyState, ErrorState } from '../components/ui.jsx';
 import { prettySdc, plural, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
+import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
 
 const TABS = [
   { id: 'live', label: 'Live', status: 'ACTIVE,PARTIALLY_RESTORED', count: (c) => (c.ACTIVE ?? 0) + (c.PARTIALLY_RESTORED ?? 0) },
@@ -31,8 +32,9 @@ export default function Outages() {
     setParams(next, { replace: true });
   };
 
-  const stats = useApi('/v1/stats');
-  const query = `/v1/outages?status=${tab.status}&sort=${sort}&limit=${PAGE * pages}${sdc ? `&sdc=${encodeURIComponent(sdc)}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
+  const { param: muniParam, name } = useMunicipality();
+  const stats = useApi(withMunicipality('/v1/stats', muniParam));
+  const query = withMunicipality(`/v1/outages?status=${tab.status}&sort=${sort}&limit=${PAGE * pages}${sdc ? `&sdc=${encodeURIComponent(sdc)}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`, muniParam);
   const { data, error, loading, refreshing } = useApi(query);
   const counts = stats.data?.outagesByStatus ?? {};
   const sdcs = (stats.data?.activeBySdc ?? []).map((s) => s.sdc).sort();
@@ -41,7 +43,7 @@ export default function Outages() {
     <div className="container page">
       <header className="page-head">
         <h1>Outages</h1>
-        <p>Every outage City Power has reported, grouped so each fault appears once with its full history.</p>
+        <p>Every outage reported{name ? ` for ${name}` : ''}, grouped so each fault appears once with its full history.</p>
       </header>
 
       <div className="toolbar">

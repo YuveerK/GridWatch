@@ -34,6 +34,12 @@ export async function generateJson({ systemInstruction, parts, jsonSchema, hasIm
   });
   aiUsage.inputTokens += response.usageMetadata?.promptTokenCount ?? 0;
   aiUsage.outputTokens += (response.usageMetadata?.candidatesTokenCount ?? 0) + (response.usageMetadata?.thoughtsTokenCount ?? 0);
+  // A blocked/empty response (e.g. safety filters on an attached image) has no text: response.text is then
+  // undefined, and JSON.parse(undefined) fails as the unhelpful "\"undefined\" is not valid JSON" - say why instead.
+  if (!response.text) {
+    const reason = response.candidates?.[0]?.finishReason ?? response.promptFeedback?.blockReason ?? 'unknown';
+    throw new Error(`Gemini returned no content (finishReason: ${reason})`);
+  }
   return {
     text: response.text,
     inputTokens: response.usageMetadata?.promptTokenCount ?? null,

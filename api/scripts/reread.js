@@ -45,9 +45,9 @@ if (RESTORE) {
   return;
 }
 
-const rows = await prisma.postExtraction.findMany({ where: { promptVersion: pv }, include: { post: { select: { publishedAt: true } } } });
+const rows = await prisma.postExtraction.findMany({ where: { promptVersion: pv }, include: { post: { select: { publishedAt: true, sourceAccount: true } } } });
 const todo = rows
-  .filter((r) => ALL || isStale(r))
+  .filter((r) => ALL || isStale(r, r.post.sourceAccount))
   .sort((a, b) => a.post.publishedAt - b.post.publishedAt)
   .slice(0, LIMIT || undefined);
 

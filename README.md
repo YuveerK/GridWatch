@@ -56,6 +56,17 @@ npm run geocode
 
 Suburbs that fail (typos in City Power's posts, private complexes) stay off the map and are counted as "could not be placed". Map tiles come from OpenFreeMap, which is free and needs no key.
 
+For Johannesburg there's a better source than OpenStreetMap guessing: the City's own CGIS GIS services (`docs/Johannesburg/build_johannesburg_area_dataset.py`) publish the official Region A-G boundaries, every cadastral suburb/township polygon, and City Power's vs Eskom's supply areas. Run it, then merge the result in (matches suburbs by name/alias rather than duplicating them, folds cadastral extensions into their parent suburb as aliases instead of creating one row per extension, and only creates new suburbs for genuine base areas — see the comment at the top of `api/scripts/import-coj-geography.js` for the exact rules):
+
+```
+pip install shapely
+python docs/Johannesburg/build_johannesburg_area_dataset.py --out ./coj-gis-output
+cd api
+npm run import:coj-gis -- --in ../coj-gis-output          # add --dry-run to preview first
+```
+
+This gives affected suburbs an exact government-sourced position and shape (`geoSource: 'coj-cgis'`, plus a `boundary` polygon — the base suburb's own cadastral shape unioned with all its extensions) instead of a geocoder guess. It also sets `electricitySupplier` (`City Power` / `Eskom` / `Mixed/Boundary`) from the City's published supply-area overlap, but that field turned out unreliable in practice — the City Power and Eskom supply layers came back overlapping almost everywhere (e.g. 100%/100% for a suburb well inside Johannesburg), so don't treat it as fact until the source layers are better understood. Safe to re-run any time; already-placed suburbs and existing aliases are left alone.
+
 ## Keeping readings fresh
 
 Every post is read once by Gemini and the result is stored. Each stored reading remembers which instructions (`prompt.js`) and model produced it. If you edit the instructions or change the model, `npm run audit` shows how many readings are now out of date, and this re-reads only those (with a backup, a spend cap and progress; a failed re-read keeps the old reading):

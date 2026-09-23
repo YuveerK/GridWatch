@@ -11,6 +11,7 @@ import { Chip, EmptyState, ErrorState, Freshness, Meter, SectionHead, Skeleton, 
 import { nice, plural, prettySdc, statusMeta, timeAgo, useApi } from '../lib/api.js';
 import { useDocumentTitle, useTick } from '../lib/hooks.js';
 import { isNewSince } from '../lib/newness.js';
+import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
 import { useRefresh } from '../lib/refresh.js';
 
 const MapView = lazy(() => import('../components/MapView.jsx'));
@@ -105,8 +106,9 @@ function HistoryStrips({ rows }) {
 export default function Overview() {
   useDocumentTitle();
   useTick(60_000);
-  const { data, error, loading } = useApi('/v1/overview', { refreshMs: 60_000 });
-  const map = useApi('/v1/map', { refreshMs: 60_000 });
+  const { param: muniParam } = useMunicipality();
+  const { data, error, loading } = useApi(withMunicipality('/v1/overview', muniParam), { refreshMs: 60_000 });
+  const map = useApi(withMunicipality('/v1/map', muniParam), { refreshMs: 60_000 });
   const [selectedId, setSelectedId] = useState(null);
   const [filter, setFilter] = useState('all'); // all | ACTIVE | PARTIALLY_RESTORED
   const [tab, setTab] = useState(() => (new URLSearchParams(window.location.search).get('panel') === 'updates' ? 'updates' : 'outages')); // outages | updates (?panel=updates links straight to the feed)

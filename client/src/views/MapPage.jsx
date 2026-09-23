@@ -6,6 +6,7 @@ import { EmptyState, ErrorState, Skeleton, StatusBadge } from '../components/ui.
 import { nice, plural, timeAgo, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
 import { estimateCoverage } from '../lib/coverage.js';
+import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
 
 const MapView = lazy(() => import('../components/MapView.jsx'));
 
@@ -50,8 +51,9 @@ export default function MapPage() {
   const [kind, setKind] = useState('');
   const [extra, setExtra] = useState(null); // a searched suburb that has no live outage
 
-  const live = useApi('/v1/map', { refreshMs: 60_000 });
-  const hubsApi = useApi('/v1/map/infrastructure', { refreshMs: 120_000 });
+  const { param: muniParam } = useMunicipality();
+  const live = useApi(withMunicipality('/v1/map', muniParam), { refreshMs: 60_000 });
+  const hubsApi = useApi(withMunicipality('/v1/map/infrastructure', muniParam), { refreshMs: 120_000 });
   const hubData = useApi(hubId ? `/v1/map/node/${hubId}` : null);
   const node = hubData.data?.node?.id === hubId ? hubData.data : null;
   const isSdc = node?.node.type === 'SDC';
@@ -66,7 +68,7 @@ export default function MapPage() {
       for (const p of o.places) {
         const tone = toneOf(o.status, p.restored);
         const cur = m.get(p.id);
-        if (!cur) m.set(p.id, { id: p.id, name: nice(p.name), lat: p.lat, lon: p.lon, tone, groups: [o.id], inferred: p.inferred, outages: [o] });
+        if (!cur) m.set(p.id, { id: p.id, name: nice(p.name), lat: p.lat, lon: p.lon, boundary: p.boundary ?? null, tone, groups: [o.id], inferred: p.inferred, outages: [o] });
         else {
           cur.tone = worst(cur.tone, tone);
           cur.groups.push(o.id);
@@ -94,7 +96,7 @@ export default function MapPage() {
     }
     const pts = [...suburbs.values()].map((s) => {
       const dim = sel ? (sel.type === 'outage' ? !s.groups.includes(sel.id) : s.id !== sel.id) : false;
-      return { id: s.id, name: s.name, lat: s.lat, lon: s.lon, tone: s.tone, groups: s.groups, inferred: s.inferred, dim, note: `${s.outages.map((o) => nice(o.title)).slice(0, 2).join(' · ')}${s.outages.length > 2 ? ` · +${s.outages.length - 2} more` : ''}` };
+      return { id: s.id, name: s.name, lat: s.lat, lon: s.lon, boundary: s.boundary, tone: s.tone, groups: s.groups, inferred: s.inferred, dim, note: `${s.outages.map((o) => nice(o.title)).slice(0, 2).join(' · ')}${s.outages.length > 2 ? ` · +${s.outages.length - 2} more` : ''}` };
     });
     if (extra && !suburbs.has(extra.id)) pts.push({ id: extra.id, name: extra.name, lat: extra.lat, lon: extra.lon, tone: 'good', groups: [], note: 'No live outage reported' });
     return pts;
@@ -124,6 +126,18 @@ export default function MapPage() {
   };
   const go = (next) => setParams(next, { replace: true });
   const focused = useRef(null);
+
+  // switching municipality re-centres the map on what's actually shown, so picking "City of Tshwane" doesn't
+  // leave you staring at an empty Johannesburg-centred view with nothing visible.
+  const prevMuni = useRef(muniParam);
+  useEffect(() => {
+    if (prevMuni.current === muniParam) return;
+    const pts = mode === 'infrastructure' ? allHubs : [...suburbs.values()];
+    if (!pts.length) return; // data for the new scope may still be loading; try again once it arrives
+    prevMuni.current = muniParam;
+    zoomTo(pts);
+  }, [muniParam, mode, allHubs, suburbs]);
+
   const setMode = (m) => {
     setExtra(null);
     focused.current = m === 'infrastructure' ? 'view:all' : 'all';

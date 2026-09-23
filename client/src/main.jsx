@@ -8,11 +8,14 @@ import '@fontsource/hanken-grotesk/700.css';
 import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
 import '@fontsource/jetbrains-mono/600.css';
+import { MunicipalityProvider } from './lib/municipality.jsx';
 import Root from './Root.jsx';
 import './app.css';
 
 createRoot(document.getElementById('root')).render(
   <BrowserRouter>
-    <Root />
+    <MunicipalityProvider>
+      <Root />
+    </MunicipalityProvider>
   </BrowserRouter>,
 );

@@ -19,8 +19,17 @@ if (!dryRun) {
     await prisma.$disconnect();
     process.exit(1);
   }
+  const municipality = await prisma.municipality.upsert({
+    where: { code: 'JOHANNESBURG' },
+    update: {},
+    create: { id: randomUUID(), name: 'City of Johannesburg', code: 'JOHANNESBURG' },
+  });
   for (const r of regions) {
-    const region = await prisma.region.upsert({ where: { code: r.code }, update: { name: r.name }, create: { id: randomUUID(), code: r.code, name: r.name } });
+    const region = await prisma.region.upsert({
+      where: { municipalityId_code: { municipalityId: municipality.id, code: r.code } },
+      update: { name: r.name },
+      create: { id: randomUUID(), code: r.code, name: r.name, municipalityId: municipality.id },
+    });
     for (const l of r.localities) {
       const found = await prisma.locality.findUnique({ where: { regionId_normalizedName: { regionId: region.id, normalizedName: l.normalizedName } }, select: { id: true } });
       if (found) {

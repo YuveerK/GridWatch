@@ -1,15 +1,16 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
-import { CardSkeleton, ErrorState, SectionHead, Skeleton } from '../components/ui.jsx';
+import { CardSkeleton, EmptyState, ErrorState, SectionHead, Skeleton } from '../components/ui.jsx';
 import { nice, plural, prettySdc, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
+import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
 
 const TYPES = ['', 'SUBSTATION', 'SWITCHING_STATION', 'DISTRIBUTOR', 'MINI_SUBSTATION', 'FEEDER', 'TRANSFORMER', 'LINE'];
 
 export function Explainer() {
   const steps = [
-    ['1', 'Service centre', 'One of about ten regional depots that dispatch repair teams. Also called an SDC.'],
+    ['1', 'Service centre', 'A regional depot that dispatches repair teams. Also called an SDC - not every city organizes its network this way.'],
     ['2', 'Substation', 'A large site that steps electricity down and sends it out on several lines.'],
     ['3', 'Distributor', 'A cable or circuit leaving the substation that feeds a group of streets.'],
     ['4', 'Your suburb', 'The homes and businesses on that circuit lose power together when it faults.'],
@@ -26,7 +27,7 @@ export function Explainer() {
         ))}
       </div>
       <p className="small muted" style={{ marginTop: 14 }}>
-        GridWatch builds this map itself by reading City Power's posts, so it grows more complete over time. It shows what has been reported, not City Power's official network diagram.
+        GridWatch builds this map itself by reading each city's own outage posts, so it grows more complete over time. It shows what has been reported, not any utility's official network diagram.
       </p>
     </div>
   );
@@ -36,14 +37,16 @@ export default function Network() {
   useDocumentTitle('Network');
   const [type, setType] = useState('');
   const [q, setQ] = useState('');
-  const sdcs = useApi('/v1/network/sdcs');
-  const list = useApi(`/v1/infrastructure?${type ? `type=${type}&` : ''}${q.trim().length > 1 ? `q=${encodeURIComponent(q.trim())}` : ''}`);
+  const { param: muniParam, name } = useMunicipality();
+  const sdcs = useApi(withMunicipality('/v1/network/sdcs', muniParam));
+  const list = useApi(withMunicipality(`/v1/infrastructure?${type ? `type=${type}&` : ''}${q.trim().length > 1 ? `q=${encodeURIComponent(q.trim())}` : ''}`, muniParam));
+  const shownSdcs = sdcs.data?.data.filter((s) => s.equipment > 0 || s.live + s.partial + s.planned > 0) ?? [];
 
   return (
     <div className="container page">
       <header className="page-head">
         <h1>Power network</h1>
-        <p>How electricity reaches your suburb, as far as City Power's posts have shown us. Pick a service centre to explore its equipment.</p>
+        <p>How electricity reaches your suburb{name ? ` in ${name}` : ''}, as far as posts have shown us. Pick a service centre to explore its equipment.</p>
       </header>
       <Explainer />
 
@@ -51,9 +54,14 @@ export default function Network() {
         <SectionHead id="sdc-h" title="Service centres" sub="Tap one to see what it looks after" />
         {sdcs.error && !sdcs.data && <ErrorState error={sdcs.error} />}
         {!sdcs.data && !sdcs.error && <CardSkeleton n={6} />}
-        {sdcs.data && (
+        {sdcs.data && shownSdcs.length === 0 && (
+          <EmptyState icon="network" title="No service centres here">
+            {name ? `${name} doesn't organize its network into service centres, at least not in what it's posted so far.` : "Nothing's been reported yet."}
+          </EmptyState>
+        )}
+        {sdcs.data && shownSdcs.length > 0 && (
           <div className="grid-cards">
-            {sdcs.data.data.filter((s) => s.equipment > 0 || s.live + s.partial + s.planned > 0).map((s) => (
+            {shownSdcs.map((s) => (
               <Link key={s.id} to={`/network/${s.id}`} className="card sdc-card">
                 <div className="row between">
                   <h3>{prettySdc(s.name)}</h3>

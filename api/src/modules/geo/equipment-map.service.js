@@ -46,16 +46,19 @@ export function serviceCentrePlaces(rootId, byNode, edges) {
   return [...places.values()];
 }
 
-/** Facilities with mapped suburbs; service centres also inherit their downstream suburbs. */
-export async function equipmentHubs() {
+/** Facilities with mapped suburbs; service centres also inherit their downstream suburbs.
+ * `municipality` (a Municipality code) keeps only hubs that serve at least one suburb there - equipment near a
+ * boundary can genuinely serve more than one municipality, so a hub's position is still the centre of everything
+ * it serves, not recomputed from just that municipality's share. */
+export async function equipmentHubs(municipality) {
   const rows = await prisma.nodeLocality.findMany({
     where: { locality: { lat: { not: null }, lon: { not: null } } },
-    select: { nodeId: true, evidenceCount: true, locality: { select: { id: true, lat: true, lon: true } }, node: { select: { id: true, name: true, type: true } } },
+    select: { nodeId: true, evidenceCount: true, locality: { select: { id: true, lat: true, lon: true, Region: { select: { Municipality: { select: { code: true } } } } } }, node: { select: { id: true, name: true, type: true } } },
   });
   const byNode = new Map();
   for (const r of rows) {
     const cur = byNode.get(r.nodeId) ?? { node: r.node, pts: [] };
-    cur.pts.push({ id: r.locality.id, lat: r.locality.lat, lon: r.locality.lon, w: r.evidenceCount || 1 });
+    cur.pts.push({ id: r.locality.id, lat: r.locality.lat, lon: r.locality.lon, w: r.evidenceCount || 1, municipality: r.locality.Region?.Municipality?.code ?? null });
     byNode.set(r.nodeId, cur);
   }
   const [liveRows, parents, centres, sdcOutages] = await Promise.all([
@@ -73,8 +76,10 @@ export async function equipmentHubs() {
   }
   const parentOf = new Map();
   for (const e of parents) if (!parentOf.has(e.childId)) parentOf.set(e.childId, e.parentId);
+  const code = municipality?.toUpperCase();
   return [...byNode.values()]
     .filter(({ node }) => HUB_TYPES.includes(node.type))
+    .filter(({ pts }) => !code || pts.some((p) => p.municipality === code))
     .map(({ node, pts }) => {
       const c = weightedCentre(pts);
       return c && { id: node.id, name: node.name, type: node.type, lon: c[0], lat: c[1], served: pts.length, live: live.has(node.id), parentId: parentOf.get(node.id) ?? null };

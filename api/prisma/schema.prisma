@@ -31,14 +31,16 @@ enum IngestionRunStatus {
 }
 
 model SourceAccount {
-  id           String         @id
-  platform     SourcePlatform
-  externalId   String         @unique
-  displayName  String
-  active       Boolean        @default(true)
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime
-  IngestionRun IngestionRun[]
+  id             String         @id
+  platform       SourcePlatform
+  externalId     String         @unique
+  displayName    String
+  municipalityId String?
+  active         Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime
+  Municipality   Municipality?  @relation(fields: [municipalityId], references: [id])
+  IngestionRun   IngestionRun[]
 }
 
 model SourcePost {
@@ -144,32 +146,52 @@ enum KnowledgeLifecycle {
   RETIRED
 }
 
+/// A metro or local municipality (City of Johannesburg, City of Tshwane, ...). Regions are scoped to one
+/// of these because each municipality numbers/letters its own official regions independently (Johannesburg
+/// uses A-G, Tshwane uses 1-7) - without this, two municipalities reusing a code would collide or, worse,
+/// silently corrupt code-keyed lookups elsewhere (geocode sanity-checking, plausibility town lists).
+model Municipality {
+  id            String          @id
+  name          String
+  code          String          @unique
+  createdAt     DateTime        @default(now())
+  Region        Region[]
+  SourceAccount SourceAccount[]
+}
+
 model Region {
-  id        String     @id
-  code      String     @unique
-  name      String
-  createdAt DateTime   @default(now())
-  Locality  Locality[]
+  id             String       @id
+  code           String
+  name           String
+  municipalityId String
+  createdAt      DateTime     @default(now())
+  Municipality   Municipality @relation(fields: [municipalityId], references: [id])
+  Locality       Locality[]
+
+  @@unique([municipalityId, code])
 }
 
 model Locality {
-  id             String             @id
-  canonicalName  String
-  normalizedName String
-  regionId       String?
-  sourceLabel    String?
-  sourceLine     Int?
-  lat            Float?
-  lon            Float?
-  geoSource      String?
-  active         Boolean            @default(true)
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime
-  Region         Region?            @relation(fields: [regionId], references: [id])
-  LocalityAlias  LocalityAlias[]
-  nodes          NodeLocality[]
-  outages        OutageLocality[]
-  pushFollowers  PushSubscription[]
+  id                  String             @id
+  canonicalName       String
+  normalizedName      String
+  regionId            String?
+  sourceLabel         String?
+  sourceLine          Int?
+  lat                 Float?
+  lon                 Float?
+  geoSource           String?
+  electricitySupplier String?
+  /// Simplified GeoJSON Polygon/MultiPolygon (WGS84) from the CoJ CGIS import; null until that's been run for this suburb.
+  boundary            Json?
+  active              Boolean            @default(true)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime
+  Region              Region?            @relation(fields: [regionId], references: [id])
+  LocalityAlias       LocalityAlias[]
+  nodes               NodeLocality[]
+  outages             OutageLocality[]
+  pushFollowers       PushSubscription[]
 
   @@unique([regionId, normalizedName])
   @@index([normalizedName])
