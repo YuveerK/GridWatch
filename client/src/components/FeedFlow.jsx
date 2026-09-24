@@ -20,7 +20,7 @@ function Names({ items, more }) {
 
 /**
  * The route power takes to reach this equipment and beyond it: service centre → substation → distributors → suburbs.
- * Built from what City Power's posts have shown, so it shows what is known, not the official diagram.
+ * Built from what the utility's posts have shown, so it shows what is known, not the official diagram.
  */
 export default function FeedFlow({ node }) {
   const upstream = node.chain.map((c) => ({ key: c.id, title: typeLabel(c.type), label: c.type === 'SDC' ? prettySdc(c.name) : nice(c.name), to: `/network/${c.id}` }));

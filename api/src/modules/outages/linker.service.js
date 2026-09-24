@@ -15,7 +15,6 @@ import { cachedVerdict, storeVerdict } from './tiebreak-cache.js';
 
 const LINKABLE = new Set(['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE']);
 const HOUR = 3_600_000;
-const DIGEST_NODES = 5;
 const PLANNED_WINDOW_HOURS = 240;
 const DIGEST_ROOTS = 2;
 // An umbrella graphic naming many independent pieces of equipment. A fault already split out of a graphic (fromDigest) is one fault, whatever
@@ -86,16 +85,22 @@ async function loadCandidates(post, repairOutageIds = []) {
   const revivalSince = new Date(post.postedAt.getTime() - env.STALE_REVIVAL_HOURS * HOUR);
   const outages = await prisma.outage.findMany({
     where: {
-      OR: [
+      AND: [
         {
-          status: { not: 'CLOSED' },
-          // an outage that opened after this post was published cannot be what the post is about (late or historical posts)
-          startedAt: { lte: post.postedAt },
-          // planned work (reminders days ahead, multi-day isolations) stays linkable much longer than a fault
-          OR: [{ kind: 'UNPLANNED', lastUpdateAt: { gte: since } }, { kind: 'UNPLANNED', status: 'STALE', lastUpdateAt: { gte: revivalSince } }, { kind: 'PLANNED', lastUpdateAt: { gte: new Date(post.postedAt.getTime() - PLANNED_WINDOW_HOURS * HOUR) } }, { kind: 'PLANNED', scheduledEnd: { gte: post.postedAt } }],
+          OR: [
+            {
+              status: { not: 'CLOSED' },
+              // an outage that opened after this post was published cannot be what the post is about (late or historical posts)
+              startedAt: { lte: post.postedAt },
+              // planned work (reminders days ahead, multi-day isolations) stays linkable much longer than a fault
+              OR: [{ kind: 'UNPLANNED', lastUpdateAt: { gte: since } }, { kind: 'UNPLANNED', status: 'STALE', lastUpdateAt: { gte: revivalSince } }, { kind: 'PLANNED', lastUpdateAt: { gte: new Date(post.postedAt.getTime() - PLANNED_WINDOW_HOURS * HOUR) } }, { kind: 'PLANNED', scheduledEnd: { gte: post.postedAt } }],
+            },
+            // the outage(s) this very post was in before it was taken out to be re-linked (still scored like any other candidate)
+            ...(repairOutageIds.length ? [{ id: { in: repairOutageIds } }] : []),
+          ],
         },
-        // the outage(s) this very post was in before it was taken out to be re-linked (still scored like any other candidate)
-        ...(repairOutageIds.length ? [{ id: { in: repairOutageIds } }] : []),
+        // an outage known to belong to a DIFFERENT municipality is never a candidate; one not yet attributed still is (legacy rows)
+        ...(post.municipalityId != null ? [{ OR: [{ municipalityId: post.municipalityId }, { municipalityId: null }] }] : []),
       ],
     },
     orderBy: [{ startedAt: 'asc' }, { title: 'asc' }],
@@ -258,6 +263,7 @@ async function commitLink({ ctx, post, extraction, facts, outageId, isNew, retro
             status: 'ACTIVE',
             title: titleFor(facts, extraction),
             sdcName: facts.sdcNode?.name ?? null,
+            municipalityId: post.municipalityId ?? null,
             primaryNodeId: facts.nodes.at(-1)?.id ?? null,
             retroactive: Boolean(retroactive),
             digest: isDigest(facts),
@@ -271,8 +277,10 @@ async function commitLink({ ctx, post, extraction, facts, outageId, isNew, retro
         const locked = await tx.$queryRaw`SELECT status FROM "Outage" WHERE id = ${id} FOR UPDATE`;
         if (!locked.length || (locked[0].status === 'CLOSED' && !manual)) throw new StaleCandidateError(`outage ${id} changed while the post was being linked`);
       }
-      // A digest post (many nodes) must not smear its nodes across an existing single-fault outage.
-      const expand = isNew || !(isDigest(facts) || facts.fromDigest);
+      // A digest post (many nodes) must not smear its nodes across an existing single-fault outage. isDigest() is
+      // definitionally false once a fault has been split out of a graphic (facts.fromDigest), so a separated fault
+      // is judged on its OWN (already-narrow) facts here, not blanket-denied expansion just for having come from one.
+      const expand = isNew || !isDigest(facts);
       const effect = buildEffect({ extraction, facts, post, retroactive, expand, revision });
       await tx.outagePost.create({
         data: { outageId: id, postId: post.id, role: roleFor(extraction, isNew && !retroactive), score, reasons, postedAt: post.postedAt, faultIndex: post.faultIndex, effect },
@@ -349,6 +357,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     status: extraction.result.status,
     kind: postKind,
     sdcName: facts.sdcNode?.name ?? null,
+    municipalityId: facts.municipalityId ?? null,
     nodeIds: new Set(facts.nodes.map((n) => n.id)),
     localityIds: new Set(facts.localityIds),
     // "[AMENDED UPDATE]" / "*Amended*" in the opening words: a correction of an earlier post (not judged for one fault inside a graphic)
@@ -451,14 +460,32 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
 
   // A multi-fault digest graphic, or a prose update naming a genuine handful of stations that just failed to be split into faults[],
   // must not open an umbrella outage; it may only join one on a strong match (an SDC_SUMMARY reading never reaches here at all - it is
-  // refused above as not linkable). But a SINGLE incident report that simply names a FEW co-affected pieces of equipment with no stated
-  // hierarchy between them IS one fault, whatever the raw root count alone suggests - the model already said so, by leaving faults[]
-  // empty (Tshwane, 23 Sept: "a medium voltage outage affecting: Plantana, Margareta/Boom, Dieretuin" - one outage, three named points,
-  // no claimed cause among them). Opened with no invented parent: the equipment stands as co-equal, exactly as the post stated it. A
-  // LARGE count (DIGEST_NODES+) still reads as a digest that missed its split - a handful of names is very different from several dozen.
-  const genuineDigest = (extraction.result.faults?.length ?? 0) >= 2 || facts.nodes.length >= DIGEST_NODES;
+  // refused above as not linkable). But a SINGLE FRESH INCIDENT REPORT (relevance OUTAGE) that simply names a FEW co-affected pieces
+  // of equipment with no stated hierarchy between them IS one fault, whatever the raw root count alone suggests - the model already
+  // said so, by leaving faults[] empty (Tshwane, 23 Sept: "a medium voltage outage affecting: Plantana, Margareta/Boom, Dieretuin" -
+  // one outage, three named points, no claimed cause among them; Rietfontein/Deerness, same day: five named components, one MV
+  // outage). Opened with no invented parent: the equipment stands as co-equal, exactly as the post stated it. An UPDATE/RESTORATION/
+  // PLANNED_OUTAGE post naming several stations' individual status is a different shape - a status roundup across possibly-unrelated
+  // sites is much likelier than one incident, so those keep the older, count-only rule unchanged.
+  //
+  // Rule, decided up front rather than by threshold-tuning against one post:
+  //  - the model's OWN faults[] split is the only confident signal that these are genuinely SEPARATE incidents everywhere (>=2 faults
+  //    is a confident exclusion, unchanged from before, for every relevance).
+  //  - for a fresh OUTAGE report short of that, a HANDFUL of co-affected points (up to HANDFUL_NODES) reads as one incident, same as
+  //    the already-established 3-4 node case above: equipment count alone is not proof of multiple unrelated faults. Beyond a handful,
+  //    count alone can no longer tell a real sprawling digest the model failed to split from an unusually large single incident -
+  //    genuinely ambiguous, so it goes to a person instead of a silent accepted exclusion.
+  //  - for any other relevance (UPDATE/RESTORATION/PLANNED_OUTAGE), the original count-only threshold stands: DIGEST_NODES+ is a
+  //    confident exclusion, same as before this fix.
+  const HANDFUL_NODES = 8;
+  const DIGEST_NODES = 5;
+  const freshOutageReport = extraction.relevance === 'OUTAGE';
+  const genuineDigest = (extraction.result.faults?.length ?? 0) >= 2 || (!freshOutageReport && facts.nodes.length >= DIGEST_NODES);
   if (!manual && !outageId && isDigest(facts) && genuineDigest) {
     return decide({ outcome: 'NEW', topScore: top?.score ?? null, reason: 'digest post covering several faults: no outage created', candidates: summary });
+  }
+  if (!manual && !outageId && isDigest(facts) && freshOutageReport && facts.nodes.length > HANDFUL_NODES) {
+    return decide({ outcome: 'NEEDS_REVIEW', topScore: top?.score ?? null, reason: 'looks like a large digest by equipment count alone, but was not split into separate faults: ambiguous', candidates: summary });
   }
 
   const linkedTop = outageId && top?.id === outageId ? top : null;

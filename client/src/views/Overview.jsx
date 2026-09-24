@@ -11,7 +11,7 @@ import { Chip, EmptyState, ErrorState, Freshness, Meter, SectionHead, Skeleton, 
 import { nice, plural, prettySdc, statusMeta, timeAgo, useApi } from '../lib/api.js';
 import { useDocumentTitle, useTick } from '../lib/hooks.js';
 import { isNewSince } from '../lib/newness.js';
-import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
+import { useMunicipality, useUtility, withMunicipality } from '../lib/municipality.jsx';
 import { useRefresh } from '../lib/refresh.js';
 
 const MapView = lazy(() => import('../components/MapView.jsx'));
@@ -107,12 +107,13 @@ export default function Overview() {
   useDocumentTitle();
   useTick(60_000);
   const { param: muniParam } = useMunicipality();
+  const { Utility, utility, accounts } = useUtility();
   const { data, error, loading } = useApi(withMunicipality('/v1/overview', muniParam), { refreshMs: 60_000 });
   const map = useApi(withMunicipality('/v1/map', muniParam), { refreshMs: 60_000 });
   const [selectedId, setSelectedId] = useState(null);
   const [filter, setFilter] = useState('all'); // all | ACTIVE | PARTIALLY_RESTORED
   const [tab, setTab] = useState(() => (new URLSearchParams(window.location.search).get('panel') === 'updates' ? 'updates' : 'outages')); // outages | updates (?panel=updates links straight to the feed)
-  const updates = useApi('/v1/updates?limit=30', { refreshMs: 60_000 });
+  const updates = useApi(withMunicipality('/v1/updates?limit=30', muniParam), { refreshMs: 60_000 });
   const seen = useSeenUpdates();
   const newCount = seen.cleared ? 0 : countNew(updates.data?.data ?? [], seen.seenAt);
 
@@ -174,7 +175,7 @@ export default function Overview() {
           <div className="wide">
             <div className="notice" role="status">
               <Icon name="clock" />
-              <div><b>This may be out of date.</b> The newest City Power post we have is {timeAgo(data.lastPostAt)}. Check <a className="link" href="https://x.com/CityPowerJhb" target="_blank" rel="noreferrer">@CityPowerJhb</a> for anything newer.</div>
+              <div><b>This may be out of date.</b> The newest post we have from {utility} is {timeAgo(data.lastPostAt)}. Check {accounts.map((a, i) => <span key={a}>{i > 0 && ' or '}<a className="link" href={`https://x.com/${a}`} target="_blank" rel="noreferrer">@{a}</a></span>)} for anything newer.</div>
             </div>
           </div>
         )}
@@ -208,7 +209,7 @@ export default function Overview() {
           ) : shown.length ? (
             <ul className="slist">{shown.map((o) => <StageRow key={o.id} o={o} selected={o.id === selectedId} onSelect={setSelectedId} />)}</ul>
           ) : (
-            <EmptyState icon="check" title="No live outages">City Power hasn't reported any active outages in the last two days. That's good news.</EmptyState>
+            <EmptyState icon="check" title="No live outages">{Utility} hasn't reported any active outages in the last two days. That's good news.</EmptyState>
           )}
           <Link to="/outages" className="stage-more link">All outages, planned and restored <Icon name="arrow" /></Link>
             </>

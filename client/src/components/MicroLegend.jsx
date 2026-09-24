@@ -3,11 +3,11 @@ import Icon from './Icon.jsx';
 import { InfoTip } from './ui.jsx';
 
 export const STATUS_HELP = {
-  ACTIVE: 'City Power has reported a fault and repairs are not finished.',
+  ACTIVE: 'A fault has been reported and repairs are not finished.',
   PARTIALLY_RESTORED: 'Some suburbs have power again; others are still waiting.',
-  RESTORED: 'City Power reported that supply is back.',
+  RESTORED: 'The utility reported that supply is back.',
   PLANNED: 'Scheduled maintenance with an announced date.',
-  STALE: 'No news for 2 days. It may be fixed, but City Power has not said.',
+  STALE: 'No news for 2 days. It may be fixed, but the utility has not said.',
 };
 
 /** The colour key, small enough to sit right above what it explains. Colour is never the only signal: icon and word too. */

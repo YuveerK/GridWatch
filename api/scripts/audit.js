@@ -76,7 +76,12 @@ check(
 const review = await prisma.sourcePost.count({ where: { processingStatus: { in: ['NEEDS_REVIEW', 'PROCESSING_ERROR'] } } });
 const unprocessed = await prisma.sourcePost.count({ where: { processingStatus: 'UNPROCESSED' } });
 const stuck = stuckProcessing(await prisma.sourcePost.findMany({ where: { processingStatus: 'PROCESSING' }, select: { processingStatus: true, processingStartedAt: true } }));
-const ingest = ingestionProblems(await prisma.ingestionState.findUnique({ where: { accountId: env.X_SOURCE_ACCOUNT_ID } }));
+// every active account, not just the env-configured default: a stale/missing checkpoint on a secondary account (e.g. Tshwane) is
+// otherwise invisible here while the default account looks healthy.
+const accounts = await prisma.sourceAccount.findMany({ where: { active: true } });
+const ingest = accounts.length
+  ? (await Promise.all(accounts.map(async (a) => ingestionProblems(await prisma.ingestionState.findUnique({ where: { accountId: a.externalId } })).map((p) => `${a.displayName}: ${p}`)))).flat()
+  : ingestionProblems(await prisma.ingestionState.findUnique({ where: { accountId: env.X_SOURCE_ACCOUNT_ID } }));
 
 let problems = 0;
 console.log(`Audit of ${outages.length} outages\n`);

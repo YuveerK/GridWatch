@@ -4,8 +4,9 @@ import { scheduleLabel } from '../components/OutageCard.jsx';
 import { Chip, Crumbs, ErrorState, Meter, Skeleton, StatusBadge } from '../components/ui.jsx';
 import { ROLE, nice, cleanPostText, duration, firstSentence, fmtDateTime, fmtDay, fmtTime, plural, prettySdc, statusMeta, timeAgo, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
+import { useUtility } from '../lib/municipality.jsx';
 
-function TimelineItem({ t, last }) {
+function TimelineItem({ t, last, utility }) {
   const role = ROLE[t.role] ?? ROLE.UPDATE;
   const text = cleanPostText(t.text) || t.text;
   return (
@@ -18,14 +19,14 @@ function TimelineItem({ t, last }) {
       <p className="sum">{t.summary || firstSentence(text)}</p>
       <details className="orig">
         <summary>
-          <Icon name="eye" /> City Power's original post{t.images.length > 0 ? ` · ${plural(t.images.length, 'image')}` : ''}
+          <Icon name="eye" /> {utility}'s original post{t.images.length > 0 ? ` · ${plural(t.images.length, 'image')}` : ''}
         </summary>
         <div className="body">
           <p className="post-text">{text}</p>
           {t.images.length > 0 && (
             <div className="images">
               {t.images.map((src) => (
-                <a key={src} href={src} target="_blank" rel="noreferrer"><img src={`${src}?name=small`} alt="Graphic attached to City Power's post" loading="lazy" /></a>
+                <a key={src} href={src} target="_blank" rel="noreferrer"><img src={`${src}?name=small`} alt={`Graphic attached to ${utility}'s post`} loading="lazy" /></a>
               ))}
             </div>
           )}
@@ -65,6 +66,7 @@ export default function OutageDetail() {
   const { id } = useParams();
   const { data: o, error, loading } = useApi(`/v1/outages/${id}`, { refreshMs: 60_000 });
   useDocumentTitle(o?.title);
+  const { utility, Utility } = useUtility(o?.municipality?.code);
 
   if (error && !o) return <div className="container page"><ErrorState error={error} /></div>;
   if (loading || !o) {
@@ -107,7 +109,7 @@ export default function OutageDetail() {
           <div className="when">
             {isPlanned && o.scheduled && <span className="row" style={{ gap: 6, fontWeight: 500 }}><Icon name="calendar" /> {scheduleLabel(o.scheduled)}</span>}
             {o.eta && <span className="row" style={{ gap: 6 }}><Icon name="clock" /> Estimated: {o.eta}</span>}
-            {o.latest?.url && <a className="link" href={o.latest.url} target="_blank" rel="noreferrer">City Power's post <Icon name="external" /></a>}
+            {o.latest?.url && <a className="link" href={o.latest.url} target="_blank" rel="noreferrer">{Utility}'s post <Icon name="external" /></a>}
           </div>
           {!ended && o.restorationPercent != null && !isPlanned && (
             <div style={{ marginTop: 14 }}><Meter value={o.restorationPercent} /></div>
@@ -117,7 +119,7 @@ export default function OutageDetail() {
         {o.status === 'STALE' && (
           <div className="notice" style={{ marginTop: 16 }}>
             <Icon name="clock" />
-            <div>City Power hasn't posted about this for {timeAgo(o.lastUpdateAt).replace(' ago', '')}. It may already be fixed, but there's no announcement to confirm it.</div>
+            <div>{Utility} hasn't posted about this for {timeAgo(o.lastUpdateAt).replace(' ago', '')}. It may already be fixed, but there's no announcement to confirm it.</div>
           </div>
         )}
       </div>
@@ -127,11 +129,11 @@ export default function OutageDetail() {
           <div className="section-head" style={{ marginBottom: 20 }}>
             <div>
               <h2 id="tl-h">Timeline</h2>
-              <p>{plural(o.timeline.length, 'update')} from City Power, oldest first</p>
+              <p>{plural(o.timeline.length, 'update')} from {utility}, oldest first</p>
             </div>
           </div>
           <ol className="tl">
-            {o.timeline.map((t, i) => <TimelineItem key={t.url} t={t} last={i === o.timeline.length - 1} />)}
+            {o.timeline.map((t, i) => <TimelineItem key={t.url} t={t} last={i === o.timeline.length - 1} utility={Utility} />)}
           </ol>
         </section>
 
@@ -166,10 +168,10 @@ export default function OutageDetail() {
                 <div>
                   <div className="small muted" style={{ marginBottom: 6 }}>Likely areas (a guess)</div>
                   <div className="chips">{o.likelyAreas.map((l) => <Chip key={l.id} to={`/suburb/${l.id}`} soft>{nice(l.canonicalName)}</Chip>)}</div>
-                  <p className="small faint" style={{ marginTop: 8 }}>City Power's posts didn't name a suburb. These are places this equipment usually supplies.</p>
+                  <p className="small faint" style={{ marginTop: 8 }}>{Utility}'s posts didn't name a suburb. These are places this equipment usually supplies.</p>
                 </div>
               )}
-              {o.localities.length === 0 && o.likelyAreas.length === 0 && <p className="small muted">City Power's posts didn't name any suburbs.</p>}
+              {o.localities.length === 0 && o.likelyAreas.length === 0 && <p className="small muted">{Utility}'s posts didn't name any suburbs.</p>}
             </div>
           </div>
 

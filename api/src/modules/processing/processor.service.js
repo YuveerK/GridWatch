@@ -24,6 +24,20 @@ const PENDING_STATUSES = ['UNPROCESSED', 'PROCESSING_ERROR'];
 
 const setStatus = (id, processingStatus) => prisma.sourcePost.update({ where: { id }, data: { processingStatus } });
 
+// SourceAccount.displayName -> municipalityId, memoized (accounts are seeded rarely; geography is effectively static per run).
+// Returns null for an account with no municipality set, or that doesn't exist - callers already treat null as "unscoped".
+let municipalityByAccount = null;
+async function municipalityForAccount(displayName) {
+  if (!municipalityByAccount) {
+    const rows = await prisma.sourceAccount.findMany({ select: { displayName: true, municipalityId: true } });
+    municipalityByAccount = new Map(rows.map((r) => [r.displayName, r.municipalityId]));
+  }
+  return municipalityByAccount.get(displayName) ?? null;
+}
+export function resetMunicipalityCache() {
+  municipalityByAccount = null;
+}
+
 /**
  * What the linker sees for a reading: one item for an ordinary post, or one synthetic "mini-post" per fault for a graphic
  * reporting several separate faults. Each item is learned and linked (and retried) on its own.
@@ -101,11 +115,12 @@ async function processLocked(postId, ctx, { force = false, repairOutageIds = [],
     }
 
     // Faults are handled one at a time and each commits its own decision: after a failure the next attempt does only what is missing.
+    const municipalityId = await municipalityForAccount(postRow.sourceAccount);
     let single = null;
     for (const item of todo) {
       ctx?.assertHeld();
       const source = { postId, faultIndex: item.faultIndex };
-      const facts = { ...(await learnFromExtraction(item.extraction, postRow.publishedAt, { source, ctx })), fromDigest: item.fromDigest };
+      const facts = { ...(await learnFromExtraction(item.extraction, postRow.publishedAt, { source, ctx, municipalityId })), fromDigest: item.fromDigest };
       if (item.fromDigest && !facts.nodes.length && !facts.localityIds.length) {
         await recordDecision(ctx, { id: postId, faultIndex: item.faultIndex }, { outcome: 'NEW', reason: 'fault names no equipment or suburbs' });
         continue;
@@ -163,19 +178,34 @@ export async function processPost(postId, { ctx, force = false } = {}) {
  * (their finished faults are kept, only the rest is redone). Posts waiting for review are left for a person.
  *   limit  undefined/null = everything, 0 = nothing, n = at most n. `remaining` reports what was left behind.
  */
+/** Display names of accounts whose current X fetch interval hasn't completed (page budget hit, or a failure mid-interval). X
+ * returns pages newest-first, so processing what's already stored for such an account now would read a restoration before the
+ * older incident it restores, which arrives next cycle. Their posts simply wait, still UNPROCESSED, until the interval is whole. */
+async function incompleteAccounts() {
+  const states = await prisma.ingestionState.findMany({ where: { incomplete: true }, select: { accountId: true } });
+  if (!states.length) return [];
+  const accounts = await prisma.sourceAccount.findMany({ where: { externalId: { in: states.map((s) => s.accountId) } }, select: { displayName: true } });
+  return accounts.map((a) => a.displayName);
+}
+
 /**
  * Process every waiting post, oldest first. `sweepAsOf`: for replaying HISTORY. Live, the cleanup sweep runs every cycle, so an outage that
  * went quiet is marked STALE (and stays revivable) by the time a later post arrives. A replay would otherwise never sweep between posts,
  * and quiet outages would simply fall out of the candidate window. With this on, the "gone quiet" marking runs as of each post's own time (at most
  * hourly). Only that marking: the sweep's closing of restored and planned outages is deliberately NOT replayed (see docs).
+ * `ignoreIncomplete`: process every account regardless of an unfinished fetch interval - for a deliberate full replay/backfill
+ * that wants everything processed now. Every other caller (the live cycle, `scripts/process.js`, `scripts/ingest.js --process`)
+ * gets the chronological-ordering protection by default, with no wiring required on their part.
  */
-export async function processPending({ limit, onPost, onStart, from, to, ctx, sweepAsOf = false } = {}) {
+export async function processPending({ limit, onPost, onStart, from, to, ctx, sweepAsOf = false, ignoreIncomplete = false } = {}) {
   const outcome = await exclusive(ctx, async (held) => {
     await recoverStaleWork();
-    const where = {
+    const heldAccounts = ignoreIncomplete ? [] : await incompleteAccounts();
+    const baseWhere = {
       processingStatus: { in: PENDING_STATUSES },
       ...(from || to ? { publishedAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } } : {}),
     };
+    const where = { ...baseWhere, ...(heldAccounts.length ? { sourceAccount: { notIn: heldAccounts } } : {}) };
     const take = limit == null ? undefined : Math.max(0, Math.floor(limit));
     const posts = take === 0 ? [] : await prisma.sourcePost.findMany({ where, orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }], select: { id: true, publishedAt: true }, ...(take ? { take } : {}) });
     let sweptAt = 0;
@@ -199,10 +229,13 @@ export async function processPending({ limit, onPost, onStart, from, to, ctx, sw
       tally[res.outcome] = (tally[res.outcome] ?? 0) + 1;
       if ((i + 1) % 10 === 0) logger.info({ done: i + 1, total: posts.length, tally }, 'progress');
     }
-    const remaining = await prisma.sourcePost.count({ where });
-    return { total: posts.length, attempted: done, tally, remaining };
+    // `remaining` keeps its old meaning (every post still pending, held-back or not); `held` breaks out how much of that is
+    // deliberately paused for ordering rather than actually stuck.
+    const remaining = await prisma.sourcePost.count({ where: baseWhere });
+    const heldCount = heldAccounts.length ? await prisma.sourcePost.count({ where: { ...baseWhere, sourceAccount: { in: heldAccounts } } }) : 0;
+    return { total: posts.length, attempted: done, tally, remaining, held: heldCount };
   });
-  return outcome.acquired ? outcome.value : { skipped: true, total: 0, attempted: 0, tally: {}, remaining: null };
+  return outcome.acquired ? outcome.value : { skipped: true, total: 0, attempted: 0, tally: {}, remaining: null, held: null };
 }
 
 /**
@@ -309,12 +342,13 @@ async function adoptLegacyEvidence(postId, ctx) {
   if (await prisma.evidenceContribution.findFirst({ where: { postId }, select: { postId: true } })) return;
   if (!(await prisma.linkDecision.findFirst({ where: { postId }, select: { id: true } }))) return;
   const [row, extraction] = await Promise.all([
-    prisma.sourcePost.findUniqueOrThrow({ where: { id: postId }, select: { publishedAt: true } }),
+    prisma.sourcePost.findUniqueOrThrow({ where: { id: postId }, select: { publishedAt: true, sourceAccount: true } }),
     prisma.postExtraction.findFirst({ where: { postId, status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' } }),
   ]);
   if (!extraction) return;
+  const municipalityId = await municipalityForAccount(row.sourceAccount);
   for (const item of faultItems(extraction)) {
-    await learnFromExtraction(item.extraction, row.publishedAt, { source: { postId, faultIndex: item.faultIndex }, mode: 'record-only', ctx });
+    await learnFromExtraction(item.extraction, row.publishedAt, { source: { postId, faultIndex: item.faultIndex }, mode: 'record-only', ctx, municipalityId });
   }
 }
 

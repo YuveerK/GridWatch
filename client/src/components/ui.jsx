@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { statusMeta, timeAgo } from '../lib/api.js';
 import { useTick } from '../lib/hooks.js';
+import { useUtility } from '../lib/municipality.jsx';
 import Icon from './Icon.jsx';
 
 export function StatusBadge({ status, kind, large }) {
@@ -129,16 +130,17 @@ export function InfoTip({ label, children }) {
   );
 }
 
-/** How recent the newest City Power post is: the honest "is this live?" signal. */
+/** How recent the newest post from the utility in scope is: the honest "is this live?" signal. */
 export function Freshness({ lastPostAt }) {
   useTick();
+  const { utility, single } = useUtility();
   if (!lastPostAt) return null;
   const hrs = (Date.now() - new Date(lastPostAt).getTime()) / 3_600_000;
   const stale = hrs > 3;
   return (
-    <span className="fresh" title="Time of the newest post we have read from City Power's account on X">
+    <span className="fresh" title={`Time of the newest post we have read from ${utility}'s account on X`}>
       <span className={`dot${stale ? ' warn' : ''}`} />
-      Latest City Power post {timeAgo(lastPostAt)}
+      Latest {single ? `${utility} ` : ''}post {timeAgo(lastPostAt)}
     </span>
   );
 }

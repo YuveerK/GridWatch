@@ -7,6 +7,7 @@ import RefreshButton, { OperatorSignIn } from './components/RefreshButton.jsx';
 import SearchBox from './components/SearchBox.jsx';
 import { EmptyState } from './components/ui.jsx';
 import { useTheme } from './lib/hooks.js';
+import { useUtility } from './lib/municipality.jsx';
 import About from './views/About.jsx';
 import Activity from './views/Activity.jsx';
 import Insights from './views/Insights.jsx';
@@ -58,6 +59,7 @@ function SearchOverlay({ onClose }) {
 
 export default function Root() {
   const { dark, toggle } = useTheme();
+  const { accounts } = useUtility();
   const [searching, setSearching] = useState(false);
   const { pathname } = useLocation();
 
@@ -127,7 +129,7 @@ export default function Root() {
             <Link to="/planned" className="link">Planned maintenance</Link>
             <Link to="/activity" className="link">What changed</Link>
             <Link to="/about" className="link">How it works</Link>
-            <a className="link" href="https://x.com/CityPowerJhb" target="_blank" rel="noreferrer">@CityPowerJhb <Icon name="external" /></a>
+            {accounts.map((a) => <a key={a} className="link" href={`https://x.com/${a}`} target="_blank" rel="noreferrer">@{a} <Icon name="external" /></a>)}
             <OperatorSignIn />
           </div>
         </div>

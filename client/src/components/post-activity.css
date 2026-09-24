@@ -1,4 +1,4 @@
-/* City Power's posts per day (Insights). Kind colours reuse the status tokens so a kind reads the same as everywhere else:
+/* The utilities' posts per day (Insights). Kind colours reuse the status tokens so a kind reads the same as everywhere else:
    outage = live, update = partial, restoration = good, planned = plan; the rest are neutral. The kind is always also written in words. */
 .pa { --k-OUTAGE: var(--live); --k-UPDATE: var(--partial); --k-RESTORATION: var(--good); --k-PLANNED: var(--plan); --k-SUMMARY: var(--brand); --k-NOTICE: var(--ink-3); --k-REPLY: var(--line-strong); --k-OTHER: var(--axis); }
 .pa [data-kind] { --c: var(--k-OTHER); }

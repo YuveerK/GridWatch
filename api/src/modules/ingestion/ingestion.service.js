@@ -140,9 +140,14 @@ export async function ingestNewPosts({ ctx, maxPages = env.X_MAX_PAGES_PER_RUN, 
 /** Reduces one result per account to the single shape callers (the cycle, /admin/ingest, scripts/ingest.js)
  * expect - for the common one-account case this is exactly that account's own result. `perAccount` carries
  * the detail. `runId` is the last account's run (quality/review records are tied to one run today; a cycle
- * touching several accounts' runs is a simplification worth revisiting if that ever becomes a problem). */
+ * touching several accounts' runs is a simplification worth revisiting if that ever becomes a problem).
+ * A single unavailable/rate-limited account must not stop a healthy one's new posts and backlog from ever
+ * updating the site: the combined status is only FAILED/RATE_LIMITED when EVERY account ended that way, so a
+ * caller only aborts processing when there is truly nothing usable this cycle. `failedAccounts` still reports
+ * every account that didn't succeed, even when the combined status is SUCCEEDED overall. */
 function combineResults(results) {
-  const status = results.some((r) => r.status === 'FAILED') ? 'FAILED' : results.some((r) => r.status === 'RATE_LIMITED') ? 'RATE_LIMITED' : 'SUCCEEDED';
+  const allUnsuccessful = results.every((r) => r.status !== 'SUCCEEDED');
+  const status = !allUnsuccessful ? 'SUCCEEDED' : results.some((r) => r.status === 'FAILED') ? 'FAILED' : 'RATE_LIMITED';
   const failed = status === 'SUCCEEDED' ? null : (results.find((r) => r.status === status) ?? results[0]);
   const sum = (key) => results.reduce((n, r) => n + (r[key] ?? 0), 0);
   return {
@@ -159,6 +164,7 @@ function combineResults(results) {
     resumedFromCursor: results.some((r) => r.resumedFromCursor),
     tokenExpired: results.some((r) => r.tokenExpired),
     error: failed?.error ?? null,
+    failedAccounts: results.filter((r) => r.status !== 'SUCCEEDED').map((r) => ({ displayName: r.displayName, status: r.status, error: r.error })),
     perAccount: results,
   };
 }
@@ -244,5 +250,5 @@ async function runIngestion(ctx, account, { maxPages, fetchPage }) {
       logger.error({ err: err.message }, 'could not record the ingestion run; the lease is still released');
     }
   }
-  return { runId: run.id, status, ...stats, checkpointBefore: sinceId, complete: diag.complete, incomplete: !diag.complete, resumedFromCursor: diag.resumedFromCursor, tokenExpired: diag.tokenExpired, error: error?.message ?? null };
+  return { runId: run.id, sourceAccountId: account.id, displayName: account.displayName, status, ...stats, checkpointBefore: sinceId, complete: diag.complete, incomplete: !diag.complete, resumedFromCursor: diag.resumedFromCursor, tokenExpired: diag.tokenExpired, error: error?.message ?? null };
 }

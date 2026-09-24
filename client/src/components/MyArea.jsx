@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { nice, useApi } from '../lib/api.js';
 import { useMyArea } from '../lib/hooks.js';
+import { useUtility } from '../lib/municipality.jsx';
 import { AnswerCard, computeAnswer } from './AreaAnswer.jsx';
 import Icon from './Icon.jsx';
 import SearchBox from './SearchBox.jsx';
@@ -13,6 +14,7 @@ import { Skeleton } from './ui.jsx';
 export default function MyArea({ banner }) {
   const { area, setArea, clear } = useMyArea();
   const { data, loading } = useApi(area ? `/v1/localities/${area.id}/outages` : null, { refreshMs: 60_000 });
+  const who = useUtility(data?.municipality?.code);
 
   if (!area) {
     if (banner) {
@@ -50,7 +52,7 @@ export default function MyArea({ banner }) {
     );
   }
 
-  const answer = computeAnswer(nice(area.name), data.data, data.possible, area.id);
+  const answer = computeAnswer(nice(area.name), data.data, data.possible, area.id, who);
   if (banner) {
     return (
       <AnswerCard

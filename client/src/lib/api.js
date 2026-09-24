@@ -75,7 +75,7 @@ export function dayDiff(isoDate) {
 }
 
 // ───────────── text ─────────────
-/** City Power often writes names in capitals ("NORTHCLIFF"): show them as ordinary names. */
+/** The utilities often write names in capitals ("NORTHCLIFF"): show them as ordinary names. */
 export const nice = (s) => (s && s.length > 3 && s === s.toUpperCase() && /[A-Z]/.test(s) ? s.toLowerCase().replace(/(^|[\s(/-])([a-z])/g, (_, a, b) => a + b.toUpperCase()) : s);
 export const prettySdc = (s) => (s ?? '').replace(/([a-z])([A-Z])/g, '$1 $2');
 export const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -103,7 +103,7 @@ export const STATUS = {
   PARTIALLY_RESTORED: { label: 'Partly restored', long: 'Some areas are back on', tone: 'partial', icon: 'half', order: 1 },
   PLANNED: { label: 'Planned', long: 'Planned maintenance', tone: 'plan', icon: 'calendar', order: 2 },
   RESTORED: { label: 'Restored', long: 'Power is back on', tone: 'good', icon: 'check', order: 3 },
-  STALE: { label: 'No recent update', long: 'No news from City Power lately', tone: 'idle', icon: 'clock', order: 4 },
+  STALE: { label: 'No recent update', long: 'No news lately', tone: 'idle', icon: 'clock', order: 4 },
   CLOSED: { label: 'Closed', long: 'Finished', tone: 'idle', icon: 'archive', order: 5 },
   CANCELLED: { label: 'Cancelled', long: 'Planned work cancelled', tone: 'idle', icon: 'x', order: 6 },
 };
@@ -116,4 +116,3 @@ export const ROLE = {
   RESTORATION: { label: 'Power restored', tone: 'good' },
 };
 
-export const FAULT_LINE = { phone: '011 490 7484', freephone: '0800 202 925', web: 'citypower.mobi' };

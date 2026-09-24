@@ -5,7 +5,7 @@
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/db/prisma.js';
 import { faultItems } from '../src/modules/processing/processor.service.js';
-import { checkPostDispositions, effectReadingMismatch, ingestionProblems, latestNonemptyRuns, stuckProcessing } from '../src/modules/processing/quality.js';
+import { awaitingReview, checkPostDispositions, effectReadingMismatch, ingestionProblems, latestNonemptyRuns, stuckProcessing } from '../src/modules/processing/quality.js';
 
 const all = process.argv.includes('--all');
 const RUNS = Number((process.argv.find((a) => a.startsWith('--runs=')) ?? '--runs=1').split('=')[1]);
@@ -107,7 +107,9 @@ check('no outage marked RESTORED while a percentage below 100 is stated', [...fl
 check('outage-type posts are linked to an outage', [...flagged.values()].flat().filter((w) => w.startsWith('outage-type post')).length);
 check('summaries written and sensible', [...flagged.values()].flat().filter((w) => /summary/.test(w)).length);
 check('no weak outage titles', [...flagged.values()].flat().filter((w) => w.startsWith('weak outage title')).length);
-check('nothing waiting for human review', posts.filter((x) => x.processingStatus === 'NEEDS_REVIEW').length);
+const openItems = await prisma.reviewItem.findMany({ where: { postId: { in: posts.map((x) => x.id) }, status: 'OPEN' }, select: { postId: true, sampled: true, reasons: true } });
+for (const i of openItems) if (!i.sampled) flag(posts.find((x) => x.id === i.postId), `open review item: ${(i.reasons ?? []).map((r) => `${r.code}${r.detail ? ` (${r.detail})` : ''}`).join(', ')}`);
+check('nothing waiting for human review', awaitingReview(posts, openItems).length);
 
 // database-wide invariants (the same ones `npm run audit` checks, scoped to what this batch touched)
 const touched = [...new Set(posts.flatMap((x) => x.linkDecisions.map((d) => d.outageId).filter(Boolean)))];
@@ -147,8 +149,12 @@ for (const x of posts) {
   }
 }
 if (!all) console.log(`\n(${posts.length - flagged.size} posts raised no concern; use --all to list them)`);
-// the fetch and processing state around this batch
-const ingest = ingestionProblems(await prisma.ingestionState.findUnique({ where: { accountId: env.X_SOURCE_ACCOUNT_ID } }));
+// the fetch and processing state around this batch - every active account, not just the env-configured default, so a stale or
+// missing checkpoint on a secondary account (e.g. Tshwane) isn't invisible while the default account looks healthy
+const accounts = await prisma.sourceAccount.findMany({ where: { active: true } });
+const ingest = accounts.length
+  ? (await Promise.all(accounts.map(async (a) => ingestionProblems(await prisma.ingestionState.findUnique({ where: { accountId: a.externalId } })).map((p) => `${a.displayName}: ${p}`)))).flat()
+  : ingestionProblems(await prisma.ingestionState.findUnique({ where: { accountId: env.X_SOURCE_ACCOUNT_ID } }));
 const stuck = stuckProcessing(await prisma.sourcePost.findMany({ where: { processingStatus: 'PROCESSING' }, select: { processingStatus: true, processingStartedAt: true } }));
 const degraded = [...ingest, ...(stuck.length ? [`${stuck.length} post(s) stuck in PROCESSING`] : [])];
 for (const d of degraded) console.log(`DEGRADED: ${d}`);

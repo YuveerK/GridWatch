@@ -20,6 +20,7 @@ export default function Outages() {
   const [params, setParams] = useSearchParams();
   const tabId = params.get('status') ?? 'live';
   const sdc = params.get('sdc') ?? '';
+  const region = params.get('region') ?? '';
   const q = params.get('q') ?? '';
   const sort = params.get('sort') ?? 'updated';
   const [pages, setPages] = useState(1);
@@ -34,7 +35,7 @@ export default function Outages() {
 
   const { param: muniParam, name } = useMunicipality();
   const stats = useApi(withMunicipality('/v1/stats', muniParam));
-  const query = withMunicipality(`/v1/outages?status=${tab.status}&sort=${sort}&limit=${PAGE * pages}${sdc ? `&sdc=${encodeURIComponent(sdc)}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`, muniParam);
+  const query = withMunicipality(`/v1/outages?status=${tab.status}&sort=${sort}&limit=${PAGE * pages}${sdc ? `&sdc=${encodeURIComponent(sdc)}` : ''}${region ? `&region=${encodeURIComponent(region)}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`, muniParam);
   const { data, error, loading, refreshing } = useApi(query);
   const counts = stats.data?.outagesByStatus ?? {};
   const sdcs = (stats.data?.activeBySdc ?? []).map((s) => s.sdc).sort();
@@ -75,10 +76,10 @@ export default function Outages() {
         <div className={refreshing ? 'fading' : undefined}>
           <p className="small muted" style={{ marginBottom: 12 }} aria-live="polite">
             {data.total === 0 ? 'No outages match' : `Showing ${data.data.length} of ${plural(data.total, 'outage')}`}
-            {sdc ? ` in ${prettySdc(sdc)}` : ''}{q ? ` matching “${q}”` : ''}
+            {sdc ? ` in ${prettySdc(sdc)}` : ''}{region ? ` in Region ${region}` : ''}{q ? ` matching “${q}”` : ''}
           </p>
           {data.data.length === 0 ? (
-            <EmptyState icon="search" title="Nothing here" action={<button className="btn" onClick={() => set({ status: '', sdc: '', q: '' })}>Clear filters</button>}>
+            <EmptyState icon="search" title="Nothing here" action={<button className="btn" onClick={() => set({ status: '', sdc: '', region: '', q: '' })}>Clear filters</button>}>
               {tab.id === 'live' ? 'There are no live outages that match. That is good news, or try another filter.' : 'Try a different status or clear the filters.'}
             </EmptyState>
           ) : (

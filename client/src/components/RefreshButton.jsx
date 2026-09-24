@@ -84,7 +84,7 @@ export function OperatorSignIn({ compact }) {
 }
 
 /**
- * Operator button: pull the newest City Power posts from X, read them and refresh the site.
+ * Operator button: pull the newest posts of every tracked utility from X, read them and refresh the site.
  * `compact` is the header version; the full version also explains the outcome in words.
  */
 export default function RefreshButton({ compact }) {
@@ -109,7 +109,7 @@ export default function RefreshButton({ compact }) {
 
   if (compact) {
     return (
-      <button className="icon-btn icon-only" onClick={startRefresh} disabled={disabled} aria-label={text} title={outcome?.msg ?? 'Fetch the newest posts from City Power on X and update the site'}>
+      <button className="icon-btn icon-only" onClick={startRefresh} disabled={disabled} aria-label={text} title={outcome?.msg ?? 'Fetch the newest posts on X and update the site'}>
         <Icon name="refresh" className={running ? 'spin' : ''} />
         <span className="label">{running ? text : wait > 0 ? text : 'Refresh'}</span>
       </button>

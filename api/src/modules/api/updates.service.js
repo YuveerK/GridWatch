@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
+import { outageInMunicipalitySql, postUrl } from './municipality-scope.js';
 
 const DAY = 24 * 3_600_000;
 
@@ -34,21 +35,21 @@ export function classify({ role, effect, prev }) {
   return null;
 }
 
-/** The latest meaningful updates, newest first. Optionally only for outages that involve one suburb. */
-export async function latestUpdates({ limit = 30, days = 7, localityId = null, now = new Date() } = {}) {
+/** The latest meaningful updates, newest first. Optionally only for outages that involve one suburb, or of one municipality. */
+export async function latestUpdates({ limit = 30, days = 7, localityId = null, municipality = null, now = new Date() } = {}) {
   const since = new Date(now.getTime() - days * DAY);
   const lookback = new Date(since.getTime() - 5 * DAY); // earlier posts, so the first one in view has something to be compared with
   const area = localityId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "OutageLocality" ol WHERE ol."outageId" = op."outageId" AND ol."localityId" = ${localityId})` : Prisma.empty;
   const rows = await prisma.$queryRaw`
     SELECT op."outageId" AS "outageId", op."postId" AS "postId", op."postedAt" AS "postedAt", op."faultIndex" AS "faultIndex", op."role"::text AS role, op."effect" AS effect,
            o."title" AS title, o."kind"::text AS "outageKind", o."status"::text AS status, o."sdcName" AS sdc, o."restorationPercent" AS percent, o."etaText" AS eta,
-           sp."externalId" AS "externalId", sp."createdAt" AS "ingestedAt", ps."summary" AS summary,
+           sp."externalId" AS "externalId", sp."sourceAccount" AS "account", sp."createdAt" AS "ingestedAt", ps."summary" AS summary,
            (SELECT pe."result" FROM "PostExtraction" pe WHERE pe."postId" = op."postId" AND pe."status" = 'SUCCEEDED' ORDER BY pe."createdAt" DESC LIMIT 1) AS reading
     FROM "OutagePost" op
     JOIN "Outage" o ON o."id" = op."outageId"
     JOIN "SourcePost" sp ON sp."id" = op."postId"
     LEFT JOIN "PostSummary" ps ON ps."postId" = op."postId" AND ps."faultIndex" = op."faultIndex"
-    WHERE op."postedAt" >= ${lookback} ${area}
+    WHERE op."postedAt" >= ${lookback} ${area} AND ${outageInMunicipalitySql(municipality)}
     ORDER BY op."outageId", op."postedAt", op."faultIndex", op."postId"`;
 
   const last = new Map(); // outageId -> the previous post's effect
@@ -73,7 +74,7 @@ export async function latestUpdates({ limit = 30, days = 7, localityId = null, n
       summary: r.summary,
       percent: r.percent,
       eta: r.eta,
-      url: `https://x.com/CityPowerJhb/status/${r.externalId}`,
+      url: postUrl(r.account, r.externalId),
     });
   }
   return items.sort((a, b) => b.postedAt - a.postedAt || a.outageId.localeCompare(b.outageId)).slice(0, limit);

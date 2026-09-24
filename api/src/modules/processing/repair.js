@@ -44,7 +44,7 @@ export async function snapshotForPosts(prisma, postIds, now = new Date()) {
 }
 
 const CONFIRM_AT = 2;
-const NODE_FIELDS = ['type', 'name', 'normalizedKey', 'lifecycle', 'evidenceCount', 'firstSeenAt', 'lastSeenAt'];
+const NODE_FIELDS = ['type', 'name', 'normalizedKey', 'municipalityId', 'lifecycle', 'evidenceCount', 'firstSeenAt', 'lastSeenAt'];
 const edgeKey = (a, b) => a + '|' + b;
 /** How many contributions each graph fact has: NODE|id, EDGE|parent|child, NODE_LOCALITY|node|locality. */
 function tally(rows) {
@@ -55,7 +55,7 @@ function tally(rows) {
   }
   return m;
 }
-const OUTAGE_FIELDS = ['id', 'kind', 'status', 'title', 'sdcName', 'cause', 'etaText', 'restorationPercent', 'primaryNodeId', 'retroactive', 'digest', 'startedAt', 'lastUpdateAt', 'restoredAt', 'scheduledStart', 'scheduledEnd', 'createdAt'];
+const OUTAGE_FIELDS = ['id', 'kind', 'status', 'title', 'sdcName', 'municipalityId', 'cause', 'etaText', 'restorationPercent', 'primaryNodeId', 'retroactive', 'digest', 'startedAt', 'lastUpdateAt', 'restoredAt', 'scheduledStart', 'scheduledEnd', 'createdAt'];
 const pick = (row, keys) => Object.fromEntries(keys.filter((k) => k in row).map((k) => [k, row[k]]));
 
 /** Undo a repair: put the snapshot back. `ctx` is the held pipeline lease. Returns what was restored. */
@@ -68,11 +68,30 @@ export async function restoreSnapshot({ prisma, snapshot: raw, ctx }) {
   const out = await prisma.$transaction(
     async (tx) => {
       await assertLeaseInTx(tx, ctx);
-      // undoing twice, or undoing something already undone, must change nothing (the counters are corrected by difference, so a repeat would double-apply)
-      const sig = (ops, ev) => JSON.stringify([ops.map((o) => o.outageId + '|' + o.postId + '|' + o.faultIndex).sort(), [...tally(ev)].sort()]);
-      const nowOps = await tx.outagePost.findMany({ where: { postId: { in: postIds } }, select: { outageId: true, postId: true, faultIndex: true } });
+      // Undoing twice, or undoing something already undone, must change nothing (the counters are corrected by difference, so a repeat
+      // would double-apply). That requires comparing everything this function actually restores, not just outage membership: a reading,
+      // summary or override can change while the post stays in exactly the same outage with the same evidence counts.
+      const sig = (ops, ev, decisions, extractions, summaries, overrides, posts) =>
+        JSON.stringify([
+          ops.map((o) => `${o.outageId}|${o.postId}|${o.faultIndex}|${JSON.stringify(o.effect ?? null)}`).sort(),
+          [...tally(ev)].sort(),
+          decisions.map((d) => `${d.postId}|${d.faultIndex}|${d.outcome}|${d.outageId}|${d.reason ?? ''}`).sort(),
+          extractions.map((x) => `${x.postId}|${x.promptVersion}|${x.status}|${JSON.stringify(x.result ?? null)}`).sort(),
+          summaries.map((x) => `${x.postId}|${x.faultIndex}|${x.summary}`).sort(),
+          overrides.map((o) => `${o.postId}|${o.faultIndex}|${o.action}|${o.anchorPostId ?? ''}|${o.anchorFaultIndex}|${o.note ?? ''}`).sort(),
+          posts.map((p) => `${p.id}|${p.processingStatus}`).sort(),
+        ]);
+      const nowOps = await tx.outagePost.findMany({ where: { postId: { in: postIds } }, select: { outageId: true, postId: true, faultIndex: true, effect: true } });
       const nowEvidence = await tx.evidenceContribution.findMany({ where: { postId: { in: postIds } } });
-      if (sig(nowOps, nowEvidence) === sig(s.outagePosts, s.evidence)) {
+      const nowDecisions = await tx.linkDecision.findMany({ where: { postId: { in: postIds } }, select: { postId: true, faultIndex: true, outcome: true, outageId: true, reason: true } });
+      const nowExtractions = await tx.postExtraction.findMany({ where: { postId: { in: postIds } }, select: { postId: true, promptVersion: true, status: true, result: true } });
+      const nowSummaries = await tx.postSummary.findMany({ where: { postId: { in: postIds } }, select: { postId: true, faultIndex: true, summary: true } });
+      const nowOverrides = await tx.linkOverride.findMany({ where: { OR: [{ postId: { in: postIds } }, { anchorPostId: { in: postIds } }] }, select: { postId: true, faultIndex: true, action: true, anchorPostId: true, anchorFaultIndex: true, note: true } });
+      const nowPosts = await tx.sourcePost.findMany({ where: { id: { in: postIds } }, select: { id: true, processingStatus: true } });
+      if (
+        sig(nowOps, nowEvidence, nowDecisions, nowExtractions, nowSummaries, nowOverrides, nowPosts) ===
+        sig(s.outagePosts, s.evidence, s.linkDecisions, s.extractions, s.summaries, s.overrides, s.posts)
+      ) {
         const stillThere = await tx.outage.count({ where: { id: { in: s.outages.map((o) => o.id) } } });
         if (stillThere === s.outages.length) return { posts: postIds.length, outages: 0, entries: 0, alreadyRestored: true };
       }

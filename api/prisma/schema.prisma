@@ -157,6 +157,9 @@ model Municipality {
   createdAt     DateTime        @default(now())
   Region        Region[]
   SourceAccount SourceAccount[]
+  Locality      Locality[]
+  InfraNode     InfraNode[]
+  Outage        Outage[]
 }
 
 model Region {
@@ -176,6 +179,10 @@ model Locality {
   canonicalName       String
   normalizedName      String
   regionId            String?
+  /// Which municipality this suburb belongs to. Seeded/GIS-imported rows already carry this via Region -> Municipality; this
+  /// column exists so a LEARNED suburb (regionId: null, named by a post but not in the GIS import) still has one, so resolving
+  /// it later never falls back to a same-named suburb known to belong to a different, known municipality.
+  municipalityId      String?
   sourceLabel         String?
   sourceLine          Int?
   lat                 Float?
@@ -188,6 +195,7 @@ model Locality {
   createdAt           DateTime           @default(now())
   updatedAt           DateTime
   Region              Region?            @relation(fields: [regionId], references: [id])
+  Municipality        Municipality?      @relation(fields: [municipalityId], references: [id])
   LocalityAlias       LocalityAlias[]
   nodes               NodeLocality[]
   outages             OutageLocality[]
@@ -268,26 +276,36 @@ enum InfrastructureType {
   OTHER
 }
 
+/// Equipment identity is namespaced by municipality: the same station/distributor name in two different tracked utilities is
+/// two different nodes unless a post gives explicit evidence they're the same. `municipalityId` is nullable for two reasons:
+/// (1) legacy rows from before this column existed, and (2) any caller that resolves a node without knowing the municipality
+/// (tests, or code paths with no account context) - those stay in a single, still fully unique, unscoped namespace.
+/// NOTE: Postgres does not treat NULL as equal to NULL in a composite unique index, so `@@unique([type, normalizedKey,
+/// municipalityId])` alone would silently stop enforcing uniqueness for the municipalityId-null subset. A partial unique
+/// index `ON "InfraNode" (type, "normalizedKey") WHERE "municipalityId" IS NULL` (outside Prisma's schema DSL - added by hand
+/// in the migration SQL) keeps that subset exactly as strict as it was before this column existed.
 model InfraNode {
-  id            String             @id @default(cuid())
-  type          InfrastructureType
-  name          String
-  normalizedKey String
-  lifecycle     KnowledgeLifecycle @default(CANDIDATE)
-  evidenceCount Int                @default(1)
-  firstSeenAt   DateTime
-  lastSeenAt    DateTime
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
+  id             String             @id @default(cuid())
+  type           InfrastructureType
+  name           String
+  normalizedKey  String
+  municipalityId String?
+  lifecycle      KnowledgeLifecycle @default(CANDIDATE)
+  evidenceCount  Int                @default(1)
+  firstSeenAt    DateTime
+  lastSeenAt     DateTime
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
 
-  aliases    NodeAlias[]
-  parents    InfraEdge[]    @relation("EdgeChild")
-  children   InfraEdge[]    @relation("EdgeParent")
-  localities NodeLocality[]
-  outages    OutageNode[]
-  primaryFor Outage[]
+  aliases      NodeAlias[]
+  parents      InfraEdge[]    @relation("EdgeChild")
+  children     InfraEdge[]    @relation("EdgeParent")
+  localities   NodeLocality[]
+  outages      OutageNode[]
+  primaryFor   Outage[]
+  Municipality Municipality?  @relation(fields: [municipalityId], references: [id])
 
-  @@unique([type, normalizedKey])
+  @@unique([type, normalizedKey, municipalityId])
   @@index([normalizedKey])
 }
 
@@ -366,6 +384,9 @@ model Outage {
   etaText            String?
   restorationPercent Int?
   primaryNodeId      String?
+  /// Set from the opening post's account at creation. Nullable (legacy rows, or a caller with no account context) - a null
+  /// value is never treated as a mismatch, only as "not scoped yet"; see loadCandidates in linker.service.js.
+  municipalityId     String?
   retroactive        Boolean      @default(false)
   digest             Boolean      @default(false)
   startedAt          DateTime
@@ -377,11 +398,12 @@ model Outage {
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
 
-  primaryNode InfraNode?       @relation(fields: [primaryNodeId], references: [id])
-  nodes       OutageNode[]
-  localities  OutageLocality[]
-  posts       OutagePost[]
-  decisions   LinkDecision[]
+  primaryNode  InfraNode?       @relation(fields: [primaryNodeId], references: [id])
+  Municipality Municipality?    @relation(fields: [municipalityId], references: [id])
+  nodes        OutageNode[]
+  localities   OutageLocality[]
+  posts        OutagePost[]
+  decisions    LinkDecision[]
 
   @@index([status, lastUpdateAt(sort: Desc)])
 }

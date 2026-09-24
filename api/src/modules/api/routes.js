@@ -16,6 +16,7 @@ import { CATEGORY_IDS, dailyPostCounts, listPosts } from './post-activity.servic
 import { listReviewItems, resolveReviewItem } from '../review/review.service.js';
 import { latestUpdates } from './updates.service.js';
 import { localityHistory } from './locality-history.service.js';
+import { UTILITIES, outageInMunicipality, outageInMunicipalitySql, postInMunicipalitySql, postUrl } from './municipality-scope.js';
 
 export const router = Router();
 
@@ -38,10 +39,20 @@ const id = z.string().trim().min(1).max(64);
 const outageInclude = {
   localities: { include: { locality: { select: { id: true, canonicalName: true, lat: true, lon: true, Region: { select: { code: true, name: true, Municipality: { select: { code: true, name: true } } } } } } } },
   nodes: { include: { node: { select: { id: true, type: true, name: true, lifecycle: true } } } },
+  Municipality: { select: { code: true, name: true } },
   _count: { select: { posts: true } },
 };
 
-/** A where-clause fragment matching outages with at least one named locality in this municipality (by code). */
+/** The X accounts (handles) of one municipality, for Prisma filters on SourcePost.sourceAccount. */
+async function accountsOf(code) {
+  const rows = await prisma.sourceAccount.findMany({ where: { Municipality: { code: String(code).toUpperCase() } }, select: { displayName: true } });
+  return rows.map((r) => r.displayName);
+}
+
+/** A locality's municipality: from its GIS region, or (a suburb learned from posts, which has no region) its own. */
+const localityMunicipality = (l) => l.Region?.Municipality ?? l.Municipality ?? null;
+
+/** A where-clause fragment matching localities in this municipality (by code). */
 const inMunicipality = (code) => (code ? { Region: { Municipality: { code: String(code).toUpperCase() } } } : undefined);
 
 /** Areas usually served by an outage's equipment, for outages whose posts named no suburb. Marked as inferred. */
@@ -84,7 +95,7 @@ async function decorate(outages) {
   await withLikelyAreas(outages);
   const ids = outages.map((o) => o.id);
   const rows = await prisma.$queryRaw`
-    SELECT DISTINCT ON (op."outageId") op."outageId" AS "outageId", op."postedAt" AS "postedAt", sp."createdAt" AS "ingestedAt", sp."externalId" AS "externalId", ps."summary" AS "summary"
+    SELECT DISTINCT ON (op."outageId") op."outageId" AS "outageId", op."postedAt" AS "postedAt", sp."createdAt" AS "ingestedAt", sp."externalId" AS "externalId", sp."sourceAccount" AS "account", ps."summary" AS "summary"
     FROM "OutagePost" op
     JOIN "SourcePost" sp ON sp."id" = op."postId"
     LEFT JOIN "PostSummary" ps ON ps."postId" = op."postId" AND ps."faultIndex" = op."faultIndex"
@@ -94,7 +105,7 @@ async function decorate(outages) {
 
   for (const o of outages) {
     const l = latest.get(o.id);
-    o.latest = l ? { summary: l.summary, at: l.postedAt, ingestedAt: l.ingestedAt, url: `https://x.com/CityPowerJhb/status/${l.externalId}` } : null;
+    o.latest = l ? { summary: l.summary, at: l.postedAt, ingestedAt: l.ingestedAt, url: postUrl(l.account, l.externalId) } : null;
     o.scheduled = scheduleView(o);
   }
   return outages;
@@ -113,6 +124,7 @@ const shapeOutage = (o) => ({
   lastUpdateAt: o.lastUpdateAt,
   restoredAt: o.restoredAt,
   retroactive: o.retroactive,
+  municipality: o.Municipality ?? null,
   postCount: o._count?.posts ?? null,
   latest: o.latest ?? null,
   scheduled: o.scheduled ?? null,
@@ -153,8 +165,8 @@ router.get('/v1/outages', wrap(async (req, res) => {
   const locality = {};
   if (suburb) locality.normalizedName = { contains: localityKey(suburb) };
   if (region) locality.Region = { code: String(region).toUpperCase() };
-  if (municipality) locality.Region = { ...locality.Region, Municipality: { code: String(municipality).toUpperCase() } };
   if (Object.keys(locality).length) and.push({ localities: { some: { locality } } });
+  if (municipality) and.push(outageInMunicipality(municipality));
   if (q && String(q).trim()) {
     const k = String(q).trim();
     and.push({
@@ -179,7 +191,7 @@ router.get('/v1/outages/:id', wrap(async (req, res) => {
   if (!id.safeParse(req.params.id).success) return res.status(400).json({ error: 'invalid_request' });
   const outage = await prisma.outage.findUnique({
     where: { id: req.params.id },
-    include: { ...outageInclude, posts: { orderBy: [{ postedAt: 'asc' }, { faultIndex: 'asc' }, { postId: 'asc' }], include: { post: { select: { externalId: true, text: true, noteTweetText: true, publishedAt: true, PostMedia: { select: { url: true } }, extractions: { where: { status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' }, take: 1, select: { imageText: true } } } } } } },
+    include: { ...outageInclude, posts: { orderBy: [{ postedAt: 'asc' }, { faultIndex: 'asc' }, { postId: 'asc' }], include: { post: { select: { externalId: true, sourceAccount: true, text: true, noteTweetText: true, publishedAt: true, PostMedia: { select: { url: true } }, extractions: { where: { status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' }, take: 1, select: { imageText: true } } } } } } },
   });
   if (!outage) return res.status(404).json({ error: 'not_found' });
   await decorate([outage]);
@@ -194,7 +206,7 @@ router.get('/v1/outages/:id', wrap(async (req, res) => {
       postedAt: p.postedAt,
       score: p.score,
       reasons: p.reasons,
-      url: `https://x.com/CityPowerJhb/status/${p.post.externalId}`,
+      url: postUrl(p.post.sourceAccount, p.post.externalId),
       text: p.post.noteTweetText || p.post.text,
       imageText: p.post.extractions[0]?.imageText ?? null,
       images: p.post.PostMedia.map((m) => m.url),
@@ -207,19 +219,18 @@ router.get('/v1/outages/:id', wrap(async (req, res) => {
 router.get('/v1/overview', wrap(async (req, res) => {
   const parsed = parse(z.object({ municipality: text(20).optional() }), req.query, res);
   if (!parsed) return;
-  // Applied to the counts, live and planned lists (plain queries); the day/SDC trend strips below still cover every
-  // municipality regardless (they're raw SQL with no locality join yet) - a documented fast-follow, not an oversight.
-  const scoped = parsed.municipality ? { localities: { some: { locality: inMunicipality(parsed.municipality) } } } : {};
+  const scoped = outageInMunicipality(parsed.municipality);
+  const inScope = outageInMunicipalitySql(parsed.municipality);
   const now = new Date();
   const [byStatus, liveRows, bySdcRows, dailyRows, restored24, lastPost, updates, plannedRows, plannedTotal, sdcDailyRows] = await Promise.all([
     prisma.outage.groupBy({ by: ['status'], where: scoped, _count: true }),
     prisma.outage.findMany({ where: { status: { in: LIVE }, ...scoped }, include: outageInclude, orderBy: { lastUpdateAt: 'desc' }, take: 8 }),
-    prisma.outage.groupBy({ by: ['sdcName', 'status'], where: { status: { in: [...LIVE, 'PLANNED'] } }, _count: true }),
+    prisma.outage.groupBy({ by: ['sdcName', 'status'], where: { status: { in: [...LIVE, 'PLANNED'] }, ...scoped }, _count: true }),
     prisma.$queryRaw`
-      SELECT to_char((("startedAt" AT TIME ZONE 'UTC') AT TIME ZONE 'Africa/Johannesburg')::date, 'YYYY-MM-DD') AS day, COUNT(*)::int AS n
-      FROM "Outage" WHERE kind = 'UNPLANNED' AND "startedAt" >= (now() AT TIME ZONE 'UTC') - interval '16 days' GROUP BY 1 ORDER BY 1`,
+      SELECT to_char(((o."startedAt" AT TIME ZONE 'UTC') AT TIME ZONE 'Africa/Johannesburg')::date, 'YYYY-MM-DD') AS day, COUNT(*)::int AS n
+      FROM "Outage" o WHERE o.kind = 'UNPLANNED' AND o."startedAt" >= (now() AT TIME ZONE 'UTC') - interval '16 days' AND ${inScope} GROUP BY 1 ORDER BY 1`,
     prisma.outage.count({ where: { status: { in: ['RESTORED', 'CLOSED'] }, restoredAt: { gte: new Date(now - 24 * HOUR) }, ...scoped } }),
-    prisma.sourcePost.aggregate({ _max: { publishedAt: true } }),
+    prisma.sourcePost.aggregate({ where: parsed.municipality ? { sourceAccount: { in: await accountsOf(parsed.municipality) } } : {}, _max: { publishedAt: true } }),
     prisma.$queryRaw`
       SELECT * FROM (
         SELECT DISTINCT ON (op."outageId") op."outageId" AS "outageId", op."postedAt" AS "postedAt", sp."createdAt" AS "ingestedAt", op."role"::text AS "role", ps."summary" AS "summary",
@@ -228,6 +239,7 @@ router.get('/v1/overview', wrap(async (req, res) => {
         JOIN "Outage" o ON o."id" = op."outageId"
         JOIN "SourcePost" sp ON sp."id" = op."postId"
         LEFT JOIN "PostSummary" ps ON ps."postId" = op."postId" AND ps."faultIndex" = op."faultIndex"
+        WHERE ${inScope}
         ORDER BY op."outageId", op."postedAt" DESC, op."faultIndex" DESC, op."postId" DESC
       ) latest ORDER BY "postedAt" DESC, "outageId" LIMIT 8`,
     // announced work that has not finished, soonest first; an outage whose window is unknown stays in until the sweep closes it
@@ -235,8 +247,8 @@ router.get('/v1/overview', wrap(async (req, res) => {
     prisma.outage.count({ where: { status: 'PLANNED', OR: [{ scheduledEnd: null }, { scheduledEnd: { gte: now } }], ...scoped } }),
     // unplanned outages that started each day (Johannesburg time), per service centre: the history strips
     prisma.$queryRaw`
-      SELECT "sdcName" AS sdc, to_char((("startedAt" AT TIME ZONE 'UTC') AT TIME ZONE 'Africa/Johannesburg')::date, 'YYYY-MM-DD') AS day, COUNT(*)::int AS n
-      FROM "Outage" WHERE kind = 'UNPLANNED' AND "sdcName" IS NOT NULL AND "startedAt" >= (now() AT TIME ZONE 'UTC') - interval '15 days'
+      SELECT o."sdcName" AS sdc, to_char(((o."startedAt" AT TIME ZONE 'UTC') AT TIME ZONE 'Africa/Johannesburg')::date, 'YYYY-MM-DD') AS day, COUNT(*)::int AS n
+      FROM "Outage" o WHERE o.kind = 'UNPLANNED' AND o."sdcName" IS NOT NULL AND o."startedAt" >= (now() AT TIME ZONE 'UTC') - interval '15 days' AND ${inScope}
       GROUP BY 1, 2`,
   ]);
 
@@ -300,8 +312,8 @@ router.get('/v1/search', wrap(async (req, res) => {
   if (k.length < 2) return res.json({ suburbs: [], equipment: [], outages: [] });
   const [suburbs, equipment, outages] = await Promise.all([
     prisma.locality.findMany({ where: { normalizedName: { contains: k }, ...inMunicipality(q.municipality) }, include: { Region: { include: { Municipality: true } } }, take: 40 }),
-    prisma.infraNode.findMany({ where: { type: { not: 'SDC' }, normalizedKey: { contains: k } }, orderBy: { evidenceCount: 'desc' }, take: 5 }),
-    prisma.outage.findMany({ where: { title: { contains: raw, mode: 'insensitive' } }, orderBy: { lastUpdateAt: 'desc' }, take: 5, select: { id: true, title: true, status: true, sdcName: true } }),
+    prisma.infraNode.findMany({ where: { type: { not: 'SDC' }, normalizedKey: { contains: k }, ...nodeInMunicipality(q.municipality) }, orderBy: { evidenceCount: 'desc' }, take: 5 }),
+    prisma.outage.findMany({ where: { title: { contains: raw, mode: 'insensitive' }, ...outageInMunicipality(q.municipality) }, orderBy: { lastUpdateAt: 'desc' }, take: 5, select: { id: true, title: true, status: true, sdcName: true } }),
   ]);
   const rank = (l) => (l.normalizedName === k ? 0 : l.normalizedName.startsWith(k) ? 1 : 2);
   suburbs.sort((a, b) => rank(a) - rank(b) || a.canonicalName.length - b.canonicalName.length);
@@ -314,10 +326,20 @@ router.get('/v1/search', wrap(async (req, res) => {
 
 // ───────────── municipalities ─────────────
 
-/** Every municipality this deployment tracks, for a scope switcher. Small and static enough to need no paging. */
+/** Every municipality this deployment tracks, for a scope switcher, with who the site quotes there: the utility's name,
+ * its X accounts and the lines it publishes for reporting a fault. Small and static enough to need no paging. */
 router.get('/v1/municipalities', wrap(async (_req, res) => {
-  const rows = await prisma.municipality.findMany({ orderBy: { name: 'asc' } });
-  res.json({ data: rows.map((m) => ({ id: m.id, name: m.name, code: m.code })) });
+  const rows = await prisma.municipality.findMany({ orderBy: { name: 'asc' }, include: { SourceAccount: { where: { active: true }, select: { displayName: true } } } });
+  res.json({
+    data: rows.map((m) => ({
+      id: m.id,
+      name: m.name,
+      code: m.code,
+      utility: UTILITIES[m.code]?.utility ?? m.name,
+      accounts: m.SourceAccount.map((a) => a.displayName),
+      contact: UTILITIES[m.code]?.contact ?? null,
+    })),
+  });
 }));
 
 // ───────────── suburbs ─────────────
@@ -333,9 +355,10 @@ router.get('/v1/localities', wrap(async (req, res) => {
 
 router.get('/v1/localities/:id', wrap(async (req, res) => {
   if (!id.safeParse(req.params.id).success) return res.status(400).json({ error: 'invalid_request' });
-  const l = await prisma.locality.findUnique({ where: { id: req.params.id }, include: { Region: { include: { Municipality: true } }, nodes: { include: { node: true }, orderBy: { evidenceCount: 'desc' }, take: 20 } } });
+  const l = await prisma.locality.findUnique({ where: { id: req.params.id }, include: { Region: { include: { Municipality: true } }, Municipality: true, nodes: { include: { node: true }, orderBy: { evidenceCount: 'desc' }, take: 20 } } });
   if (!l) return res.status(404).json({ error: 'not_found' });
-  res.json({ id: l.id, name: l.canonicalName, region: l.Region?.code ?? null, municipality: l.Region?.Municipality?.name ?? null, learned: l.sourceLabel === 'learned-from-posts', infrastructure: l.nodes.map((n) => ({ ...n.node, evidenceCount: n.evidenceCount })) });
+  const m = localityMunicipality(l);
+  res.json({ id: l.id, name: l.canonicalName, region: l.Region?.code ?? null, municipality: m?.name ?? null, municipalityCode: m?.code ?? null, learned: l.sourceLabel === 'learned-from-posts', infrastructure: l.nodes.map((n) => ({ ...n.node, evidenceCount: n.evidenceCount })) });
 }));
 
 router.get('/v1/localities/:id/outages', wrap(async (req, res) => {
@@ -347,7 +370,7 @@ router.get('/v1/localities/:id/outages', wrap(async (req, res) => {
     take: 50,
   });
   // outages whose posts named no suburb but whose equipment is known to serve this one
-  const loc = await prisma.locality.findUnique({ where: { id: req.params.id }, select: { normalizedName: true } });
+  const loc = await prisma.locality.findUnique({ where: { id: req.params.id }, select: { normalizedName: true, Region: { select: { Municipality: true } }, Municipality: true } });
   const possible = await prisma.outage.findMany({
     where: {
       localities: { none: {} },
@@ -358,7 +381,8 @@ router.get('/v1/localities/:id/outages', wrap(async (req, res) => {
     orderBy: { lastUpdateAt: 'desc' },
     take: 20,
   });
-  res.json({ data: await shapeMany(outages), possible: await shapeMany(possible) });
+  const m = loc ? localityMunicipality(loc) : null;
+  res.json({ data: await shapeMany(outages), possible: await shapeMany(possible), municipality: m ? { code: m.code, name: m.name } : null });
 }));
 
 /** A suburb's outage history and what is typical for it (how long power takes to come back, the usual cause, repeat equipment). */
@@ -372,40 +396,33 @@ router.get('/v1/localities/:id/history', wrap(async (req, res) => {
 
 // ───────────── network (equipment) ─────────────
 
-/** An SDC has no direct locality/municipality link (only its child equipment does) - the outages reported under
- * its name are the only record of which places it actually touches, so "which municipality is this SDC in"
- * is derived from those, not stored. Returns sdcName -> Set(municipality code). */
+/** Outages carry only an SDC's name (sdcName), not a node, so "which municipality is this SDC in" is derived from the
+ * outages reported under that name, each of which knows its own municipality. Returns sdcName -> Set(municipality code). */
 async function sdcMunicipalities() {
-  const rows = await prisma.outage.findMany({
-    where: { sdcName: { not: null } },
-    select: { sdcName: true, localities: { select: { locality: { select: { Region: { select: { Municipality: { select: { code: true } } } } } } } } },
-  });
+  const rows = await prisma.outage.findMany({ where: { sdcName: { not: null }, municipalityId: { not: null } }, distinct: ['sdcName', 'municipalityId'], select: { sdcName: true, Municipality: { select: { code: true } } } });
   const map = new Map();
-  for (const o of rows) {
-    const set = map.get(o.sdcName) ?? new Set();
-    for (const l of o.localities) {
-      const code = l.locality.Region?.Municipality?.code;
-      if (code) set.add(code);
-    }
-    map.set(o.sdcName, set);
-  }
+  for (const o of rows) map.set(o.sdcName, (map.get(o.sdcName) ?? new Set()).add(o.Municipality.code));
   return map;
 }
+
+/** Prisma where-fragment: equipment of this municipality. A node's own municipality decides; a legacy node without one
+ * counts when it serves a suburb there (equipment near a boundary can genuinely touch two). */
+const nodeInMunicipality = (code) => (code ? { OR: [{ Municipality: { code: String(code).toUpperCase() } }, { municipalityId: null, localities: { some: { locality: inMunicipality(code) } } }] } : {});
 
 router.get('/v1/network/sdcs', wrap(async (req, res) => {
   const query = parse(z.object({ municipality: text(20).optional() }), req.query, res);
   if (!query) return;
-  const sdcs = await prisma.infraNode.findMany({ where: { type: 'SDC' }, orderBy: { name: 'asc' } });
+  const sdcs = await prisma.infraNode.findMany({ where: { type: 'SDC' }, orderBy: { name: 'asc' }, include: { Municipality: { select: { code: true } } } });
   const [edgeCounts, outageRows, byMunicipality] = await Promise.all([
     prisma.infraEdge.groupBy({ by: ['parentId'], where: { parentId: { in: sdcs.map((s) => s.id) } }, _count: true }),
-    prisma.outage.groupBy({ by: ['sdcName', 'status'], where: { status: { in: [...LIVE, 'PLANNED'] } }, _count: true }),
+    prisma.outage.groupBy({ by: ['sdcName', 'status'], where: { status: { in: [...LIVE, 'PLANNED'] }, ...outageInMunicipality(query.municipality) }, _count: true }),
     query.municipality ? sdcMunicipalities() : null,
   ]);
   const kids = new Map(edgeCounts.map((e) => [e.parentId, e._count]));
   const code = query.municipality?.toUpperCase();
   res.json({
     data: sdcs
-      .filter((s) => !code || byMunicipality.get(s.name)?.has(code))
+      .filter((s) => !code || (s.Municipality ? s.Municipality.code === code : byMunicipality.get(s.name)?.has(code)))
       .map((s) => {
         const mine = outageRows.filter((r) => r.sdcName === s.name);
         const n = (st) => mine.filter((r) => r.status === st).reduce((a, r) => a + r._count, 0);
@@ -439,12 +456,11 @@ async function boundariesFor(localityIds) {
 }
 
 /** Live outages with the approximate position of each affected suburb. Suburbs we could not place are only counted.
- * `municipality` (a Municipality code) restricts this to outages naming at least one suburb there; an outage placed
- * only via `likelyAreas` (no named suburb) has nothing to filter on and is excluded once a municipality is chosen. */
+ * `municipality` (a Municipality code) restricts this to that municipality's outages. */
 router.get('/v1/map', wrap(async (req, res) => {
   const parsed = parse(z.object({ municipality: text(20).optional() }), req.query, res);
   if (!parsed) return;
-  const rows = await prisma.outage.findMany({ where: { status: { in: LIVE }, ...(parsed.municipality && { localities: { some: { locality: inMunicipality(parsed.municipality) } } }) }, include: outageInclude, orderBy: { lastUpdateAt: 'desc' }, take: 100 });
+  const rows = await prisma.outage.findMany({ where: { status: { in: LIVE }, ...outageInMunicipality(parsed.municipality) }, include: outageInclude, orderBy: { lastUpdateAt: 'desc' }, take: 100 });
   const outages = await shapeMany(rows);
   const boundaries = await boundariesFor([...new Set(outages.flatMap((o) => o.localities.map((l) => l.id)))]);
   res.json({
@@ -544,16 +560,12 @@ router.get('/v1/infrastructure/:id', wrap(async (req, res) => {
   });
 }));
 
-/** True (as a Prisma where-fragment) when a node serves at least one locality in this municipality - equipment can
- * genuinely straddle a boundary, so "belongs to" is really "touches", not a strict single-municipality fact. */
-const touchesMunicipality = (code) => (code ? { localities: { some: { locality: inMunicipality(code) } } } : undefined);
-
 router.get('/v1/infrastructure', wrap(async (req, res) => {
   const query = parse(z.object({ type: z.string().trim().toUpperCase().pipe(z.enum(['SDC', 'SUBSTATION', 'FEEDER', 'DISTRIBUTOR', 'TRANSFORMER', 'MINI_SUBSTATION', 'CABLE', 'SWITCHING_STATION', 'KIOSK', 'OTHER'])).optional(), q: text(80).optional(), municipality: text(20).optional() }), req.query, res);
   if (!query) return;
   const { type, q, municipality } = query;
   const nodes = await prisma.infraNode.findMany({
-    where: { type: type ?? { not: 'SDC' }, ...(q ? { normalizedKey: { contains: localityKey(q) } } : {}), ...touchesMunicipality(municipality) },
+    where: { type: type ?? { not: 'SDC' }, ...(q ? { normalizedKey: { contains: localityKey(q) } } : {}), ...nodeInMunicipality(municipality) },
     orderBy: [{ evidenceCount: 'desc' }, { id: 'asc' }],
     take: 100,
   });
@@ -600,7 +612,7 @@ router.get('/v1/refresh', wrap(async (req, res) => {
  */
 const CHANGES_LIMIT = 500;
 router.get('/v1/changes', wrap(async (req, res) => {
-  const query = parse(z.object({ since: z.string().max(40).optional() }), req.query, res);
+  const query = parse(z.object({ since: z.string().max(40).optional(), municipality: text(20).optional() }), req.query, res);
   if (!query) return;
   const floor = new Date(Date.now() - 7 * 24 * HOUR); // the window is bounded: a "what changed" view is not an export
   let since = new Date(Date.now() - 24 * HOUR);
@@ -612,13 +624,13 @@ router.get('/v1/changes', wrap(async (req, res) => {
   const rows = await prisma.$queryRaw`
     SELECT ld."outageId" AS "outageId", ld."faultIndex" AS "faultIndex",
            o."title" AS "title", o."status"::text AS "status", o."sdcName" AS "sdc", o."kind"::text AS "kind", o."createdAt" AS "outageCreatedAt",
-           op."role"::text AS "role", sp."externalId" AS "externalId", sp."publishedAt" AS "postedAt", ps."summary" AS "summary"
+           op."role"::text AS "role", sp."externalId" AS "externalId", sp."sourceAccount" AS "account", sp."publishedAt" AS "postedAt", ps."summary" AS "summary"
     FROM "LinkDecision" ld
     JOIN "Outage" o ON o."id" = ld."outageId"
     JOIN "SourcePost" sp ON sp."id" = ld."postId"
     LEFT JOIN "OutagePost" op ON op."outageId" = ld."outageId" AND op."postId" = ld."postId"
     LEFT JOIN "PostSummary" ps ON ps."postId" = ld."postId" AND ps."faultIndex" = ld."faultIndex"
-    WHERE ld."createdAt" >= ${since.toISOString()}::timestamp AND ld."outageId" IS NOT NULL
+    WHERE ld."createdAt" >= ${since.toISOString()}::timestamp AND ld."outageId" IS NOT NULL AND ${outageInMunicipalitySql(query.municipality)}
     ORDER BY sp."publishedAt" ASC, sp."externalId" ASC, ld."faultIndex" ASC
     LIMIT ${CHANGES_LIMIT + 1}`;
   const truncated = rows.length > CHANGES_LIMIT;
@@ -627,16 +639,17 @@ router.get('/v1/changes', wrap(async (req, res) => {
   const byOutage = new Map();
   for (const r of rows) {
     const o = byOutage.get(r.outageId) ?? { id: r.outageId, title: r.title, status: r.status, sdc: r.sdc, kind: r.kind, isNew: r.outageCreatedAt >= since, updates: [] };
-    o.updates.push({ postedAt: r.postedAt, role: r.role, summary: r.summary, url: `https://x.com/CityPowerJhb/status/${r.externalId}` });
+    o.updates.push({ postedAt: r.postedAt, role: r.role, summary: r.summary, url: postUrl(r.account, r.externalId) });
     byOutage.set(r.outageId, o);
   }
   const outages = [...byOutage.values()].sort((a, b) => b.updates.at(-1).postedAt - a.updates.at(-1).postedAt);
 
+  const byAccount = query.municipality ? { sourceAccount: { in: await accountsOf(query.municipality) } } : {};
   const [newPosts, replies, notices, needsReview] = await Promise.all([
-    prisma.sourcePost.count({ where: { createdAt: { gte: since } } }),
-    prisma.linkDecision.count({ where: { createdAt: { gte: since }, reason: { startsWith: 'customer reply' } } }),
-    prisma.linkDecision.count({ where: { createdAt: { gte: since }, reason: { startsWith: 'not linkable' } } }),
-    prisma.linkDecision.count({ where: { createdAt: { gte: since }, outcome: 'NEEDS_REVIEW' } }),
+    prisma.sourcePost.count({ where: { createdAt: { gte: since }, ...byAccount } }),
+    prisma.linkDecision.count({ where: { createdAt: { gte: since }, reason: { startsWith: 'customer reply' }, post: byAccount } }),
+    prisma.linkDecision.count({ where: { createdAt: { gte: since }, reason: { startsWith: 'not linkable' }, post: byAccount } }),
+    prisma.linkDecision.count({ where: { createdAt: { gte: since }, outcome: 'NEEDS_REVIEW', post: byAccount } }),
   ]);
   res.json({ since, truncated, counts: { newPosts, replies, notices, needsReview, outagesNew: outages.filter((o) => o.isNew).length, outagesUpdated: outages.filter((o) => !o.isNew).length }, outages });
 }));
@@ -732,24 +745,24 @@ router.get('/admin/review-queue', wrap(async (_req, res) => {
 
 /** The latest news, not every post: new outages, restorations, progress and new estimates. ?locality= limits it to one suburb. */
 router.get('/v1/updates', wrap(async (req, res) => {
-  const q = parse(z.object({ limit: intParam(1, 100, 30), days: intParam(1, 30, 7), locality: id.optional() }), req.query, res);
+  const q = parse(z.object({ limit: intParam(1, 100, 30), days: intParam(1, 30, 7), locality: id.optional(), municipality: text(20).optional() }), req.query, res);
   if (!q) return;
-  res.json({ data: await latestUpdates({ limit: q.limit, days: q.days, localityId: q.locality ?? null }) });
+  res.json({ data: await latestUpdates({ limit: q.limit, days: q.days, localityId: q.locality ?? null, municipality: q.municipality ?? null }) });
 }));
 
-/** How many posts City Power made each day (Johannesburg time), by kind. */
+/** How many posts the tracked utilities made each day (Johannesburg time), by kind. ?municipality= limits it to one. */
 router.get('/v1/posts/daily', wrap(async (req, res) => {
-  const q = parse(z.object({ days: intParam(1, 90, 14) }), req.query, res);
+  const q = parse(z.object({ days: intParam(1, 90, 14), municipality: text(20).optional() }), req.query, res);
   if (!q) return;
-  res.json(await dailyPostCounts({ days: q.days }));
+  res.json(await dailyPostCounts({ days: q.days, municipality: q.municipality ?? null }));
 }));
 
-/** City Power's posts, newest first. Filter by day range (from/to, YYYY-MM-DD), kind and text. */
+/** The tracked utilities' posts, newest first. Filter by day range (from/to, YYYY-MM-DD), kind, text and municipality. */
 const dayText = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((d) => !Number.isNaN(Date.parse(`${d}T00:00:00Z`)), 'not a date');
 router.get('/v1/posts', wrap(async (req, res) => {
-  const q = parse(z.object({ from: dayText.optional(), to: dayText.optional(), type: z.enum(CATEGORY_IDS).optional(), q: z.string().trim().max(100).optional(), limit: intParam(1, 100, 30), offset: intParam(0, 100_000, 0) }), req.query, res);
+  const q = parse(z.object({ from: dayText.optional(), to: dayText.optional(), type: z.enum(CATEGORY_IDS).optional(), q: z.string().trim().max(100).optional(), limit: intParam(1, 100, 30), offset: intParam(0, 100_000, 0), municipality: text(20).optional() }), req.query, res);
   if (!q) return;
-  res.json(await listPosts({ from: q.from ?? null, to: q.to ?? null, type: q.type ?? null, q: q.q || null, limit: q.limit, offset: q.offset }));
+  res.json(await listPosts({ from: q.from ?? null, to: q.to ?? null, type: q.type ?? null, q: q.q || null, limit: q.limit, offset: q.offset, municipality: q.municipality ?? null }));
 }));
 
 /** Is the tracker's own checking healthy, in a few fields (no post or outage details: those are operator-only). Includes how old the result is. */
@@ -758,31 +771,27 @@ router.get('/v1/quality/status', wrap(async (_req, res) => {
 }));
 
 router.get('/v1/insights', wrap(async (req, res) => {
-  const q = parse(z.object({ days: intParam(1, 90, 14) }), req.query, res);
+  const q = parse(z.object({ days: intParam(1, 90, 14), municipality: text(20).optional() }), req.query, res);
   if (!q) return;
-  res.json(await insights({ days: q.days }));
+  res.json(await insights({ days: q.days, municipality: q.municipality ?? null }));
 }));
 
 router.get('/v1/stats', wrap(async (req, res) => {
   const parsed = parse(z.object({ municipality: text(20).optional() }), req.query, res);
   if (!parsed) return;
-  const scoped = parsed.municipality ? { localities: { some: { locality: inMunicipality(parsed.municipality) } } } : {};
-  const [byStatus, sdcs, nodes, localities, posts, latest, byMunicipality] = await Promise.all([
+  const scoped = outageInMunicipality(parsed.municipality);
+  const byAccount = parsed.municipality ? { sourceAccount: { in: await accountsOf(parsed.municipality) } } : {};
+  const [byStatus, sdcs, nodes, localities, posts, latest] = await Promise.all([
     prisma.outage.groupBy({ by: ['status'], where: scoped, _count: true }),
     prisma.outage.groupBy({ by: ['sdcName'], where: { status: { in: ['ACTIVE', 'PARTIALLY_RESTORED', 'PLANNED'] }, ...scoped }, _count: true }),
     prisma.infraNode.count(),
     prisma.locality.count(),
-    prisma.sourcePost.count(),
-    prisma.sourcePost.aggregate({ _max: { publishedAt: true } }),
-    // sdcName has no direct locality/municipality link (see sdcMunicipalities), so the groupBy above (which does
-    // filter by it via the outage's localities) can still list an SDC whose OTHER outages are outside the scoped
-    // municipality; cross-checking against the derived set keeps the dropdown itself scoped too, not just the counts.
-    parsed.municipality ? sdcMunicipalities() : null,
+    prisma.sourcePost.count({ where: byAccount }),
+    prisma.sourcePost.aggregate({ where: byAccount, _max: { publishedAt: true } }),
   ]);
-  const code = parsed.municipality?.toUpperCase();
   res.json({
     outagesByStatus: Object.fromEntries(byStatus.map((s) => [s.status, s._count])),
-    activeBySdc: sdcs.filter((s) => s.sdcName && (!code || byMunicipality.get(s.sdcName)?.has(code))).map((s) => ({ sdc: s.sdcName, count: s._count })),
+    activeBySdc: sdcs.filter((s) => s.sdcName).map((s) => ({ sdc: s.sdcName, count: s._count })),
     infrastructureNodes: nodes,
     localities,
     posts,

@@ -47,6 +47,10 @@ try {
   };
   // migrate deploy already seeds the City of Johannesburg row on the fresh target; skip it, add any others (Tshwane, ...)
   await copy('municipalities', await src.municipality.findMany(), (data) => dst.municipality.createMany({ data, skipDuplicates: true }));
+  // without this, every post's account has no municipality on the replay target, silently disabling municipality-scoped
+  // resolution (equipment/locality identity, candidate outages) for the whole replay - it would look correct while testing
+  // nothing about that scoping.
+  await copy('source accounts', await src.sourceAccount.findMany(), (data) => dst.sourceAccount.createMany({ data, skipDuplicates: true }));
   await copy('regions', await src.region.findMany(), (data) => dst.region.createMany({ data }));
   await copy('suburbs', await src.locality.findMany(), (data) => dst.locality.createMany({ data }));
   await copy('suburb aliases', await src.localityAlias.findMany(), (data) => dst.localityAlias.createMany({ data }));

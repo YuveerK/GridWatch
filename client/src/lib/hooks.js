@@ -58,7 +58,7 @@ export function useTheme() {
 
 export function useDocumentTitle(title) {
   useEffect(() => {
-    document.title = title ? `${title} · GridWatch` : 'GridWatch · Johannesburg power outages';
+    document.title = title ? `${title} · GridWatch` : 'GridWatch · Gauteng power outages';
   }, [title]);
 }
 

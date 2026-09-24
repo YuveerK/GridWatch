@@ -1,10 +1,17 @@
 import { Link } from 'react-router-dom';
-import { FAULT_LINE, dayDiff, duration, fmtDay, timeAgo } from '../lib/api.js';
+import { dayDiff, duration, fmtDay, timeAgo } from '../lib/api.js';
 import Icon from './Icon.jsx';
 import { scheduleLabel } from './OutageCard.jsx';
 
-/** Turn a suburb's outages into one plain answer to "is my power out?". */
-export function computeAnswer(name, outages = [], possible = [], localityId = null) {
+/** "011 490 7484 or 0800 202 925" for one utility; each utility named when there are several. */
+export function faultLines(contacts = []) {
+  const lines = (c) => [c.contact.phone, c.contact.freephone].filter(Boolean).join(' or ');
+  if (contacts.length === 1) return lines(contacts[0]);
+  return contacts.map((c) => `${c.utility.replace(/^the /, '')}: ${lines(c)}`).join('; ');
+}
+
+/** Turn a suburb's outages into one plain answer to "is my power out?". `who` is useUtility() for the suburb's municipality. */
+export function computeAnswer(name, outages = [], possible = [], localityId = null, who = { Utility: 'The utility', contacts: [] }) {
   // A partly restored outage can already be over for THIS suburb: judge each outage by the suburb's own flag, not the outage's overall status.
   const restoredHere = (o) => localityId != null && o.localities?.some((l) => l.id === localityId && l.restored);
   const live = outages.filter((o) => (o.status === 'ACTIVE' || o.status === 'PARTIALLY_RESTORED') && !restoredHere(o));
@@ -17,10 +24,10 @@ export function computeAnswer(name, outages = [], possible = [], localityId = nu
 
   if (active.length) return { tone: 'live', icon: 'alert', kicker: 'Right now', title: `Power outage reported in ${name}`, outage: active[0], more: active.length - 1 };
   if (partial.length) return { tone: 'partial', icon: 'half', kicker: 'Right now', title: `Power is being restored in ${name}`, outage: partial[0], more: partial.length - 1 };
-  if (maybe.length) return { tone: 'partial', icon: 'alert', kicker: 'Possible', title: `There may be an outage affecting ${name}`, note: "City Power's posts didn't name your suburb, but the equipment involved usually supplies it.", outage: maybe[0], more: maybe.length - 1 };
+  if (maybe.length) return { tone: 'partial', icon: 'alert', kicker: 'Possible', title: `There may be an outage affecting ${name}`, note: `${who.Utility}'s posts didn't name your suburb, but the equipment involved usually supplies it.`, outage: maybe[0], more: maybe.length - 1 };
   if (planned.length) return { tone: 'plan', icon: 'calendar', kicker: 'Coming up', title: `Planned maintenance in ${name}`, outage: planned[0], more: planned.length - 1 };
   if (justRestored.length) return { tone: 'good', icon: 'check', kicker: 'Good news', title: `Power was restored in ${name}`, outage: justRestored[0], more: 0 };
-  return { tone: 'good', icon: 'check', kicker: 'Right now', title: `No outage reported for ${name}`, note: `City Power hasn't posted about an outage here recently. If your power is out, tell them: ${FAULT_LINE.phone} or ${FAULT_LINE.freephone}.`, outage: null, more: 0 };
+  return { tone: 'good', icon: 'check', kicker: 'Right now', title: `No outage reported for ${name}`, note: `${who.Utility} hasn't posted about an outage here recently.${who.contacts.length ? ` If your power is out, tell them: ${faultLines(who.contacts)}.` : ''}`, outage: null, more: 0 };
 }
 
 export function AnswerCard({ answer, big, slim, action }) {

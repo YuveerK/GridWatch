@@ -5,6 +5,7 @@ import PostActivity from '../components/PostActivity.jsx';
 import { EmptyState, ErrorState, SectionHead, Skeleton } from '../components/ui.jsx';
 import { nice, plural, prettySdc, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
+import { useMunicipality, useUtility, withMunicipality } from '../lib/municipality.jsx';
 
 const WINDOWS = [7, 14, 30];
 // short column names for the cause-by-area grid
@@ -18,7 +19,7 @@ function hoursLabel(h) {
   return `${Math.round(h / 24)} d`;
 }
 
-/** Each cause as a bar with its share, and (on request) the exact words City Power used for it. */
+/** Each cause as a bar with its share, and (on request) the exact words the posts used for it. */
 function CauseList({ causes, total }) {
   const max = Math.max(1, ...causes.map((c) => c.count));
   return (
@@ -33,7 +34,7 @@ function CauseList({ causes, total }) {
               <span className="cause-share num">{pct(c.count / total)}</span>
             </summary>
             {c.wordings.length > 0 ? (
-              <p className="cause-words">City Power wrote: {c.wordings.map((w) => `“${w.text}”${w.count > 1 ? ` ×${w.count}` : ''}`).join(', ')}</p>
+              <p className="cause-words">The posts said: {c.wordings.map((w) => `“${w.text}”${w.count > 1 ? ` ×${w.count}` : ''}`).join(', ')}</p>
             ) : (
               <p className="cause-words">These posts did not say what caused the outage.</p>
             )}
@@ -69,7 +70,16 @@ function Trend({ rows }) {
   );
 }
 
-/** Service centres down the side, causes across the top. Darker = a bigger share of that centre's outages. */
+/** What the area rows are: City Power posts name a service centre, Tshwane's are grouped by region. */
+function areaKind(rows) {
+  const kinds = new Set(rows.flatMap((r) => Object.keys(r.filter ?? {})));
+  if (kinds.has('region')) return kinds.has('sdc') ? { title: 'By service centre or region', column: 'Area' } : { title: 'By region', column: 'Region' };
+  return { title: 'By service centre', column: 'Service centre' };
+}
+
+const areaLink = (filter) => `/outages?${new URLSearchParams({ ...filter, status: 'all' })}`;
+
+/** Areas down the side, causes across the top. Darker = a bigger share of that area's outages. */
 function AreaGrid({ rows, causes }) {
   const cols = causes.filter((c) => c.id !== 'UNKNOWN').slice(0, 6).map((c) => c.id);
   return (
@@ -77,7 +87,7 @@ function AreaGrid({ rows, causes }) {
       <table className="matrix">
         <thead>
           <tr>
-            <th scope="col">Service centre</th>
+            <th scope="col">{areaKind(rows).column}</th>
             {cols.map((id) => <th key={id} scope="col" className="num-col">{SHORT[id]}</th>)}
             <th scope="col" className="num-col">Total</th>
             <th scope="col">More than usual here</th>
@@ -85,14 +95,14 @@ function AreaGrid({ rows, causes }) {
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.sdc}>
-              <th scope="row"><Link to={`/outages?sdc=${encodeURIComponent(r.sdc)}&status=all`}>{prettySdc(r.sdc)}</Link></th>
+            <tr key={r.area}>
+              <th scope="row">{r.filter ? <Link to={areaLink(r.filter)}>{prettySdc(r.area)}</Link> : prettySdc(r.area)}</th>
               {cols.map((id) => {
                 const n = r.cells[id] ?? 0;
                 return <td key={id} className="num-col"><span className={n ? 'heat on' : 'heat'} style={n ? { '--level': 0.15 + 0.85 * (n / r.total) } : undefined}>{n || ''}</span></td>;
               })}
               <td className="num-col num">{r.total}</td>
-              <td className="stand">{r.standout ? <><b>{r.standout.label}</b> <span className="faint num">{r.standout.lift.toFixed(1)}× the city rate</span></> : <span className="faint">Nothing stands out</span>}</td>
+              <td className="stand">{r.standout ? <><b>{r.standout.label}</b> <span className="faint num">{r.standout.lift.toFixed(1)}× the overall rate</span></> : <span className="faint">Nothing stands out</span>}</td>
             </tr>
           ))}
         </tbody>
@@ -154,13 +164,15 @@ function Restore({ byCause, minimum }) {
 export default function Insights() {
   useDocumentTitle('Insights');
   const [days, setDays] = useState(14);
-  const { data, error, loading, refreshing } = useApi(`/v1/insights?days=${days}`);
+  const { param: muniParam, name } = useMunicipality();
+  const { utility, Utility, single } = useUtility();
+  const { data, error, loading, refreshing } = useApi(withMunicipality(`/v1/insights?days=${days}`, muniParam));
 
   return (
     <div className="container page">
       <header className="page-head">
-        <h1>Insights</h1>
-        <p>What is causing the outages, where, and how long they take to fix. Built from the causes City Power states in its posts.</p>
+        <h1>Insights{name ? ` · ${name}` : ''}</h1>
+        <p>What is causing the outages, where, and how long they take to fix. Built from the causes {utility} states in its posts.</p>
       </header>
 
       <div className="toolbar">
@@ -178,7 +190,7 @@ export default function Insights() {
         <div className={refreshing ? 'fading' : undefined}>
           <div className="notice" role="note">
             <Icon name="info" />
-            <div>Causes are <b>as stated by City Power</b>, sorted into groups by GridWatch. A post naming a cause is not confirmation of it. Small groups over a short period are noisy, so treat differences as hints, not conclusions.</div>
+            <div>Causes are <b>as stated by {utility}</b>, sorted into groups by GridWatch. A post naming a cause is not confirmation of it. Small groups over a short period are noisy, so treat differences as hints, not conclusions.</div>
           </div>
 
           <section className="section" aria-labelledby="cause-h">
@@ -197,7 +209,7 @@ export default function Insights() {
           </section>
 
           <section className="section" aria-labelledby="area-h">
-            <SectionHead id="area-h" title="By service centre" sub="How many outages of each kind, and what each centre has more of than the city as a whole" />
+            <SectionHead id="area-h" title={areaKind(data.byArea).title} sub="How many outages of each kind, and what each area has more of than everywhere shown here" />
             <AreaGrid rows={data.byArea} causes={data.causes} />
           </section>
 
@@ -216,7 +228,7 @@ export default function Insights() {
                     <li key={n.id}>
                       <div className="repeat-main">
                         <Link to={`/network/${n.id}`} className="t">{nice(n.name)}</Link>
-                        <span className="small muted">{n.type.replace('_', ' ').toLowerCase()}{n.sdc ? ` · ${prettySdc(n.sdc)}` : ''}</span>
+                        <span className="small muted">{n.type.replace('_', ' ').toLowerCase()}{n.area ? ` · ${prettySdc(n.area)}` : ''}</span>
                         <span className="small faint">{n.causes.slice(0, 2).map((c) => `${c.label.toLowerCase()} ×${c.count}`).join(', ')}</span>
                       </div>
                       <b className="repeat-n num">{n.count}×</b>
@@ -238,7 +250,7 @@ export default function Insights() {
       )}
 
       <section className="section" aria-labelledby="posts-h">
-        <SectionHead id="posts-h" title="How much City Power posts" sub="Posts per day by kind. Pick a day or a kind, or search, to read the posts themselves." />
+        <SectionHead id="posts-h" title={`How much ${single ? Utility : 'each utility'} posts`} sub="Posts per day by kind. Pick a day or a kind, or search, to read the posts themselves." />
         <PostActivity days={days} />
       </section>
     </div>

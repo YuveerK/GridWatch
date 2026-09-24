@@ -390,6 +390,46 @@
       "fb": 0,
       "same": true,
       "why": "Same Klipfontein planned maintenance; reprocessing alone briefly scored it below threshold"
+    },
+    {
+      "a": "2102751372349210656",
+      "fa": 0,
+      "b": "2102735214598352998",
+      "fb": 0,
+      "same": true,
+      "why": "13:26 Gresswold 'investigating loss of supply in Wynberg, parts of Kew' is the same new event as the 12:21 Wynberg interruption, not the 22 Sep Kew mini-substation fault (which was awaiting a replacement unit)"
+    },
+    {
+      "a": "2102847958043472310",
+      "fa": 0,
+      "b": "2102808757680194032",
+      "fb": 0,
+      "same": true,
+      "why": "98% restoration of the Lyndhurst distributor is the result of the Corlett Gardens and Lyndhurst investigation opened two hours earlier"
+    },
+    {
+      "a": "2102848008337416334",
+      "fa": 0,
+      "b": "2102808757680194032",
+      "fb": 0,
+      "same": true,
+      "why": "duplicate of the Lyndhurst 98% post a minute earlier; same fault as the Corlett Gardens investigation"
+    },
+    {
+      "a": "2102991238886756353",
+      "fa": 1,
+      "b": "2102912501067231706",
+      "fb": 0,
+      "same": true,
+      "why": "morning graphic line is the same Fleurhof outage crews could not attend overnight; the suburb was read as Fluerhof"
+    },
+    {
+      "a": "2103030726081875970",
+      "fa": 0,
+      "b": "2103047486503874932",
+      "fb": 0,
+      "same": true,
+      "why": "morning Line D report is the start of the new Tshepisong switching-station trip, not the 18 September Eskom-side outage"
     }
   ]
 }

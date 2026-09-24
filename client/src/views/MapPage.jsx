@@ -6,7 +6,7 @@ import { EmptyState, ErrorState, Skeleton, StatusBadge } from '../components/ui.
 import { nice, plural, timeAgo, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
 import { estimateCoverage } from '../lib/coverage.js';
-import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
+import { useMunicipality, useUtility, withMunicipality } from '../lib/municipality.jsx';
 
 const MapView = lazy(() => import('../components/MapView.jsx'));
 
@@ -38,7 +38,7 @@ const HUB_KINDS = [['', 'All'], ['SDC', 'Service centres'], ['SUBSTATION', 'Subs
 /**
  * Two views of the same map:
  *   Outages         where power is out right now (dots, grouped into bubbles when zoomed out)
- *   Infrastructure  City Power's equipment; click one and lines animate out to the areas it feeds
+ *   Infrastructure  the utilities' equipment; click one and lines animate out to the areas it feeds
  */
 export default function MapPage() {
   useDocumentTitle('Map');
@@ -52,6 +52,7 @@ export default function MapPage() {
   const [extra, setExtra] = useState(null); // a searched suburb that has no live outage
 
   const { param: muniParam } = useMunicipality();
+  const { utility, single } = useUtility();
   const live = useApi(withMunicipality('/v1/map', muniParam), { refreshMs: 60_000 });
   const hubsApi = useApi(withMunicipality('/v1/map/infrastructure', muniParam), { refreshMs: 120_000 });
   const hubData = useApi(hubId ? `/v1/map/node/${hubId}` : null);
@@ -243,7 +244,7 @@ export default function MapPage() {
                   onPickHub={pickHub}
                   onClear={() => (mode === 'outages' ? go({}) : hubId && go({ view: 'infrastructure' }))}
                   height={580}
-                  label={mode === 'infrastructure' ? "Map of City Power facilities and estimated coverage" : 'Map of suburbs with power outages'}
+                  label={mode === 'infrastructure' ? `Map of ${utility}'s facilities and estimated coverage` : 'Map of suburbs with power outages'}
                 />
               </Suspense>
               {hubId && !node && !hubData.error && <div className="map-toast">Loading coverage…</div>}
@@ -265,7 +266,7 @@ export default function MapPage() {
             {mode === 'outages' && !sel && (
               <>
                 <div className="small muted" style={{ marginBottom: 8 }}>{plural(outages.length, 'live outage')}{mapped < outages.length ? ` · ${outages.length - mapped} could not be placed` : ''}</div>
-                {outages.length === 0 && <EmptyState icon="check" title="No live outages right now">When City Power reports one, the affected suburbs will show up here.</EmptyState>}
+                {outages.length === 0 && <EmptyState icon="check" title="No live outages right now">When {utility} reports one, the affected suburbs will show up here.</EmptyState>}
                 <ul className="rows card">
                   {outages.map((o) => (
                     <li key={o.id}>
@@ -297,7 +298,7 @@ export default function MapPage() {
                   <div className="panel-h">Suburbs</div>
                   <div className="chips">
                     {selectedOutage.places.map((p) => <button key={p.id} type="button" className="chip" onClick={() => pickSuburb(p.id)}>{p.restored && <Icon name="check" />}{nice(p.name)}</button>)}
-                    {selectedOutage.places.length === 0 && <span className="small faint">City Power didn't name a suburb yet.</span>}
+                    {selectedOutage.places.length === 0 && <span className="small faint">No suburb has been named yet.</span>}
                   </div>
                 </div>
                 {selectedOutage.equipment.length > 0 && (
@@ -385,7 +386,7 @@ export default function MapPage() {
                       </div>
                       {node.unplaced > 0 && <p className="small faint" style={{ marginTop: 8 }}>{plural(node.unplaced, 'more area')} could not be placed on the map.</p>}
                     </div>
-                    <p className="small faint">Marker positions are inferred from associated suburbs. Connections are learned from City Power's posts.</p>
+                    <p className="small faint">Marker positions are inferred from associated suburbs. Connections are learned from {single ? `${utility}'s` : "the utilities'"} posts.</p>
                     <Link to={`/network/${node.node.id}`} className="btn">Open equipment page <Icon name="arrow" /></Link>
                   </>
                 )}

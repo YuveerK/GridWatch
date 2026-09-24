@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { EmptyState, ErrorState, Skeleton } from './ui.jsx';
 import { get, plural, useApi } from '../lib/api.js';
+import { useMunicipality, useUtility, withMunicipality } from '../lib/municipality.jsx';
 import './post-activity.css';
 
 const PAGE = 30;
@@ -17,9 +18,11 @@ function Marked({ text, q }) {
   return parts.map((p, i) => (i % 2 ? <mark key={i}>{p}</mark> : p));
 }
 
-/** How many posts City Power made each day, by kind; pick a day or a kind, or search, to read the posts themselves. */
+/** How many posts the utility in scope made each day, by kind; pick a day or a kind, or search, to read the posts themselves. */
 export default function PostActivity({ days }) {
-  const { data, error, loading } = useApi(`/v1/posts/daily?days=${days}`);
+  const { param: muniParam } = useMunicipality();
+  const { utility } = useUtility();
+  const { data, error, loading } = useApi(withMunicipality(`/v1/posts/daily?days=${days}`, muniParam));
   const [type, setType] = useState(null);
   const [day, setDay] = useState(null);
   const [text, setText] = useState('');
@@ -46,8 +49,9 @@ export default function PostActivity({ days }) {
     }
     if (type) p.set('type', type);
     if (q) p.set('q', q);
-    return p.toString();
-  }, [day, type, q, data]);
+    const s = p.toString();
+    return muniParam ? `${s}&${muniParam}` : s;
+  }, [day, type, q, data, muniParam]);
 
   useEffect(() => {
     if (!data) return undefined;
@@ -114,7 +118,7 @@ export default function PostActivity({ days }) {
       </ol>
 
       <div className="pa-search">
-        <label htmlFor="pa-q" className="sr-only">Search City Power's posts</label>
+        <label htmlFor="pa-q" className="sr-only">Search {utility}'s posts</label>
         <input id="pa-q" type="search" value={text} onChange={(e) => setText(e.target.value)} placeholder="Search the posts, for example a suburb or a substation" autoComplete="off" />
         {filtered && <button type="button" className="pa-clear" onClick={() => { setType(null); setDay(null); setText(''); }}>Clear filters</button>}
       </div>

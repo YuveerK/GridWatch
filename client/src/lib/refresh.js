@@ -105,7 +105,7 @@ export function cooldownSeconds(s) {
 
 export function describeResult(r) {
   if (!r) return '';
-  if (r.newPosts === 0 && !r.processed && !r.failed && !r.needsReview && !r.capped && !r.fetchIncomplete) return 'No new posts from City Power.';
+  if (r.newPosts === 0 && !r.processed && !r.failed && !r.needsReview && !r.capped && !r.fetchIncomplete) return 'No new posts.';
   const bits = [`${r.newPosts} new post${r.newPosts === 1 ? '' : 's'}`];
   if (r.newOutages) bits.push(`${r.newOutages} new outage${r.newOutages === 1 ? '' : 's'}`);
   if (r.updates) bits.push(`${r.updates} update${r.updates === 1 ? '' : 's'}`);

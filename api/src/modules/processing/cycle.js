@@ -89,8 +89,10 @@ export function createCycle({ ingest, process, retry, review, sweep, place, coun
     } catch (err) {
       logger.warn({ err: err?.message }, 'placing new suburbs on the map failed; will retry next fetch');
     }
-    // a required stage that did not run is reported, never passed over as success
-    const incomplete = [...stageFailures];
+    // a required stage that did not run is reported, never passed over as success. An account whose fetch failed or was rate
+    // limited this cycle is reported the same way - even though the overall fetch still succeeded (another account came
+    // through), its own new posts and backlog are held back until it recovers (see processPending's incompleteAccounts).
+    const incomplete = [...stageFailures, ...(ing?.failedAccounts ?? []).map((f) => `ingest:${f.displayName} (${f.status.toLowerCase()})`)];
     const swept = await sweep({ ctx });
     if (swept?.skipped) {
       incomplete.push('sweep');
@@ -127,6 +129,8 @@ export function createCycle({ ingest, process, retry, review, sweep, place, coun
       failed,
       needsReview,
       backlog: proc?.remaining ?? 0,
+      // backlog held back for chronological ordering (an account's fetch interval isn't complete yet), not actually stuck
+      held: proc?.held ?? 0,
       newOutages: Math.max(0, after.outages - before.outages),
       updates: Math.max(0, after.outagePosts - before.outagePosts),
       capped: (proc?.remaining ?? 0) > 0,

@@ -6,6 +6,7 @@ import SearchBox from '../components/SearchBox.jsx';
 import { CardSkeleton, Chip, Crumbs, EmptyState, ErrorState, SectionHead, Skeleton, StatusBadge } from '../components/ui.jsx';
 import { fmtDay, nice, plural, prettySdc, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle, useMyArea } from '../lib/hooks.js';
+import { useUtility } from '../lib/municipality.jsx';
 
 const LIVE = new Set(['ACTIVE', 'PARTIALLY_RESTORED', 'PLANNED']);
 
@@ -65,6 +66,7 @@ export default function Suburb() {
   const hist = useApi(`/v1/localities/${id}/history`);
   const { area, setArea, clear } = useMyArea();
   useDocumentTitle(suburb.data?.name);
+  const who = useUtility(suburb.data?.municipalityCode);
 
   if (suburb.error) return <div className="container page"><ErrorState error={suburb.error} /></div>;
   if (!suburb.data || !outages.data) {
@@ -81,7 +83,7 @@ export default function Suburb() {
   const current = list.filter((o) => LIVE.has(o.status));
   const history = list.filter((o) => !LIVE.has(o.status));
   const saved = area?.id === s.id;
-  const answer = computeAnswer(s.name, list, possible, s.id);
+  const answer = computeAnswer(s.name, list, possible, s.id, who);
 
   return (
     <div className="container page">
@@ -92,7 +94,7 @@ export default function Suburb() {
           <div>
             <h1>{s.name}</h1>
             <p style={{ marginTop: 4, fontSize: 15 }}>
-              {s.region ? `Region ${s.region} of ${s.municipality ?? 'Johannesburg'}` : (s.municipality ?? 'Johannesburg')}
+              {s.region ? `Region ${s.region}${s.municipality ? ` of ${s.municipality}` : ''}` : s.municipality ?? 'Suburb'}
               {s.learned && ' · added automatically from outage posts'}
             </p>
           </div>
@@ -113,7 +115,7 @@ export default function Suburb() {
 
       {possible.length > 0 && (
         <section className="section" aria-labelledby="pos-h">
-          <SectionHead id="pos-h" title="Possibly affecting this area" sub={`City Power didn't name a suburb, but this equipment usually supplies ${s.name}`} />
+          <SectionHead id="pos-h" title="Possibly affecting this area" sub={`${who.Utility} didn't name a suburb, but this equipment usually supplies ${s.name}`} />
           <div className="grid-cards">{possible.map((o) => <OutageCard key={o.id} outage={o} />)}</div>
         </section>
       )}

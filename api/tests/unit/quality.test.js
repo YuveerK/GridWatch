@@ -101,3 +101,16 @@ describe('the verdict on a cycle', () => {
     expect(decideStatus({ needsReview: 2 })).toBe('NEEDS_REVIEW');
   });
 });
+
+import { awaitingReview } from '../../src/modules/processing/quality.js';
+
+describe('posts waiting for a person', () => {
+  const posts = [{ id: 'a', processingStatus: 'RELEVANT' }, { id: 'b', processingStatus: 'NEEDS_REVIEW' }, { id: 'c', processingStatus: 'RELEVANT' }];
+  it('a post with an open real review item is waiting even when its own status is fine', () => {
+    expect(awaitingReview(posts, [{ postId: 'a', sampled: false }])).toEqual(['a', 'b']);
+  });
+  it('a routine sampled spot-check does not count; with no items only NEEDS_REVIEW posts wait', () => {
+    expect(awaitingReview(posts, [{ postId: 'c', sampled: true }])).toEqual(['b']);
+    expect(awaitingReview(posts)).toEqual(['b']);
+  });
+});

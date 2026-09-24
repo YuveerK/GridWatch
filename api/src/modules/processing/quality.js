@@ -95,6 +95,15 @@ export function decideStatus({ error = null, incomplete = [], backlog = 0, inges
 }
 
 /**
+ * The posts waiting for a person, by the same rule as the cycle verdict: the post itself is NEEDS_REVIEW, or it has an open review item
+ * that is a real concern (a routine sampled spot-check does not count). Pure: `openItems` are the OPEN review items of these posts.
+ */
+export function awaitingReview(posts, openItems = []) {
+  const concern = new Set(openItems.filter((i) => !i.sampled).map((i) => i.postId));
+  return posts.filter((x) => x.processingStatus === 'NEEDS_REVIEW' || concern.has(x.id)).map((x) => x.id);
+}
+
+/**
  * Run the deterministic checks over exactly the posts a cycle covered and save the result (a CycleQuality row). Never throws into the
  * cycle: a failure to assess is itself recorded as a problem.
  *   posts covered = the posts this cycle's fetch inserted, plus every post processed since it started (a backlog counts too)

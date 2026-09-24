@@ -42,7 +42,9 @@ const onPost = (res, n, total) => {
 };
 
 // --sweep-as-of: replay history as if the hourly "gone quiet" marking had run in between (closer to live; see docs). Off by default.
-const result = await processPending({ limit, onPost, sweepAsOf: args.includes('--sweep-as-of') });
+// --ignore-incomplete: process every account's backlog even if its current X fetch interval hasn't finished (default: those posts
+// wait until it has, so an older page arriving next cycle isn't processed out of chronological order behind a newer one already stored).
+const result = await processPending({ limit, onPost, sweepAsOf: args.includes('--sweep-as-of'), ignoreIncomplete: args.includes('--ignore-incomplete') });
 console.log('\nFINISHED', result, `${freshCalls} fresh Gemini reads, ${((Date.now() - started) / 60000).toFixed(1)} min`);
 {
   const { aiUsage } = await import('../src/modules/ai/gemini.client.js');

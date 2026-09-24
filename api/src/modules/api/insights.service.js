@@ -1,6 +1,7 @@
 import { prisma } from '../../db/prisma.js';
 import { ALL_CATEGORIES, categorize, categoryLabel } from '../../lib/fault-category.js';
 import { isLong } from '../../lib/durations.js';
+import { UTILITIES, outageInMunicipality } from './municipality-scope.js';
 
 const HOUR = 3_600_000;
 const MIN_FOR_MEDIAN = 3; // fewer than this is too few to call anything "typical"
@@ -11,15 +12,34 @@ const median = (xs) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 const dayOf = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Johannesburg' }).format(d);
+const startOfDay = (date) => Date.parse(`${date}T00:00:00+02:00`); // Johannesburg has no daylight saving
+
+/**
+ * Pure: the by-area row an outage belongs to, and the outages-list filter that finds the same outages (null: none can).
+ *   { sdcName, municipality: code, regions: [GIS region code of each affected suburb] }
+ * A named service centre always wins. A municipality whose posts name none (UTILITIES[code].areas === 'region') groups by
+ * the region most of its suburbs sit in, lowest code on a tie.
+ */
+export function areaOf({ sdcName = null, municipality = null, regions = [] }) {
+  if (sdcName) return { area: sdcName, filter: { sdc: sdcName } };
+  const u = UTILITIES[municipality];
+  if (u?.areas !== 'region') return { area: 'Unknown', filter: null };
+  const n = new Map();
+  for (const r of regions) if (r) n.set(r, (n.get(r) ?? 0) + 1);
+  const [code] = [...n].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0]), 'en', { numeric: true }))[0] ?? [];
+  return code ? { area: `${u.short} Region ${code}`, filter: { region: code } } : { area: `${u.short}: region not known`, filter: null };
+}
 
 /**
  * Pure: turn unplanned outages (and the equipment each involved) into the insights view.
- *   outages:   [{ id, title, sdcName, cause, status, startedAt, restoredAt }]  (may reach back further than the window: the week comparison needs it)
+ *   outages:   [{ id, title, sdcName, municipality?, regions?, cause, status, startedAt, restoredAt }]  (may reach back further than the window: the week comparison needs it)
  *   equipment: [{ outageId, nodeId, name, type }]
  *   earliest:  when the oldest outage in the whole database began, so the page can say how much history it stands on
  */
 export function buildInsights({ outages: everything, equipment = [], days, now = new Date(), earliest = null }) {
-  const windowStart = now.getTime() - days * 24 * HOUR;
+  // whole Johannesburg days, today included, so the totals cover exactly the days the trend shows
+  const dayList = Array.from({ length: days }, (_, k) => dayOf(new Date(now.getTime() - (days - 1 - k) * 24 * HOUR)));
+  const windowStart = startOfDay(dayList[0]);
   const outages = everything.filter((o) => new Date(o.startedAt).getTime() >= windowStart);
   const cat = new Map(everything.map((o) => [o.id, categorize(o.cause)]));
   const total = outages.length;
@@ -46,8 +66,7 @@ export function buildInsights({ outages: everything, equipment = [], days, now =
     .filter((c) => c.count > 0)
     .sort((a, b) => (a.id === 'UNKNOWN') - (b.id === 'UNKNOWN') || b.count - a.count);
 
-  // per day, per category (Johannesburg days, oldest first, zero-filled)
-  const dayList = Array.from({ length: days }, (_, k) => dayOf(new Date(now.getTime() - (days - 1 - k) * 24 * HOUR)));
+  // per day, per category (oldest first, zero-filled)
   const perDay = new Map();
   for (const o of outages) {
     const key = `${cat.get(o.id)}|${dayOf(new Date(o.startedAt))}`;
@@ -55,18 +74,19 @@ export function buildInsights({ outages: everything, equipment = [], days, now =
   }
   const trend = causes.map((c) => ({ id: c.id, label: c.label, days: dayList.map((date) => ({ date, count: perDay.get(`${c.id}|${date}`) ?? 0 })) }));
 
-  // service centre x category
+  // area (service centre, or region where posts name none) x category
+  const placeOf = new Map(outages.map((o) => [o.id, areaOf(o)]));
   const areas = new Map();
   for (const o of outages) {
-    const sdc = o.sdcName ?? 'Unknown';
-    const row = areas.get(sdc) ?? { sdc, total: 0, cells: {} };
+    const { area, filter } = placeOf.get(o.id);
+    const row = areas.get(area) ?? { area, filter, total: 0, cells: {} };
     row.total += 1;
     row.cells[cat.get(o.id)] = (row.cells[cat.get(o.id)] ?? 0) + 1;
-    areas.set(sdc, row);
+    areas.set(area, row);
   }
   const citywide = new Map(causes.map((c) => [c.id, c.share]));
   const byArea = [...areas.values()]
-    .sort((a, b) => b.total - a.total || a.sdc.localeCompare(b.sdc))
+    .sort((a, b) => b.total - a.total || a.area.localeCompare(b.area))
     .map((r) => {
       const stated = Object.entries(r.cells).filter(([id]) => id !== 'UNKNOWN');
       const top = stated.sort((a, b) => b[1] - a[1])[0];
@@ -87,7 +107,7 @@ export function buildInsights({ outages: everything, equipment = [], days, now =
     return { n: xs.length, medianHours: xs.length >= MIN_FOR_MEDIAN ? Number(median(xs).toFixed(1)) : null };
   };
   const restoreByCause = causes.map((c) => ({ id: c.id, label: c.label, ...speed(restored.filter((o) => cat.get(o.id) === c.id)) })).filter((r) => r.n > 0);
-  const restoreByArea = byArea.map((a) => ({ sdc: a.sdc, ...speed(restored.filter((o) => (o.sdcName ?? 'Unknown') === a.sdc)) })).filter((r) => r.n > 0);
+  const restoreByArea = byArea.map((a) => ({ area: a.area, ...speed(restored.filter((o) => placeOf.get(o.id).area === a.area)) })).filter((r) => r.n > 0);
 
   // the same equipment failing again and again
   const outageById = new Map(outages.map((o) => [o.id, o]));
@@ -95,7 +115,7 @@ export function buildInsights({ outages: everything, equipment = [], days, now =
   for (const e of equipment) {
     const o = outageById.get(e.outageId);
     if (!o) continue;
-    const n = nodes.get(e.nodeId) ?? { id: e.nodeId, name: e.name, type: e.type, outages: new Set(), sdc: o.sdcName ?? null, causes: new Map() };
+    const n = nodes.get(e.nodeId) ?? { id: e.nodeId, name: e.name, type: e.type, outages: new Set(), area: placeOf.get(o.id).filter ? placeOf.get(o.id).area : null, causes: new Map() };
     n.outages.add(o.id);
     const c = cat.get(o.id);
     n.causes.set(c, (n.causes.get(c) ?? 0) + 1);
@@ -103,7 +123,7 @@ export function buildInsights({ outages: everything, equipment = [], days, now =
   }
   const repeat = [...nodes.values()]
     .filter((n) => n.outages.size >= 2)
-    .map((n) => ({ id: n.id, name: n.name, type: n.type, sdc: n.sdc, count: n.outages.size, causes: [...n.causes].sort((a, b) => b[1] - a[1]).map(([id, count]) => ({ id, label: categoryLabel(id), count })) }))
+    .map((n) => ({ id: n.id, name: n.name, type: n.type, area: n.area, count: n.outages.size, causes: [...n.causes].sort((a, b) => b[1] - a[1]).map(([id, count]) => ({ id, label: categoryLabel(id), count })) }))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
     .slice(0, 12);
 
@@ -145,14 +165,19 @@ export function buildInsights({ outages: everything, equipment = [], days, now =
   };
 }
 
-export async function insights({ days = 14, now = new Date() } = {}) {
+export async function insights({ days = 14, municipality = null, now = new Date() } = {}) {
   const since = new Date(now.getTime() - Math.max(days, 14) * 24 * HOUR); // at least two weeks back, for the week-on-week comparison
-  const oldest = await prisma.outage.aggregate({ where: { kind: 'UNPLANNED' }, _min: { startedAt: true } });
+  const scoped = outageInMunicipality(municipality);
+  const oldest = await prisma.outage.aggregate({ where: { kind: 'UNPLANNED', ...scoped }, _min: { startedAt: true } });
   const outages = await prisma.outage.findMany({
-    where: { kind: 'UNPLANNED', startedAt: { gte: since } },
-    select: { id: true, title: true, sdcName: true, cause: true, status: true, startedAt: true, restoredAt: true },
+    where: { kind: 'UNPLANNED', startedAt: { gte: since }, ...scoped },
+    select: {
+      id: true, title: true, sdcName: true, cause: true, status: true, startedAt: true, restoredAt: true,
+      Municipality: { select: { code: true } },
+      localities: { select: { locality: { select: { Region: { select: { code: true } } } } } },
+    },
     orderBy: [{ startedAt: 'asc' }, { id: 'asc' }],
-  });
+  }).then((rows) => rows.map(({ Municipality, localities, ...o }) => ({ ...o, municipality: Municipality?.code ?? null, regions: localities.map((l) => l.locality.Region?.code ?? null) })));
   const links = outages.length
     ? await prisma.outageNode.findMany({ where: { outageId: { in: outages.map((o) => o.id) }, node: { type: { notIn: ['SDC', 'CABLE', 'LINE', 'OTHER'] } } }, select: { outageId: true, nodeId: true, node: { select: { name: true, type: true } } } })
     : [];

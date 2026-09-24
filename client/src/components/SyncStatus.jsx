@@ -11,7 +11,7 @@ const clock = (ms) => {
 };
 
 /**
- * When the site last checked City Power, and a ring that fills up to the next automatic check. The server says when the next
+ * When the site last checked for new posts, and a ring that fills up to the next automatic check. The server says when the next
  * check is due; this only counts down to it (against the server's own clock, so a wrong device clock cannot mislead).
  */
 export default function SyncStatus() {
@@ -28,7 +28,7 @@ export default function SyncStatus() {
 
   let next;
   if (!data.automatic) next = 'Automatic checks are off';
-  else if (data.running) next = 'Checking City Power now…';
+  else if (data.running) next = 'Checking for new posts now…';
   else if (remaining == null || remaining <= 0) next = 'Checking any moment now…';
   else next = `Next check in ${clock(remaining)}`;
 

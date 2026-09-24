@@ -104,43 +104,54 @@ export function resetLocalityIndex() {
   localityIndex = null;
 }
 
-/** Returns Locality | null. Ambiguous names (same suburb in several regions) prefer `preferIds`. */
-export async function resolveLocality(name, preferIds = new Set()) {
+/** Returns Locality | null. Ambiguous names (same suburb in several regions) prefer `preferIds`.
+ * When `municipalityId` is known, a candidate is only ever returned if it belongs to that municipality or has never been
+ * attributed to any municipality - a candidate known to belong to a DIFFERENT municipality is never returned, not even as a
+ * last resort (a same-named suburb in two tracked utilities is not the same place without explicit evidence). */
+export async function resolveLocality(name, preferIds = new Set(), municipalityId = null) {
   const { map, keys } = await getLocalityIndex();
   const key = localityKey(name);
-  let candidates = map.get(key);
+  const inScope = (list) => {
+    if (!list?.length || municipalityId == null) return list ?? null;
+    const scoped = list.filter((c) => c.municipalityId === municipalityId || c.municipalityId == null);
+    return scoped.length ? scoped : null;
+  };
+  let candidates = inScope(map.get(key));
   if (!candidates) {
     const stripped = key.replace(/ ext( \d+)*( and \d+)*$/, '').trim();
-    candidates = map.get(stripped);
+    candidates = inScope(map.get(stripped));
   }
   if (!candidates && key.length >= 5) {
     let best = null;
     let bestScore = 0;
     for (const k of keys) {
+      if (!inScope(map.get(k))) continue; // a key with no in-scope candidate is never a fuzzy match target
       const s = similarity(key, k);
       if (s > bestScore) [best, bestScore] = [k, s];
     }
-    if (bestScore >= FUZZY_LOCALITY) candidates = map.get(best);
+    if (bestScore >= FUZZY_LOCALITY) candidates = inScope(map.get(best));
   }
   // a single mistyped letter ("Develand" for "Devland") is the same suburb: without this the typo became a new, unplaced suburb
   if (!candidates && key.length >= 6 && !/\d/.test(key)) {
-    const near = keys.filter((k) => k[0] === key[0] && oneEditApart(key, k));
-    if (near.length === 1) candidates = map.get(near[0]);
+    const near = keys.filter((k) => k[0] === key[0] && oneEditApart(key, k) && inScope(map.get(k)));
+    if (near.length === 1) candidates = inScope(map.get(near[0]));
   }
   if (!candidates?.length) return null;
   return candidates.find((c) => preferIds.has(c.id)) ?? candidates[0];
 }
 
-/** Suburbs missing from the supplied list are learned as candidates (streets/facilities are ignored). */
-async function learnLocality(name, ctx) {
+/** Suburbs missing from the supplied list are learned as candidates (streets/facilities are ignored). A learned locality is
+ * tagged with the resolving municipality when known, so a later post from a different municipality never reuses it. */
+async function learnLocality(name, ctx, municipalityId = null) {
   const clean = name.trim();
   const key = localityKey(clean);
   if (key.length < 3 || isNotSuburbName(clean)) return null;
-  let loc = await prisma.locality.findFirst({ where: { normalizedName: key, regionId: null } });
+  const scope = municipalityId != null ? { OR: [{ municipalityId }, { municipalityId: null }] } : {};
+  let loc = await prisma.locality.findFirst({ where: { normalizedName: key, regionId: null, ...scope } });
   if (!loc) {
     loc = await fenced(ctx, (tx) =>
       tx.locality.create({
-        data: { id: randomUUID(), canonicalName: clean, normalizedName: key, sourceLabel: 'learned-from-posts', updatedAt: new Date() },
+        data: { id: randomUUID(), canonicalName: clean, normalizedName: key, municipalityId, sourceLabel: 'learned-from-posts', updatedAt: new Date() },
       }),
     );
   }
@@ -151,31 +162,37 @@ async function learnLocality(name, ctx) {
 /** Find or create a node; bumps evidence and promotes to CONFIRMED. */
 const JUNK_NAME = /^(affected|unspecified|unspecific|unnamed|tbc|unknown|customers?|areas?|surrounding( areas)?|n\/a|none|the|a|an|feeder|line|cable|mini[- ]?substation|substation|distributor)$/i;
 
-export async function resolveNode({ type, name, at, source = null, mode = 'count', ctx }) {
+export async function resolveNode({ type, name, at, source = null, mode = 'count', ctx, municipalityId = null }) {
   if (!name || JUNK_NAME.test(name.trim())) return null;
   // "Inner City", "InnerCity" and "InnerCitySDC" are one service delivery centre
   const key = type === 'SDC' ? infraKey(name).replace(/\s+/g, '').replace(/sdc$/, '') : infraKey(name);
   if (!key) return null;
-  let node = await prisma.infraNode.findUnique({ where: { type_normalizedKey: { type, normalizedKey: key } } });
+  // Equipment identity is namespaced by municipality: when the caller knows it, EVERY lookup below is scoped to it exactly -
+  // never falling back to a null-municipality row or a row known to belong to a different municipality. A same-named station
+  // in two different tracked utilities is only ever the same node with explicit evidence, which nothing here supplies. When
+  // the caller doesn't know the municipality (tests, or a code path with no account context), lookups stay global/unscoped,
+  // exactly as before this existed.
+  const scope = municipalityId != null ? { municipalityId } : {};
+  let node = await prisma.infraNode.findFirst({ where: { type, normalizedKey: key, ...scope } });
   // "X Substation" and "X Switching Station" are written interchangeably for the same site.
   if (!node && STATION_TYPES.includes(type)) {
-    node = await prisma.infraNode.findFirst({ where: { normalizedKey: key, type: { in: STATION_TYPES } }, orderBy: { evidenceCount: 'desc' } });
+    node = await prisma.infraNode.findFirst({ where: { normalizedKey: key, type: { in: STATION_TYPES }, ...scope }, orderBy: { evidenceCount: 'desc' } });
   }
   if (!node && MINOR_TYPES.includes(type)) {
-    node = await prisma.infraNode.findFirst({ where: { normalizedKey: key, type: { in: MINOR_TYPES } }, orderBy: [{ evidenceCount: 'desc' }, { firstSeenAt: 'asc' }] });
+    node = await prisma.infraNode.findFirst({ where: { normalizedKey: key, type: { in: MINOR_TYPES }, ...scope }, orderBy: [{ evidenceCount: 'desc' }, { firstSeenAt: 'asc' }] });
   }
   // "Roosevelt Park" and "Roosevelt" (one plain-word suffix) are the same substation.
   if (!node && STATION_TYPES.includes(type) && key.length >= 4) {
-    const stations = await prisma.infraNode.findMany({ where: { type: { in: STATION_TYPES } }, orderBy: [{ evidenceCount: 'desc' }, { normalizedKey: 'asc' }] });
+    const stations = await prisma.infraNode.findMany({ where: { type: { in: STATION_TYPES }, ...scope }, orderBy: [{ evidenceCount: 'desc' }, { normalizedKey: 'asc' }] });
     const plainSuffix = (long, short) => long.startsWith(`${short} `) && /^[a-z]+$/.test(long.slice(short.length + 1));
     node = stations.find((n) => plainSuffix(n.normalizedKey, key) || plainSuffix(key, n.normalizedKey)) ?? null;
   }
   if (!node) {
-    const alias = await prisma.nodeAlias.findFirst({ where: { normalizedKey: key, node: { type } }, include: { node: true } });
+    const alias = await prisma.nodeAlias.findFirst({ where: { normalizedKey: key, node: { type, ...scope } }, include: { node: true } });
     node = alias?.node ?? null;
   }
   if (!node && key.length >= 5) {
-    const peers = await prisma.infraNode.findMany({ where: { type }, select: { id: true, normalizedKey: true }, orderBy: { normalizedKey: 'asc' } });
+    const peers = await prisma.infraNode.findMany({ where: { type, ...scope }, select: { id: true, normalizedKey: true }, orderBy: { normalizedKey: 'asc' } });
     let best = null;
     let bestScore = 0;
     for (const p of peers) {
@@ -196,7 +213,7 @@ export async function resolveNode({ type, name, at, source = null, mode = 'count
   }
   // a station name that is one letter off, or the same letters scrambled, is a misspelling of a known station (only when exactly one fits)
   if (!node && STATION_TYPES.includes(type) && key.length >= 7) {
-    const stations = await prisma.infraNode.findMany({ where: { type: { in: STATION_TYPES } }, select: { id: true, normalizedKey: true } });
+    const stations = await prisma.infraNode.findMany({ where: { type: { in: STATION_TYPES }, ...scope }, select: { id: true, normalizedKey: true } });
     const near = stations.filter((n) => !differsByLabel(key, n.normalizedKey) && likelyTypo(key, n.normalizedKey));
     if (near.length === 1) {
       node = await prisma.infraNode.findUnique({ where: { id: near[0].id } });
@@ -221,7 +238,7 @@ export async function resolveNode({ type, name, at, source = null, mode = 'count
     });
   }
   return fenced(ctx, async (tx) => {
-    const created = await tx.infraNode.create({ data: { type, name: name.trim(), normalizedKey: key, firstSeenAt: at, lastSeenAt: at } });
+    const created = await tx.infraNode.create({ data: { type, name: name.trim(), normalizedKey: key, municipalityId, firstSeenAt: at, lastSeenAt: at } });
     await shouldCount(tx, source, 'NODE', created.id, '', 'record-only'); // its first evidence is already the initial 1
     return created;
   });
@@ -276,10 +293,10 @@ export function pickParent(node, candidates) {
  * Learn from one extraction. Returns the facts the linker needs:
  * { sdcNode, nodes: [InfraNode] (non-SDC, most specific last), localityIds: [], restoredLocalityIds: [], unmatched: [] }
  */
-export async function learnFromExtraction(extraction, at, { source = null, mode = 'count', ctx } = {}) {
+export async function learnFromExtraction(extraction, at, { source = null, mode = 'count', ctx, municipalityId = null } = {}) {
   const result = extraction.result;
   const sdcName = result.sdc ?? result.entities.find((e) => e.type === 'SDC')?.name ?? null;
-  const sdcNode = sdcName ? await resolveNode({ type: 'SDC', name: sdcName, at, source, mode, ctx }) : null;
+  const sdcNode = sdcName ? await resolveNode({ type: 'SDC', name: sdcName, at, source, mode, ctx, municipalityId }) : null;
 
   // A bare line/feeder label ("A", "D", "1B") is only meaningful with its station: "Tshepisong A".
   const stationNames = result.entities.filter((e) => ['SUBSTATION', 'SWITCHING_STATION'].includes(e.type)).map((e) => e.name);
@@ -294,7 +311,7 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
   const resolved = new Map(); // node.id → { node, entities: [entity] }
   const byName = new Map(); // infraKey(name) → [{ node }]  (every node that name could mean)
   for (const e of entities) {
-    const node = await resolveNode({ type: e.type, name: e.name, at, source, mode, ctx });
+    const node = await resolveNode({ type: e.type, name: e.name, at, source, mode, ctx, municipalityId });
     if (!node) continue;
     const cur = resolved.get(node.id) ?? { node, entities: [] };
     cur.entities.push(e);
@@ -333,8 +350,8 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
   const restoredLocalityIds = [];
   const unmatched = [];
   for (const l of result.localities) {
-    let loc = (await resolveLocality(l.name, preferIds)) ?? (await learnLocality(l.name, ctx));
-    if (!loc && tailPlace(l.name)) loc = (await resolveLocality(tailPlace(l.name), preferIds)) ?? (await learnLocality(tailPlace(l.name), ctx));
+    let loc = (await resolveLocality(l.name, preferIds, municipalityId)) ?? (await learnLocality(l.name, ctx, municipalityId));
+    if (!loc && tailPlace(l.name)) loc = (await resolveLocality(tailPlace(l.name), preferIds, municipalityId)) ?? (await learnLocality(tailPlace(l.name), ctx, municipalityId));
     if (!loc) {
       unmatched.push(l.name);
       continue;
@@ -345,5 +362,5 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
   }
   // Independent branches: a normal substation → distributor chain is 1; a multi-fault digest image is 3+.
   const rootCount = nodes.filter((n) => !hasParent.has(n.id)).length;
-  return { sdcNode, nodes, rootCount, localityIds, restoredLocalityIds, unmatched };
+  return { sdcNode, nodes, rootCount, localityIds, restoredLocalityIds, unmatched, municipalityId };
 }

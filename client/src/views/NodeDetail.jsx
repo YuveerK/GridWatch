@@ -6,9 +6,10 @@ import OutageCard from '../components/OutageCard.jsx';
 import { Chip, Crumbs, ErrorState, SectionHead, Skeleton } from '../components/ui.jsx';
 import { fmtDay, nice, plural, prettySdc, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
+import { useUtility } from '../lib/municipality.jsx';
 
 const ABOUT = {
-  SDC: 'A Service Delivery Centre is a regional depot that looks after part of Johannesburg and sends out repair teams.',
+  SDC: 'A service centre is a regional depot that looks after part of the city and sends out repair teams.',
   SUBSTATION: 'A large site that receives high-voltage power and sends it out to several distributors.',
   SWITCHING_STATION: 'A site that routes power between circuits. When it trips, everything it feeds can go dark.',
   DISTRIBUTOR: 'A circuit that leaves a substation and feeds a group of streets.',
@@ -21,6 +22,7 @@ export default function NodeDetail() {
   const { id } = useParams();
   const { data: n, error, loading } = useApi(`/v1/infrastructure/${id}`);
   useDocumentTitle(n?.name);
+  const { utility } = useUtility(n?.municipalityId);
 
   if (error && !n) return <div className="container page"><ErrorState error={error} /></div>;
   if (loading || !n) return <div className="container page stack" aria-busy="true"><Skeleton h={16} w="30%" /><Skeleton h={40} w="50%" /><Skeleton h={200} /></div>;
@@ -42,7 +44,7 @@ export default function NodeDetail() {
           {live.length > 0 ? <span className="badge tone-live"><Icon name="alert" />{plural(live.length, 'live outage')}</span> : <span className="badge tone-good"><Icon name="check" />No live outage</span>}
         </div>
         <h1>{n.type === 'SDC' ? prettySdc(n.name) : nice(n.name)}</h1>
-        <p>{ABOUT[n.type] ?? 'A piece of City Power equipment.'}</p>
+        <p>{ABOUT[n.type] ?? `A piece of ${utility}'s equipment.`}</p>
       </header>
 
       <div className="cols-3" style={{ marginBottom: 8 }}>
@@ -52,7 +54,7 @@ export default function NodeDetail() {
       </div>
 
       <section className="section" aria-labelledby="flow-h">
-        <SectionHead id="flow-h" title="How power flows here" sub="The route from the service centre down to suburbs, as far as City Power's posts have shown" />
+        <SectionHead id="flow-h" title="How power flows here" sub={`The route from the service centre down to suburbs, as far as ${utility}'s posts have shown`} />
         <FeedFlow node={n} />
       </section>
 
@@ -65,7 +67,7 @@ export default function NodeDetail() {
 
       {n.children.length > 0 && (
         <section className="section">
-          <SectionHead title={n.type === 'SDC' ? 'Equipment it looks after' : 'What it feeds'} sub="Equipment seen downstream of this one in City Power's posts" />
+          <SectionHead title={n.type === 'SDC' ? 'Equipment it looks after' : 'What it feeds'} sub={`Equipment seen downstream of this one in ${utility}'s posts`} />
           <div className="stack" style={{ gap: 14 }}>
             {Object.entries(grouped).map(([type, list]) => (
               <div key={type} className="card card-pad">

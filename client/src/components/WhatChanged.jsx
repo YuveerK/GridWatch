@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { ROLE, fmtDay, fmtTime, nice, plural, prettySdc, timeAgo, useApi } from '../lib/api.js';
+import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
 import Icon from './Icon.jsx';
 import { StatusBadge } from './ui.jsx';
 
@@ -20,7 +21,7 @@ function OutageChange({ o }) {
             <span className={`chg-dot tone-${(ROLE[u.role] ?? ROLE.UPDATE).tone}`} />
             <div>
               <div className="small faint">{(ROLE[u.role] ?? ROLE.UPDATE).label} · {fmtDay(u.postedAt)}, {fmtTime(u.postedAt)}</div>
-              <div>{u.summary || 'Update from City Power.'} <a className="link small" href={u.url} target="_blank" rel="noreferrer">post <Icon name="external" /></a></div>
+              <div>{u.summary || 'Update posted.'} <a className="link small" href={u.url} target="_blank" rel="noreferrer">post <Icon name="external" /></a></div>
             </div>
           </li>
         ))}
@@ -31,7 +32,8 @@ function OutageChange({ o }) {
 
 /** Everything the engine did since a moment in time: new outages, updated outages, and what it ignored. */
 export default function WhatChanged({ since, label }) {
-  const { data, error, loading } = useApi(since ? `/v1/changes?since=${encodeURIComponent(since)}` : null);
+  const { param: muniParam } = useMunicipality();
+  const { data, error, loading } = useApi(since ? withMunicipality(`/v1/changes?since=${encodeURIComponent(since)}`, muniParam) : null);
   if (!since) return <p className="muted">Nothing to compare against yet.</p>;
   if (loading && !data) return <p className="muted" aria-busy="true">Loading changes…</p>;
   if (error && !data) return <p className="muted">Couldn't load the changes.</p>;
