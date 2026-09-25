@@ -4,7 +4,7 @@ process.env.VERIFIER_ENABLED = 'on'; // this file exercises the verifier (the de
 process.env.VERIFIER_MAX_CALLS_PER_DAY = '30';
 process.env.VERIFIER_SAMPLE_RATE = '1';
 
-const { detectSuspicious, listReviewItems, resolveReviewItem, runReview, saveReviewItems } = await import('../../src/modules/review/review.service.js');
+const { detectSuspicious, listReviewItems, reconcileOpenReviews, reconcileReviewItems, resolveReviewItem, runReview, saveReviewItems } = await import('../../src/modules/review/review.service.js');
 const { callsLeftToday, verifyItem } = await import('../../src/modules/review/verifier.js');
 const { env } = await import('../../src/config/env.js');
 const { prisma, resetDb } = await import('./db.js');
@@ -277,5 +277,74 @@ describe('B4: the optional verifier', () => {
     } finally {
       env.VERIFIER_ENABLED = original;
     }
+  });
+});
+
+describe('a review item whose reason has gone', () => {
+  it('closes NEW_NEAR_ACTIVE once the post is re-linked onto the live incident', async () => {
+    const first = await outage({ title: 'Robertville', localityIds: ['l1'], h: -2 });
+    const opener = await post({ h: -2 });
+    await join(first.id, opener, { h: -2 });
+    const dup = await outage({ title: 'Robertville, Stormill', localityIds: ['l1'] });
+    const q = await post();
+    await join(dup.id, q);
+    await decide(q, 'NEW', dup.id);
+    await reconcileReviewItems({ prisma, postIds: [q] });
+    expect((await prisma.reviewItem.findUnique({ where: { postId_faultIndex: { postId: q, faultIndex: 0 } } })).status).toBe('OPEN');
+
+    await prisma.outagePost.delete({ where: { outageId_postId: { outageId: dup.id, postId: q } } });
+    await join(first.id, q, { role: 'UPDATE' });
+    await prisma.linkDecision.update({ where: { postId_faultIndex: { postId: q, faultIndex: 0 } }, data: { outcome: 'LINKED', outageId: first.id } });
+    const again = await reconcileReviewItems({ prisma, postIds: [q] });
+    expect(again.resolved).toBe(1);
+    expect((await prisma.reviewItem.findUnique({ where: { postId_faultIndex: { postId: q, faultIndex: 0 } } })).status).toBe('RESOLVED');
+  });
+
+  it('closes KIND_CONFLICT once the planned equipment is no longer on the unplanned fault', async () => {
+    const node = await prisma.infraNode.create({ data: { type: 'SUBSTATION', name: 'Industria', normalizedKey: `industria-${n}`, firstSeenAt: T, lastSeenAt: T } });
+    await outage({ title: 'Industria', kind: 'PLANNED', status: 'PLANNED', nodes: [node.id], h: -5 });
+    const fault = await outage({ title: 'Pennyville', nodes: [node.id] });
+    const p = await post();
+    await join(fault.id, p);
+    await decide(p, 'NEW', fault.id);
+    await reconcileReviewItems({ prisma, postIds: [p] });
+    expect((await prisma.reviewItem.findUnique({ where: { postId_faultIndex: { postId: p, faultIndex: 0 } } })).reasons.map((r) => r.code)).toContain('KIND_CONFLICT');
+
+    await prisma.outageNode.delete({ where: { outageId_nodeId: { outageId: fault.id, nodeId: node.id } } });
+    const again = await reconcileReviewItems({ prisma, postIds: [p] });
+    expect(again.resolved).toBe(1);
+    expect((await prisma.reviewItem.findUnique({ where: { postId_faultIndex: { postId: p, faultIndex: 0 } } })).status).toBe('RESOLVED');
+  });
+
+  it('leaves a concern open while the overlapping live incident is still there', async () => {
+    const first = await outage({ title: 'Still live', localityIds: ['l2'], h: -1 });
+    await join(first.id, await post({ h: -1 }), { h: -1 });
+    const dup = await outage({ title: 'New one', localityIds: ['l2'] });
+    const q = await post();
+    await join(dup.id, q);
+    await decide(q, 'NEW', dup.id);
+    await reconcileReviewItems({ prisma, postIds: [q] });
+    const second = await reconcileReviewItems({ prisma, postIds: [q] });
+    expect(second.resolved).toBe(0);
+    expect((await prisma.reviewItem.findUnique({ where: { postId_faultIndex: { postId: q, faultIndex: 0 } } })).status).toBe('OPEN');
+  });
+
+  it('a second sweep of the open queue does not reopen or re-resolve settled items', async () => {
+    const first = await outage({ title: 'Settled', localityIds: ['l3'], h: -2 });
+    await join(first.id, await post({ h: -2 }), { h: -2 });
+    const dup = await outage({ title: 'Copy', localityIds: ['l3'] });
+    const q = await post();
+    await join(dup.id, q);
+    await decide(q, 'NEW', dup.id);
+    await reconcileReviewItems({ prisma, postIds: [q] });
+    expect((await prisma.reviewItem.findUnique({ where: { postId_faultIndex: { postId: q, faultIndex: 0 } } })).status).toBe('OPEN');
+    await prisma.outagePost.delete({ where: { outageId_postId: { outageId: dup.id, postId: q } } });
+    await join(first.id, q, { role: 'UPDATE' });
+    const once = await reconcileOpenReviews({ prisma });
+    expect(once.resolved).toBe(1);
+    const twice = await reconcileOpenReviews({ prisma });
+    expect(twice.resolved).toBe(0);
+    expect(twice.opened).toBe(0);
+    expect((await prisma.reviewItem.findUnique({ where: { postId_faultIndex: { postId: q, faultIndex: 0 } } })).status).toBe('RESOLVED');
   });
 });

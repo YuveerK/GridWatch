@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
-import { CardSkeleton, EmptyState, ErrorState, StatusBadge } from '../components/ui.jsx';
+import { CardSkeleton, EmptyState, ErrorState, ServiceIdentity, StatusBadge } from '../components/ui.jsx';
 import { dayDiff, nice, prettySdc, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
 import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
@@ -21,6 +21,7 @@ function Row({ o }) {
         {d ? (<><b className="num">{d.getUTCDate()}</b><span>{d.toLocaleDateString('en-ZA', { timeZone: 'UTC', month: 'short' })}</span></>) : (<><b><Icon name="calendar" /></b><span>TBC</span></>)}
       </div>
       <div className="grow">
+        <ServiceIdentity service={o.service} compact />
         <Link to={`/outages/${o.id}`} className="t">{nice(o.title)}</Link>
         <div className="small muted">
           {d && <b>{d.toLocaleDateString('en-ZA', { timeZone: 'UTC', weekday: 'long' })}{o.scheduled.from ? ` ${o.scheduled.from}–${o.scheduled.to}` : ''}</b>}
@@ -36,7 +37,7 @@ function Row({ o }) {
 
 export default function Planned() {
   useDocumentTitle('Planned maintenance');
-  const { param: muniParam, name } = useMunicipality();
+  const { param: muniParam, name, service } = useMunicipality();
   const { data, error, loading } = useApi(withMunicipality('/v1/outages?status=PLANNED&limit=100&sort=updated', muniParam));
 
   const rows = data?.data ?? [];
@@ -46,8 +47,9 @@ export default function Planned() {
   return (
     <div className="container page">
       <header className="page-head">
+        <ServiceIdentity service={service} />
         <h1>Planned maintenance</h1>
-        <p>Scheduled power interruptions{name ? ` announced for ${name}` : ' that have been announced'}. Dates and times come from the utility's own posts.</p>
+        <p>Scheduled {service === 'WATER' ? 'water supply' : 'electricity'} interruptions{name ? ` announced for ${name}` : ' that have been announced'}. Dates and times come from the utility's own posts.</p>
       </header>
       {error && !data && <ErrorState error={error} />}
       {loading && !data && <CardSkeleton n={3} />}

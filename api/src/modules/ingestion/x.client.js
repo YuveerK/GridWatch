@@ -60,7 +60,7 @@ const TWEET_FIELDS = 'created_at,lang,public_metrics,conversation_id,note_tweet,
  * Fetch one page of an account's posts newer than `sinceId` (newest first).
  * Returns { posts: [{ tweet, media: [] }], nextToken }.
  */
-export async function fetchTimelinePage({ userId, sinceId, paginationToken }, { retryDelayMs } = {}) {
+export async function fetchTimelinePage({ userId, sinceId, paginationToken, startTime, endTime }, { retryDelayMs } = {}) {
   if (!env.X_API_BEARER_TOKEN) throw new Error('X_API_BEARER_TOKEN is not set');
   const params = new URLSearchParams({
     max_results: '100',
@@ -72,6 +72,9 @@ export async function fetchTimelinePage({ userId, sinceId, paginationToken }, { 
   });
   if (sinceId) params.set('since_id', sinceId);
   if (paginationToken) params.set('pagination_token', paginationToken);
+  // User timelines are newest-first. start_time/end_time bound a historical backfill when the API honours them.
+  if (startTime) params.set('start_time', new Date(startTime).toISOString());
+  if (endTime) params.set('end_time', new Date(endTime).toISOString());
 
   const res = await requestWithRetry(`${BASE}/users/${userId}/tweets?${params}`, { headers: { Authorization: `Bearer ${env.X_API_BEARER_TOKEN}` } }, { retryDelayMs });
   if (res.status === 429) {

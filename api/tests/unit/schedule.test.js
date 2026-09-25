@@ -22,6 +22,7 @@ describe('parseSchedule', () => {
   });
 });
 
+import { foldEffects } from '../../src/modules/outages/outage-state.js';
 import { scheduleWindow } from '../../src/lib/schedule.js';
 
 describe('scheduleWindow (A09): the announced window as UTC instants, Johannesburg local time', () => {
@@ -132,5 +133,35 @@ describe('a daily summary picture: its header date is the issue date, not the da
   const item = { result: { image_text: daily, eta_text: 'from 09h00 until 17h00', update_summary: 'A planned power interruption is scheduled at Klipfontein Substation from 09h00 until 17h00.', entities: [{ type: 'SUBSTATION', name: 'Klipfontein' }] } };
   it('gives no window at all (so it cannot overwrite the window the planned posts gave)', () => {
     expect(scheduleWindow(item, '', new Date('2026-09-21T13:00:00Z'))).toBeNull();
+  });
+});
+
+describe('a date-only notice after a precise window', () => {
+  const effect = (schedule) => ({ status: 'PLANNED', locs: [], nodeIds: [], headlineLocalities: [], schedule });
+  const day = { start: '2026-09-22T22:00:00.000Z', end: '2026-09-23T22:00:00.000Z', reschedule: false };
+  it('keeps Heriotdale 08:00-16:00 when a later post only repeats 23 September', () => {
+    const precise = { start: '2026-09-23T06:00:00.000Z', end: '2026-09-23T14:00:00.000Z', reschedule: false };
+    const folded = foldEffects([
+      { postId: 'a', postedAt: new Date('2026-09-22T08:00:00Z'), faultIndex: 0, effect: effect(precise) },
+      { postId: 'b', postedAt: new Date('2026-09-23T06:00:00Z'), faultIndex: 0, effect: effect(day) },
+    ]);
+    expect(folded.schedule).toEqual(precise);
+  });
+  it('keeps Nancefield 09:00-17:00 the same way', () => {
+    const precise = { start: '2026-09-23T07:00:00.000Z', end: '2026-09-23T15:00:00.000Z', reschedule: false };
+    const folded = foldEffects([
+      { postId: 'a', postedAt: new Date('2026-09-22T08:00:00Z'), faultIndex: 0, effect: effect(precise) },
+      { postId: 'b', postedAt: new Date('2026-09-23T06:00:00Z'), faultIndex: 0, effect: effect(day) },
+    ]);
+    expect(folded.schedule).toEqual(precise);
+  });
+  it('still lets a stated reschedule replace the precise window', () => {
+    const precise = { start: '2026-09-23T06:00:00.000Z', end: '2026-09-23T14:00:00.000Z', reschedule: false };
+    const moved = { ...day, reschedule: true };
+    const folded = foldEffects([
+      { postId: 'a', postedAt: new Date('2026-09-22T08:00:00Z'), faultIndex: 0, effect: effect(precise) },
+      { postId: 'b', postedAt: new Date('2026-09-23T06:00:00Z'), faultIndex: 0, effect: effect(moved) },
+    ]);
+    expect(folded.schedule).toEqual(moved);
   });
 });

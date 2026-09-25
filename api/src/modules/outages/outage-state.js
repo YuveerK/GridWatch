@@ -1,3 +1,44 @@
+import { foldWaterStatus, waterStateFromText } from './water-state.js';
+
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+
+/** A window that is exactly one Johannesburg calendar day, midnight to midnight: a date was read and no hours were. */
+function isWholeLocalDay(schedule) {
+  const start = new Date(schedule.start);
+  const end = new Date(schedule.end);
+  if (end - start !== DAY) return false;
+  const sast = new Date(start.getTime() + 2 * HOUR);
+  return sast.getUTCHours() === 0 && sast.getUTCMinutes() === 0 && sast.getUTCSeconds() === 0;
+}
+
+const covers = (outer, inner) => new Date(inner.start) >= new Date(outer.start) && new Date(inner.end) <= new Date(outer.end);
+
+/** Keep a known precise window when a later notice only repeats the date. */
+export function mergeSchedule(known, incoming) {
+  if (!known) return incoming;
+  if (incoming.reschedule) return incoming;
+  if (isWholeLocalDay(incoming) && !isWholeLocalDay(known) && covers(incoming, known)) return known;
+  if (isWholeLocalDay(known) && !isWholeLocalDay(incoming) && covers(known, incoming)) return incoming;
+  if (covers(known, incoming)) return known;
+  return incoming;
+}
+
+/**
+ * Lifecycle after a fold. A quiet unplanned incident stays STALE: a later refold must not turn it back into a
+ * permanent ACTIVE just because the timeline still describes an unresolved condition. Planned work is left to
+ * its own window rule. A newer post (a later lastUpdateAt) is real news and may make a stale incident live again.
+ */
+export function keptLifecycleStatus({ foldedStatus, kind, lastUpdateAt, previousStatus, previousLastUpdateAt, windowAhead = false }) {
+  const newerNews = new Date(lastUpdateAt) > new Date(previousLastUpdateAt);
+  const swept = ['STALE', 'CLOSED'].includes(previousStatus) && !newerNews && !windowAhead;
+  // Refolding an old water bulletin can reveal an explicit restoration that a shared recovery
+  // headline previously hid. A corrected, confirmed restoration must not remain STALE.
+  if (previousStatus === 'STALE' && foldedStatus === 'RESTORED') return 'RESTORED';
+  if (swept) return previousStatus;
+  return kind === 'PLANNED' && foldedStatus === 'ACTIVE' ? 'PLANNED' : foldedStatus;
+}
+
 // An outage's current state is FOLDED from the effects of its posts, in time order, instead of being overwritten by
 // whichever post happened to be processed last. That is what makes a late or historical post harmless (it joins the
 // timeline but cannot become "the latest word"), makes reprocessing a matter of removing one effect and re-folding, and
@@ -59,6 +100,9 @@ export function buildEffect({ extraction, facts, post, retroactive, expand, revi
     expand: Boolean(expand),
     retroactive: Boolean(retroactive),
     schedule: post.schedule ?? null,
+    waterState: r.water_state ?? r.waterState ?? null,
+    customerSupply: r.customer_supply ?? r.customerSupply ?? null,
+    splitFault: Boolean(facts.fromDigest),
     // which reading this effect was built from (see lib/reading-revision.js): a later reading that differs is detectable
     reading: revision,
   };
@@ -73,6 +117,7 @@ const order = (a, b) => a.postedAt - b.postedAt || (a.faultIndex ?? 0) - (b.faul
 export function foldEffects(posts) {
   const sorted = [...posts].sort(order);
   let status = null;
+  let waterState = null;
   let restoredAt = null;
   let pct = null;
   let cause = null;
@@ -84,8 +129,12 @@ export function foldEffects(posts) {
 
   for (const [i, p] of sorted.entries()) {
     const e = p.effect;
-    const next = statusFor({ result: { status: e.status, localities: e.headlineLocalities, restoration_percent: e.pct } }, status);
-    const nextStatus = i === 0 ? initialStatus(e.retroactive, next) : next;
+    const water = e.waterState || e.customerSupply ? foldWaterStatus(e, status) : null;
+    const next = water ? water.status : statusFor({ result: { status: e.status, localities: e.headlineLocalities, restoration_percent: e.pct } }, status);
+    if (water?.waterState) waterState = water.waterState;
+    // A lone electricity restoration opens as RESTORED. A water fold already decided the lifecycle, and pumping
+    // recovery must not be rewritten into a customer restoration just because the post was the first one.
+    const nextStatus = water ? water.status : (i === 0 ? initialStatus(e.retroactive, next) : next);
     // one effective transition drives every restoration field
     if (nextStatus === 'RESTORED') {
       if (status !== 'RESTORED') restoredAt = p.postedAt; // the first confirmed restoration time is kept
@@ -93,28 +142,33 @@ export function foldEffects(posts) {
     } else {
       restoredAt = null;
       if (e.pct != null) pct = e.pct;
+      else if (water && status === 'RESTORED' && nextStatus !== 'RESTORED') pct = null;
     }
     status = nextStatus;
     if (e.cause) cause = e.cause;
     if (e.eta) eta = e.eta;
     if (e.sdcName) sdcName = e.sdcName;
-    // A later, narrower window that is entirely INSIDE the one already known, and gives no reschedule wording of its own, reads as a
-    // same-day reminder about part of that window, not a shrinking of it (Klipfontein, 22 Sept: "reminded... today, 22 September" the
-    // day after "rescheduled for Tuesday and Wednesday, 22 and 23 September" must not silently drop the 23rd). An explicit reschedule,
-    // or a window that is not simply nested inside the known one, always replaces it - unchanged from before.
-    if (e.schedule && (!schedule || e.schedule.reschedule || !(new Date(e.schedule.start) >= new Date(schedule.start) && new Date(e.schedule.end) <= new Date(schedule.end)))) schedule = e.schedule;
+    // A later window replaces the known one, except two reminders that must not:
+    // a narrower window nested inside a known one, with no reschedule wording (Klipfontein, 22 Sept), and a date-only
+    // whole day that would wipe hours already known for that same day (Heriotdale and Nancefield, 23 Sept).
+    // A later window that does state the hours replaces a previous date-only day.
+    if (e.schedule) schedule = mergeSchedule(schedule, e.schedule);
 
     const partial = e.pct != null && e.pct < 100 && status !== 'RESTORED';
+    // The earliest post defines the incident. A later digest that only updates it must not add suburbs,
+    // and must not be the reason a refold forgets the equipment after the opening post is gone.
+    const establishes = i === 0 || e.expand;
     for (const l of e.locs ?? []) {
       const restored = suburbRestored({ status, partial, locs: e.locs ?? [], restored: l.restored });
-      if (e.expand) localities.set(l.id, restored);
+      if (establishes) localities.set(l.id, restored);
       else if (restored && localities.has(l.id)) localities.set(l.id, true);
     }
-    if (e.expand) for (const id of e.nodeIds ?? []) nodeIds.add(id);
+    if (establishes) for (const id of e.nodeIds ?? []) nodeIds.add(id);
     if (status === 'RESTORED') for (const id of localities.keys()) localities.set(id, true);
   }
   return {
     status,
+    waterState,
     restoredAt,
     restorationPercent: pct,
     cause,
@@ -132,25 +186,54 @@ export function foldEffects(posts) {
  * Recompute an outage from its posts inside `tx`. Returns 'deleted' (no posts left), 'legacy' (some post has no stored
  * effect, so the row is left as it is) or 'folded'.
  */
-export async function refoldOutage(tx, outageId) {
+/** Pumping or asset recovery in the notice wins over a reading that treated "restored" as customer supply. */
+function noticeEffect(p) {
+  if (p.post?.serviceType !== 'WATER' || !p.effect) return p.effect;
+  // Once a bulletin is split, its headline describes several assets. An explicit state on
+  // one fault must not be overwritten by recovery words in the shared post text.
+  if ((p.effect.splitFault || p.post?.faultCount > 1) && p.effect.waterState && p.effect.waterState !== 'UNKNOWN') return p.effect;
+  const fromText = waterStateFromText(p.post.noteTweetText || p.post.text);
+  if (fromText.waterState !== 'RECOVERING' || fromText.customerSupply === 'RESTORED') return p.effect;
+  return { ...p.effect, waterState: 'RECOVERING', customerSupply: null, status: 'INVESTIGATING' };
+}
+
+export async function refoldOutage(tx, outageId, now = new Date()) {
   const outage = await tx.outage.findUnique({ where: { id: outageId }, select: { status: true, kind: true, lastUpdateAt: true } });
   if (!outage) return 'deleted';
-  const posts = await tx.outagePost.findMany({ where: { outageId }, select: { postId: true, postedAt: true, faultIndex: true, effect: true } });
+  const posts = await tx.outagePost.findMany({
+    where: { outageId },
+    select: { postId: true, postedAt: true, faultIndex: true, effect: true, post: { select: { serviceType: true, text: true, noteTweetText: true } } },
+  });
   if (!posts.length) {
     await tx.outage.delete({ where: { id: outageId } });
     return 'deleted';
   }
   if (posts.some((p) => !p.effect)) return 'legacy';
 
-  const f = foldEffects(posts);
+  // Older water effects predate splitFault. Other timeline entries from the same source post
+  // identify those multi-asset bulletins without relying on the shared headline text.
+  const waterPostIds = [...new Set(posts.filter((p) => p.post?.serviceType === 'WATER' && !p.effect?.splitFault).map((p) => p.postId))];
+  const siblings = waterPostIds.length ? await tx.outagePost.findMany({ where: { postId: { in: waterPostIds } }, select: { postId: true, faultIndex: true } }) : [];
+  const faultCounts = new Map();
+  for (const p of siblings) faultCounts.set(p.postId, (faultCounts.get(p.postId) ?? new Set()).add(p.faultIndex));
+  const f = foldEffects(posts.map((p) => ({ ...p, effect: noticeEffect({ ...p, post: { ...p.post, faultCount: faultCounts.get(p.postId)?.size ?? 1 } }) })));
   // a sweep that already marked the outage STALE/CLOSED stands unless newer news arrived
   // (except planned work whose corrected window still lies ahead: a wrong date must not leave it closed)
-  const windowAhead = outage.kind === 'PLANNED' && f.schedule?.end && new Date(f.schedule.end) > new Date();
-  const swept = ['STALE', 'CLOSED'].includes(outage.status) && f.lastUpdateAt <= outage.lastUpdateAt && !windowAhead;
+  const windowAhead = outage.kind === 'PLANNED' && f.schedule?.end && new Date(f.schedule.end) > now;
+  const status = keptLifecycleStatus({
+    foldedStatus: f.status,
+    kind: outage.kind,
+    lastUpdateAt: f.lastUpdateAt,
+    now,
+    previousStatus: outage.status,
+    previousLastUpdateAt: outage.lastUpdateAt,
+    windowAhead,
+  });
   await tx.outage.update({
     where: { id: outageId },
     data: {
-      status: swept ? outage.status : f.status,
+      status,
+      waterState: f.waterState,
       startedAt: f.startedAt,
       lastUpdateAt: f.lastUpdateAt,
       restoredAt: f.restoredAt,
@@ -166,7 +249,7 @@ export async function refoldOutage(tx, outageId) {
   for (const nodeId of f.nodeIds) await tx.outageNode.upsert({ where: { outageId_nodeId: { outageId, nodeId } }, create: { outageId, nodeId }, update: {} });
   await tx.outageLocality.deleteMany({ where: { outageId, localityId: { notIn: [...f.localities.keys()] } } });
   for (const [localityId, restored] of f.localities) {
-    await tx.outageLocality.upsert({ where: { outageId_localityId: { outageId, localityId } }, create: { outageId, localityId, restored }, update: { restored } });
+    await tx.outageLocality.upsert({ where: { outageId_localityId: { outageId, localityId } }, create: { outageId, localityId, restored, impactBasis: 'EXPLICIT_SOURCE' }, update: { restored, impactBasis: 'EXPLICIT_SOURCE' } });
   }
   return 'folded';
 }

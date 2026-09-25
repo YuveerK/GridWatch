@@ -1,4 +1,7 @@
 import { readingRevision } from '../../lib/reading-revision.js';
+import { env } from '../../config/env.js';
+import { readerFor } from '../ai/reader-registry.js';
+import { waterFaultItems } from '../ai/readers/water.reader.js';
 
 // Checks that say whether the engine's WORK is complete and consistent, not just that it ran. Pure functions over rows already read
 // from the database, so each rule can be tested on its own and the scripts (npm run batch, npm run audit) stay thin.
@@ -47,7 +50,21 @@ export function checkPostDispositions({ expectedIndices, decisions, outagePosts 
 /** Does an outage effect still match the reading it was built from? null when the effect predates revisions (nothing to compare). */
 export function effectReadingMismatch(effect, currentResult) {
   if (!effect?.reading) return null;
-  return effect.reading !== readingRevision(currentResult);
+  if (effect.reading === readingRevision(currentResult)) return false;
+  // Older water effects predate service-specific fingerprints. When their original coarse hash
+  // still agrees, we cannot prove a mismatch; new effects always carry the stronger hash.
+  if (currentResult?.water_state !== undefined && effect.reading === readingRevision(currentResult, { legacyWater: true })) return null;
+  return true;
+}
+
+/** Each service stores accepted readings under its own prompt version and fault layout. */
+export function acceptedExtraction(post, electricityVersion = env.AI_PROMPT_VERSION) {
+  const version = readerFor(post.serviceType ?? 'ELECTRICITY').promptVersion ?? electricityVersion;
+  return post.extractions?.find((e) => e.promptVersion === version && e.status === 'SUCCEEDED') ?? null;
+}
+
+export function readingFaultItems(post, extraction, electricityFaultItems) {
+  return post.serviceType === 'WATER' ? waterFaultItems(extraction) : electricityFaultItems(extraction);
 }
 
 const HOUR = 3_600_000;
@@ -138,8 +155,8 @@ export async function assessCycle({ prisma, faultItems, promptVersion, trigger, 
     where: { id: { in: coveredIds } },
     orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }],
     select: {
-      id: true, externalId: true, processingStatus: true, text: true, noteTweetText: true,
-      extractions: { where: { promptVersion, status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' }, take: 1 },
+      id: true, externalId: true, serviceType: true, processingStatus: true, text: true, noteTweetText: true,
+      extractions: { where: { status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' } },
       linkDecisions: { select: { faultIndex: true, outcome: true, outageId: true, reason: true } },
       outagePosts: { select: { faultIndex: true, outageId: true, effect: true } },
     },
@@ -149,9 +166,9 @@ export async function assessCycle({ prisma, faultItems, promptVersion, trigger, 
   let expectedFaults = 0;
   let disposed = 0;
   for (const x of rows) {
-    const e = x.extractions[0];
+    const e = acceptedExtraction(x, promptVersion);
     const isReply = /^\s*@\w+/.test(x.noteTweetText || x.text || '');
-    const items = e?.result ? faultItems({ ...e, result: e.result }) : [];
+    const items = e?.result ? readingFaultItems(x, e, faultItems) : [];
     const expectedIndices = isReply ? [0] : items.map((i) => i.faultIndex);
     const verdict = e || isReply ? checkPostDispositions({ expectedIndices, decisions: x.linkDecisions, outagePosts: x.outagePosts }) : { problems: [], excluded: [] };
     expectedFaults += expectedIndices.length;
@@ -159,7 +176,7 @@ export async function assessCycle({ prisma, faultItems, promptVersion, trigger, 
     for (const p of verdict.problems) problems.push({ kind: 'DISPOSITION', postId: x.id, externalId: x.externalId, message: p });
     // judged per fault: a mixed SDC summary can hold linkable faults even when the post as a whole is not an outage post
     const relevanceOf = new Map(items.map((i) => [i.faultIndex, i.extraction.relevance]));
-    for (const d of verdict.excluded) if (['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE'].includes(relevanceOf.get(d.faultIndex))) problems.push({ kind: 'FAULT_LEFT_OUT', postId: x.id, externalId: x.externalId, message: `fault ${d.faultIndex} produced no outage (${d.reason})` });
+    for (const d of verdict.excluded) if (!/unsupported service|system status board/i.test(d.reason ?? '') && ['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE'].includes(relevanceOf.get(d.faultIndex))) problems.push({ kind: 'FAULT_LEFT_OUT', postId: x.id, externalId: x.externalId, message: `fault ${d.faultIndex} produced no outage (${d.reason})` });
     if (e?.result) for (const op of x.outagePosts) if (effectReadingMismatch(op.effect, e.result)) problems.push({ kind: 'STALE_EFFECT', postId: x.id, externalId: x.externalId, message: `the outage entry for fault ${op.faultIndex} was built from a different reading than the current one` });
     if (['NEEDS_REVIEW', 'PROCESSING_ERROR', 'UNPROCESSED'].includes(x.processingStatus)) problems.push({ kind: 'POST_STATE', postId: x.id, externalId: x.externalId, message: `the post is ${x.processingStatus}` });
     posts.push({
@@ -201,6 +218,90 @@ export async function assessCycle({ prisma, faultItems, promptVersion, trigger, 
  *   verdict: UNKNOWN (nothing recorded) | STALE (no recent finished cycle, or the current one is stuck) | the last cycle's verdict,
  *   raised to NEEDS_REVIEW while real (non-sampled) review items are open.
  */
+const ELECTRICITY_TYPES = new Set(['SDC', 'SUBSTATION', 'FEEDER', 'DISTRIBUTOR', 'TRANSFORMER', 'MINI_SUBSTATION', 'CABLE', 'SWITCHING_STATION', 'KIOSK', 'LINE', 'CIRCUIT', 'OTHER']);
+const RECOVERING_WORDS = /pumping (has )?resumed|pumping restored|reservoir improving|levels recovering|levels are improving/i;
+const SUPPLY_RESTORED = /supply (has been |is )?restored|supplying normally|back to normal/i;
+
+/** A post and the outage it joined must share a service. Fatal when they do not. */
+export function crossServiceLinks(rows) {
+  return rows.filter((r) => r.postService && r.outageService && r.postService !== r.outageService);
+}
+
+/** Water equipment must not use an electricity-only type. */
+export function waterNodesWithElectricityTypes(nodes) {
+  return nodes.filter((n) => n.serviceType === 'WATER' && ELECTRICITY_TYPES.has(n.type));
+}
+
+/** Pumping or level recovery must not close the incident unless the notice says customer supply is back. */
+export function recoveringMarkedRestored(posts) {
+  return posts.filter((p) => {
+    const text = `${p.text ?? ''} ${p.cause ?? ''}`;
+    return p.status === 'RESTORED' && RECOVERING_WORDS.test(text) && !SUPPLY_RESTORED.test(text);
+  });
+}
+
+const ZONE_ASSET = new Set(['RESERVOIR', 'WATER_TOWER', 'PUMP_STATION', 'WATER_SYSTEM', 'DIRECT_FEED', 'TREATMENT_WORKS', 'BOOSTER_STATION']);
+
+function asList(value) {
+  return Array.isArray(value) ? value : null;
+}
+
+/**
+ * A wide water incident is legitimate when one or two supply assets share one operating
+ * condition and the suburbs were named by the source. Many unrelated assets, or several
+ * operating conditions, stay suspicious.
+ * Returns 'legitimate', 'suspicious', or null when the incident is not large.
+ */
+export function largeWaterIncidentClass(o, { suburbLimit = 25, nodeLimit = 12 } = {}) {
+  if (o.serviceType && o.serviceType !== 'WATER') return null;
+  const locs = asList(o.localities);
+  const nodes = asList(o.nodes);
+  const localityCount = locs ? locs.length : (o.localities ?? 0);
+  const nodeCount = nodes ? nodes.length : (o.nodes ?? 0);
+  const supply = nodes ? nodes.filter((n) => ZONE_ASSET.has(n.type ?? n.node?.type)) : null;
+  if (localityCount < suburbLimit && nodeCount < nodeLimit) return null;
+  const explicit = locs ? locs.filter((l) => (l.impactBasis ?? 'EXPLICIT_SOURCE') === 'EXPLICIT_SOURCE').length : null;
+  const explicitShare = explicit == null || !localityCount ? null : explicit / localityCount;
+  const states = new Set([...(o.effectStates ?? []), o.waterState].filter(Boolean));
+  const coherent = states.size <= 1;
+  const manyAssets = (supply?.length ?? 0) >= 3 || (supply == null && nodeCount >= nodeLimit);
+  const explicitZone = localityCount >= suburbLimit && explicitShare != null && explicitShare >= 0.8 && coherent && (supply == null || supply.length <= 2);
+  if (explicitZone && !manyAssets) return 'legitimate';
+  if (manyAssets || states.size > 1) return 'suspicious';
+  if (nodeCount >= nodeLimit || localityCount >= suburbLimit) return 'suspicious';
+  return null;
+}
+
+/** Multi-asset or mixed-condition water incidents. A single explicit supply zone is not included. */
+export function giantWaterIncidents(outages, limits) {
+  return outages.filter((o) => largeWaterIncidentClass(o, limits) === 'suspicious');
+}
+
+/** One asset, one condition, suburbs named by the source. Reported, not failed. */
+export function legitimateLargeWaterIncidents(outages, limits) {
+  return outages.filter((o) => largeWaterIncidentClass(o, limits) === 'legitimate');
+}
+
+/** 25 suburbs on an unplanned electricity incident is a likely bad merge. A planned isolation may honestly be that wide. */
+export function largeUnplannedOutages(outages, limit = 25) {
+  return outages.filter((o) => o.serviceType !== 'WATER' && o.kind !== 'PLANNED' && (o.localities?.length ?? 0) >= limit);
+}
+
+/** Compact end-of-audit counts. A hit is a hard failure unless the check is informational. */
+export function auditSummary(checks) {
+  const blank = () => ({ hard: 0, warn: 0, info: 0 });
+  const buckets = { ELECTRICITY: blank(), WATER: blank(), CROSS: blank(), PIPELINE: blank() };
+  for (const c of checks) {
+    const scope = buckets[c.scope] ? c.scope : 'ELECTRICITY';
+    const n = c.hits?.length ?? c.count ?? 0;
+    if (c.kind === 'warn') buckets[scope].warn += n;
+    else if (c.informational) buckets[scope].info += n;
+    else buckets[scope].hard += n;
+  }
+  const failed = Object.values(buckets).some((b) => b.hard);
+  return { buckets, result: failed ? 'FAIL' : 'PASS' };
+}
+
 export async function qualityStatus(prisma, { now = new Date(), staleAfterMinutes = 180, stuckAfterMinutes = 60 } = {}) {
   const [latest, running, open] = await Promise.all([
     prisma.cycleQuality.findFirst({ where: { status: { not: 'RUNNING' } }, orderBy: { finishedAt: 'desc' }, select: { id: true, status: true, startedAt: true, finishedAt: true, summary: true } }),

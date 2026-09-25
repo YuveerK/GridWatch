@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { OutageRow } from '../components/OutageCard.jsx';
-import { CardSkeleton, EmptyState, ErrorState } from '../components/ui.jsx';
+import { CardSkeleton, EmptyState, ErrorState, ServiceIdentity } from '../components/ui.jsx';
 import { prettySdc, plural, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
 import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
@@ -33,35 +33,40 @@ export default function Outages() {
     setParams(next, { replace: true });
   };
 
-  const { param: muniParam, name } = useMunicipality();
+  const { param: muniParam, name, service } = useMunicipality();
+  const water = service === 'WATER';
   const stats = useApi(withMunicipality('/v1/stats', muniParam));
-  const query = withMunicipality(`/v1/outages?status=${tab.status}&sort=${sort}&limit=${PAGE * pages}${sdc ? `&sdc=${encodeURIComponent(sdc)}` : ''}${region ? `&region=${encodeURIComponent(region)}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`, muniParam);
+  const query = withMunicipality(`/v1/outages?status=${tab.status}&sort=${sort}&limit=${PAGE * pages}${!water && sdc ? `&sdc=${encodeURIComponent(sdc)}` : ''}${region ? `&region=${encodeURIComponent(region)}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`, muniParam);
   const { data, error, loading, refreshing } = useApi(query);
   const counts = stats.data?.outagesByStatus ?? {};
   const sdcs = (stats.data?.activeBySdc ?? []).map((s) => s.sdc).sort();
+  if (tab.id === 'planned') return <Navigate to="/planned" replace />;
 
   return (
     <div className="container page">
       <header className="page-head">
-        <h1>Outages</h1>
-        <p>Every outage reported{name ? ` for ${name}` : ''}, grouped so each fault appears once with its full history.</p>
+        <ServiceIdentity service={service} />
+        <h1>{water ? 'Water interruptions' : 'Electricity outages'}</h1>
+        <p>Every {water ? 'water supply incident' : 'electricity outage'} reported{name ? ` for ${name}` : ''}, grouped so each incident appears once with its full history.</p>
       </header>
 
       <div className="toolbar">
         <div className="seg" role="group" aria-label="Filter by status">
-          {TABS.map((t) => (
+          {TABS.map((t) => (t.id === 'planned' ? (
+            <Link key={t.id} to="/planned" className="seg-link">{t.label}{stats.data && <span className="n num">{t.count(counts)}</span>}</Link>
+          ) : (
             <button key={t.id} aria-pressed={t.id === tab.id} onClick={() => set({ status: t.id === 'live' ? '' : t.id })}>
               {t.label}
               {stats.data && <span className="n num">{t.count(counts)}</span>}
             </button>
-          ))}
+          )))}
         </div>
         <div className="filters">
           <input className="field" type="search" placeholder="Filter by suburb or equipment" aria-label="Filter by suburb or equipment" value={q} onChange={(e) => set({ q: e.target.value })} />
-          <select className="field" aria-label="Service centre" value={sdc} onChange={(e) => set({ sdc: e.target.value })}>
+          {!water && <select className="field" aria-label="Service centre" value={sdc} onChange={(e) => set({ sdc: e.target.value })}>
             <option value="">All service centres</option>
             {sdcs.map((s) => <option key={s} value={s}>{prettySdc(s)}</option>)}
-          </select>
+          </select>}
           <select className="field" aria-label="Sort" value={sort} onChange={(e) => set({ sort: e.target.value === 'updated' ? '' : e.target.value })}>
             <option value="updated">Recently updated</option>
             <option value="started">Newest first</option>
@@ -76,7 +81,7 @@ export default function Outages() {
         <div className={refreshing ? 'fading' : undefined}>
           <p className="small muted" style={{ marginBottom: 12 }} aria-live="polite">
             {data.total === 0 ? 'No outages match' : `Showing ${data.data.length} of ${plural(data.total, 'outage')}`}
-            {sdc ? ` in ${prettySdc(sdc)}` : ''}{region ? ` in Region ${region}` : ''}{q ? ` matching “${q}”` : ''}
+            {!water && sdc ? ` in ${prettySdc(sdc)}` : ''}{region ? ` in Region ${region}` : ''}{q ? ` matching “${q}”` : ''}
           </p>
           {data.data.length === 0 ? (
             <EmptyState icon="search" title="Nothing here" action={<button className="btn" onClick={() => set({ status: '', sdc: '', region: '', q: '' })}>Clear filters</button>}>

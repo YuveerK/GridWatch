@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { outageInMunicipalitySql, postUrl } from './municipality-scope.js';
+import { outageInServiceSql, serviceOf } from './service-scope.js';
 
 const DAY = 24 * 3_600_000;
 
@@ -36,7 +37,7 @@ export function classify({ role, effect, prev }) {
 }
 
 /** The latest meaningful updates, newest first. Optionally only for outages that involve one suburb, or of one municipality. */
-export async function latestUpdates({ limit = 30, days = 7, localityId = null, municipality = null, now = new Date() } = {}) {
+export async function latestUpdates({ limit = 30, days = 7, localityId = null, municipality = null, service = 'ELECTRICITY', now = new Date() } = {}) {
   const since = new Date(now.getTime() - days * DAY);
   const lookback = new Date(since.getTime() - 5 * DAY); // earlier posts, so the first one in view has something to be compared with
   const area = localityId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "OutageLocality" ol WHERE ol."outageId" = op."outageId" AND ol."localityId" = ${localityId})` : Prisma.empty;
@@ -49,7 +50,7 @@ export async function latestUpdates({ limit = 30, days = 7, localityId = null, m
     JOIN "Outage" o ON o."id" = op."outageId"
     JOIN "SourcePost" sp ON sp."id" = op."postId"
     LEFT JOIN "PostSummary" ps ON ps."postId" = op."postId" AND ps."faultIndex" = op."faultIndex"
-    WHERE op."postedAt" >= ${lookback} ${area} AND ${outageInMunicipalitySql(municipality)}
+    WHERE op."postedAt" >= ${lookback} ${area} AND ${outageInMunicipalitySql(municipality)} AND ${outageInServiceSql(service)}
     ORDER BY op."outageId", op."postedAt", op."faultIndex", op."postId"`;
 
   const last = new Map(); // outageId -> the previous post's effect
@@ -67,6 +68,7 @@ export async function latestUpdates({ limit = 30, days = 7, localityId = null, m
       outageId: r.outageId,
       title: r.title,
       status: r.status,
+      service: serviceOf(service),
       sdc: r.sdc,
       kind,
       postedAt: r.postedAt,

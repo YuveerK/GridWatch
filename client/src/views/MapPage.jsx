@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import SearchBox from '../components/SearchBox.jsx';
-import { EmptyState, ErrorState, Skeleton, StatusBadge } from '../components/ui.jsx';
+import { EmptyState, ErrorState, ServiceIdentity, Skeleton, StatusBadge } from '../components/ui.jsx';
 import { nice, plural, timeAgo, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
 import { estimateCoverage } from '../lib/coverage.js';
@@ -33,7 +33,8 @@ const boundsOf = (pts) => {
   const ys = pts.map((p) => p.lat);
   return [[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]];
 };
-const HUB_KINDS = [['', 'All'], ['SDC', 'Service centres'], ['SUBSTATION', 'Substations'], ['SWITCHING_STATION', 'Switching stations'], ['DISTRIBUTOR', 'Distributors']];
+const POWER_HUB_KINDS = [['', 'All'], ['SDC', 'Service centres'], ['SUBSTATION', 'Substations'], ['SWITCHING_STATION', 'Switching stations'], ['DISTRIBUTOR', 'Distributors']];
+const WATER_HUB_KINDS = [['', 'All'], ['RESERVOIR', 'Reservoirs'], ['WATER_TOWER', 'Towers'], ['PUMP_STATION', 'Pump stations'], ['PRV', 'Pressure valves'], ['WATER_SYSTEM', 'Systems'], ['DIRECT_FEED', 'Direct feeds'], ['TREATMENT_WORKS', 'Treatment works']];
 
 /**
  * Two views of the same map:
@@ -51,7 +52,9 @@ export default function MapPage() {
   const [kind, setKind] = useState('');
   const [extra, setExtra] = useState(null); // a searched suburb that has no live outage
 
-  const { param: muniParam } = useMunicipality();
+  const { param: muniParam, service } = useMunicipality();
+  const water = service === 'WATER';
+  const hubKinds = water ? WATER_HUB_KINDS : POWER_HUB_KINDS;
   const { utility, single } = useUtility();
   const live = useApi(withMunicipality('/v1/map', muniParam), { refreshMs: 60_000 });
   const hubsApi = useApi(withMunicipality('/v1/map/infrastructure', muniParam), { refreshMs: 120_000 });
@@ -93,7 +96,7 @@ export default function MapPage() {
   const points = useMemo(() => {
     if (mode === 'infrastructure') {
       // only the areas the selected equipment feeds
-      return (node?.places ?? []).filter((p) => servedIds.has(p.id)).map((p) => ({ id: p.id, name: nice(p.name), lat: p.lat, lon: p.lon, tone: p.live ? 'live' : 'plan', groups: [], note: `${node.node.type === 'SDC' ? 'Service area of' : 'Associated with'} ${nice(node.node.name)}${p.live ? ' · outage now' : ''}` }));
+      return (node?.places ?? []).filter((p) => servedIds.has(p.id)).map((p) => ({ id: p.id, name: nice(p.name), lat: p.lat, lon: p.lon, boundary: p.boundary ?? null, tone: p.live ? 'live' : 'plan', groups: [], note: `${node.node.type === 'SDC' ? 'Service area of' : 'Associated with'} ${nice(node.node.name)}${p.live ? ' · outage now' : ''}` }));
     }
     const pts = [...suburbs.values()].map((s) => {
       const dim = sel ? (sel.type === 'outage' ? !s.groups.includes(sel.id) : s.id !== sel.id) : false;
@@ -110,14 +113,17 @@ export default function MapPage() {
     const keep = new Set([hubId, ...(node?.children ?? []).filter((c) => node.node.type === 'SDC' || c.near).map((c) => c.id)]);
     const selected = allHubs.filter((h) => keep.has(h.id));
     if (node?.origin && !selected.some((h) => h.id === hubId)) selected.push({ ...node.node, lon: node.origin[0], lat: node.origin[1], served: node.total, live: node.places.some((p) => p.live) });
-    return selected;
-  }, [mode, allHubs, hubId, node, kind]);
+    const shaped = (node?.places ?? []).some((p) => servedIds.has(p.id) && p.boundary);
+    return shaped ? selected.map(({ boundary, ...hub }) => hub) : selected;
+  }, [mode, allHubs, hubId, node, kind, servedIds]);
 
+  const servedPlaces = useMemo(() => (node?.places ?? []).filter((p) => servedIds.has(p.id)), [node, servedIds]);
+  const hasShapes = servedPlaces.some((p) => p.boundary);
   const coverage = useMemo(() => {
-    if (mode !== 'infrastructure' || !node) return null;
-    return estimateCoverage(node.places.filter((p) => servedIds.has(p.id)));
-  }, [mode, node, servedIds]);
-  const flow = useMemo(() => (mode === 'infrastructure' && !isSdc && node?.origin && node.edges?.length ? { key: `${node.node.id}:${replay}`, origin: node.origin, edges: node.edges, noFit: Boolean(coverage) } : null), [mode, node, replay, isSdc, coverage]);
+    if (mode !== 'infrastructure' || !node || hasShapes) return null;
+    return estimateCoverage(servedPlaces);
+  }, [mode, node, servedPlaces, hasShapes]);
+  const flow = useMemo(() => (mode === 'infrastructure' && !isSdc && node?.origin && node.edges?.length ? { key: `${node.node.id}:${replay}`, origin: node.origin, edges: node.edges, noFit: Boolean(coverage) || hasShapes } : null), [mode, node, replay, isSdc, coverage, hasShapes]);
   const layers = useMemo(() => ({ outages: true, equipment: mode === 'infrastructure' }), [mode]);
 
   // ── moving around
@@ -130,6 +136,7 @@ export default function MapPage() {
 
   // switching municipality re-centres the map on what's actually shown, so picking "City of Tshwane" doesn't
   // leave you staring at an empty Johannesburg-centred view with nothing visible.
+  useEffect(() => { setKind(''); }, [service]);
   const prevMuni = useRef(muniParam);
   useEffect(() => {
     if (prevMuni.current === muniParam) return;
@@ -188,7 +195,13 @@ export default function MapPage() {
     const key = mode === 'infrastructure' ? `view:${hubId ?? 'all'}` : sel ? `${sel.type}:${sel.id}` : 'all';
     if (focused.current === key) return;
     if (mode === 'infrastructure') {
-      if (hubId || !allHubs.length) return; // a chosen piece frames itself with its animation
+      if (hubId) {
+        if (!node) return;
+        focused.current = key;
+        if (hasShapes) zoomTo(servedPlaces);
+        return;
+      }
+      if (!allHubs.length) return;
       focused.current = key;
       zoomTo(allHubs);
     } else if (sel?.type === 'outage' && selectedOutage) {
@@ -199,20 +212,25 @@ export default function MapPage() {
       zoomTo([suburbs.get(sel.id)]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live.data, mode, hubId, allHubs.length, sel?.type, sel?.id, selectedOutage, suburbs]);
+  }, [live.data, mode, hubId, node, hasShapes, servedPlaces, allHubs.length, sel?.type, sel?.id, selectedOutage, suburbs]);
 
   const error = live.error && !live.data;
   const mapped = outages.filter((o) => o.places.length).length;
   const suburbSel = sel?.type === 'suburb' ? suburbs.get(sel.id) ?? (extra?.id === sel.id ? { ...extra, outages: [], tone: 'good' } : null) : null;
-  const hubList = useMemo(() => [...allHubs].filter((h) => !kind || h.type === kind).sort((a, b) => Number(b.live) - Number(a.live) || b.served - a.served).slice(0, 60), [allHubs, kind]);
+  const hubList = useMemo(() => [...allHubs].filter((h) => !kind || h.type === kind).sort((a, b) => Number(b.live) - Number(a.live) || (b.served ?? 0) - (a.served ?? 0) || String(a.name).localeCompare(String(b.name))).slice(0, 60), [allHubs, kind]);
 
   const back = <button type="button" className="link back" onClick={reset}><Icon name="arrow" className="flip" /> {mode === 'infrastructure' ? 'All equipment' : 'All outages'}</button>;
 
   return (
     <div className="container page">
       <header className="page-head">
-        <h1>{mode === 'infrastructure' ? 'Power network map' : 'Outage map'}</h1>
-        <p>{mode === 'infrastructure' ? "Pick a service centre, substation or distributor to highlight its estimated coverage." : "Where power is out right now. Switch to Infrastructure to explore equipment and estimated coverage."}</p>
+        <ServiceIdentity service={service} />
+        <h1>{service === 'WATER' ? (mode === 'infrastructure' ? 'Water network map' : 'Water supply map') : mode === 'infrastructure' ? 'Electricity network map' : 'Electricity outage map'}</h1>
+        <p>{service === 'WATER'
+          ? (mode === 'infrastructure'
+            ? 'Reservoirs, towers and direct feeds. Selecting one shades the suburbs it supplies.'
+            : 'Where Johannesburg Water has reported a supply problem. A recovering system is not the same as supply restored.')
+          : (mode === 'infrastructure' ? 'Pick a service centre, substation or distributor to highlight the suburbs it supplies.' : 'Where power is out right now. Switch to Infrastructure to explore equipment and the suburbs it supplies.')}</p>
       </header>
 
       {error && <ErrorState error={live.error} />}
@@ -233,6 +251,7 @@ export default function MapPage() {
             <div className="map-stage">
               <Suspense fallback={<MapFallback height={580} />}>
                 <MapView
+                  key={service}
                   points={points}
                   hubs={hubs}
                   flow={flow}
@@ -244,7 +263,7 @@ export default function MapPage() {
                   onPickHub={pickHub}
                   onClear={() => (mode === 'outages' ? go({}) : hubId && go({ view: 'infrastructure' }))}
                   height={580}
-                  label={mode === 'infrastructure' ? `Map of ${utility}'s facilities and estimated coverage` : 'Map of suburbs with power outages'}
+                  label={mode === 'infrastructure' ? `Map of ${utility}'s facilities and estimated coverage` : `Map of suburbs with ${service === 'WATER' ? 'water interruptions' : 'power outages'}`}
                 />
               </Suspense>
               {hubId && !node && !hubData.error && <div className="map-toast">Loading coverage…</div>}
@@ -253,9 +272,9 @@ export default function MapPage() {
             </div>
             <div className="map-foot">
               {mode === 'outages' ? (
-                <Legend items={[['live', 'Power out'], ['partial', 'Partly restored'], ['good', 'Power back'], ['live', 'Likely area', 'hollow']]} />
+                <Legend items={water ? [['live', 'No supply'], ['partial', 'Partly restored'], ['good', 'Supply back'], ['live', 'Likely area', 'hollow']] : [['live', 'Power out'], ['partial', 'Partly restored'], ['good', 'Power back'], ['live', 'Likely area', 'hollow']]} />
               ) : (
-                <Legend items={[['plan', 'Equipment / service centre', 'diamond'], ['live', 'Outage now', 'diamond'], ...(coverage ? [['plan', 'Estimated coverage', 'coverage']] : [])]} />
+                <Legend items={[['plan', water ? 'Supply asset' : 'Equipment / service centre', 'diamond'], ['live', water ? 'Interruption now' : 'Outage now', 'diamond'], ...(hasShapes ? [['plan', 'Suburb it supplies']] : []), ...(coverage ? [['plan', 'Estimated coverage', 'coverage']] : [])]} />
               )}
               <span className="small faint">Map © OpenStreetMap contributors</span>
             </div>
@@ -274,7 +293,7 @@ export default function MapPage() {
                         <span className="t">{nice(o.title)}</span>
                         <span className="small muted clamp2">{o.latest ?? 'Waiting for the next update'}</span>
                         <span className="row small" style={{ gap: 8 }}>
-                          <StatusBadge status={o.status} />
+                          <StatusBadge status={o.status} service={o.service} />
                           <span className="faint">{timeAgo(o.lastUpdateAt)}</span>
                           {o.places.length === 0 && <span className="faint">not on the map</span>}
                         </span>
@@ -289,7 +308,7 @@ export default function MapPage() {
               <div className="card card-pad stack" style={{ gap: 14 }}>
                 {back}
                 <div>
-                  <StatusBadge status={selectedOutage.status} />
+                  <StatusBadge status={selectedOutage.status} service={selectedOutage.service} />
                   <h2 className="panel-title">{nice(selectedOutage.title)}</h2>
                   <div className="small faint">Updated {timeAgo(selectedOutage.lastUpdateAt)}{selectedOutage.sdc ? ` · ${nice(selectedOutage.sdc)}` : ''}</div>
                 </div>
@@ -323,7 +342,7 @@ export default function MapPage() {
                       <li key={o.id}>
                         <button type="button" className="map-item" onClick={() => pickOutage(o.id)}>
                           <span className="t">{nice(o.title)}</span>
-                          <span className="row small" style={{ gap: 8 }}><StatusBadge status={o.status} /><span className="faint">{timeAgo(o.lastUpdateAt)}</span></span>
+                          <span className="row small" style={{ gap: 8 }}><StatusBadge status={o.status} service={o.service} /><span className="faint">{timeAgo(o.lastUpdateAt)}</span></span>
                         </button>
                       </li>
                     ))}
@@ -339,7 +358,7 @@ export default function MapPage() {
                 <div className="card-pad" style={{ paddingBottom: 10 }}>
                   <div className="small muted" style={{ marginBottom: 8 }}>{plural(allHubs.length, 'facility', 'facilities')} with mapped suburbs. Outages first.</div>
                   <div className="seg" role="group" aria-label="Type of equipment">
-                    {HUB_KINDS.map(([k, label]) => <button key={k || 'all'} type="button" aria-pressed={kind === k} onClick={() => setKind(k)}>{label}</button>)}
+                    {hubKinds.map(([k, label]) => <button key={k || 'all'} type="button" aria-pressed={kind === k} onClick={() => setKind(k)}>{label}</button>)}
                   </div>
                 </div>
                 <ul className="rows">
@@ -368,7 +387,7 @@ export default function MapPage() {
                       <p className="small muted">{plural(node.total, 'associated area')}. {isSdc ? 'The shading estimates its service area.' : 'The shading estimates coverage; glowing lines show reported connections.'}</p>
                     </div>
                     {flow && <button type="button" className="btn small" onClick={() => setReplay((n) => n + 1)}><Icon name="refresh" /> Replay animation</button>}
-                    <p className="small faint">{coverage ? `Estimated from ${plural(coverage.count, 'mapped suburb')}. Shading may include unserved areas and miss others; it is not an official ${isSdc ? 'service' : 'electricity supply'} boundary.` : 'Coverage is unavailable because no associated suburbs have map coordinates.'}</p>
+                    <p className="small faint">{coverage ? `Estimated from ${plural(coverage.count, 'mapped suburb')}. Shading may include unserved areas and miss others; it is not an official ${isSdc ? 'service' : service === 'WATER' ? 'water supply' : 'electricity supply'} boundary.` : 'Coverage is unavailable because no associated suburbs have map coordinates.'}</p>
                     {node.children.length > 0 && (
                       <div>
                         <div className="panel-h">{isSdc ? 'Equipment in this service area' : 'Circuits under it'}</div>

@@ -1,0 +1,29 @@
+[
+  {
+    "postId": "d17309e6-79bc-44e1-8831-68f7d3aa213d",
+    "externalId": "2098125777971671387",
+    "note": "10 Sep Commando status. One upstream constraint, three downstream conditions. Each fault is its own incident.",
+    "faults": [
+      { "water_state": "LOW", "primary": "Crosby Reservoir", "localities": [], "decision": "NEW" },
+      { "water_state": "RECOVERING", "primary": "Brixton 1", "localities": [], "decision": "NEW" },
+      { "water_state": "BYPASS", "primary": "Hursthill 1", "localities": [], "decision": "NEW" }
+    ]
+  },
+  {
+    "postId": "6febb344-7367-42be-97fc-03937926eb90",
+    "externalId": "2099487089465172357",
+    "note": "14 Sep Commando status. Crosby still supplying, Brixton outlets closed, Hursthill on bypass.",
+    "faults": [
+      { "water_state": "LOW", "primary": "Crosby Reservoir", "localities": [], "decision": "NEW" },
+      { "water_state": "NO_SUPPLY", "primary": "Brixton 1 Reservoir", "localities": [], "decision": "NEW" },
+      { "water_state": "LOW_PRESSURE", "primary": "Hursthill 1 Reservoir", "localities": [], "decision": "NEW" }
+    ]
+  },
+  {
+    "postId": "c19dc79c-c520-4895-9792-417991d8cf1d",
+    "externalId": "2100212024043024579",
+    "note": "16 Sep Midrand board. Image lists reservoirs supplying adequately or fairly. Stored reading names nothing, so it is not an incident.",
+    "faults": [],
+    "decision": "IGNORED"
+  }
+]

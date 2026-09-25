@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { postInMunicipalitySql, postUrl } from './municipality-scope.js';
+import { serviceOf } from './service-scope.js';
 
 const DAY = 24 * 3_600_000;
 const SAST_HOURS = 2; // Johannesburg has no daylight saving
@@ -69,9 +70,9 @@ export function buildDaily(rows, { days, now = new Date() }) {
 }
 
 /** How many posts the tracked utilities (or one municipality's) made each day (Johannesburg time), by kind, over the last `days` days including today. */
-export async function dailyPostCounts({ days = 14, municipality = null, now = new Date() } = {}) {
+export async function dailyPostCounts({ days = 14, municipality = null, service = 'ELECTRICITY', now = new Date() } = {}) {
   const { start } = sastDayRange(sastDay(new Date(now.getTime() - (days - 1) * DAY)));
-  const scope = postInMunicipalitySql(municipality);
+  const scope = Prisma.sql`${postInMunicipalitySql(municipality)} AND sp."serviceType" = ${serviceOf(service)}::"ServiceType"`;
   const [rows, first] = await Promise.all([
     prisma.$queryRaw`
       SELECT to_char(sp."publishedAt" + interval '2 hours', 'YYYY-MM-DD') AS day, sp."processingStatus"::text AS ps, pe.relevance AS rel, (left(coalesce(sp."noteTweetText", sp."text"), 1) = '@') AS reply, count(*)::int AS n
@@ -102,8 +103,8 @@ export const readable = (t, max = 360) => {
  * Posts, newest first, optionally for one Johannesburg day, one kind, and/or containing some text.
  * `total` is the number matching the filters (not just this page), so a screen can say "48 posts".
  */
-export async function listPosts({ from = null, to = null, type = null, q = null, limit = 30, offset = 0, municipality = null } = {}) {
-  const parts = [Prisma.sql`left(coalesce(sp."noteTweetText", sp."text"), 1) <> '@'`]; // customer replies are left out (see CATEGORIES)
+export async function listPosts({ from = null, to = null, type = null, q = null, limit = 30, offset = 0, municipality = null, service = 'ELECTRICITY' } = {}) {
+  const parts = [Prisma.sql`left(coalesce(sp."noteTweetText", sp."text"), 1) <> '@'`, Prisma.sql`sp."serviceType" = ${serviceOf(service)}::"ServiceType"`]; // customer replies are left out (see CATEGORIES)
   if (municipality) parts.push(postInMunicipalitySql(municipality));
   if (from) parts.push(Prisma.sql`sp."publishedAt" >= ${utc(sastDayRange(from).start)}`);
   if (to) parts.push(Prisma.sql`sp."publishedAt" < ${utc(sastDayRange(to).end)}`);
@@ -129,7 +130,7 @@ export async function listPosts({ from = null, to = null, type = null, q = null,
     prisma.$queryRaw`
       SELECT t."id", t."externalId", t."sourceAccount", t."publishedAt", t.body, t.kind,
         (SELECT coalesce(json_agg(json_build_object('id', o."id", 'title', o."title", 'status', o."status"::text) ORDER BY o."startedAt"), '[]'::json)
-           FROM (SELECT DISTINCT "outageId" FROM "OutagePost" WHERE "postId" = t."id") x JOIN "Outage" o ON o."id" = x."outageId") AS outages
+           FROM (SELECT DISTINCT "outageId" FROM "OutagePost" WHERE "postId" = t."id") x JOIN "Outage" o ON o."id" = x."outageId" AND o."serviceType" = ${serviceOf(service)}::"ServiceType") AS outages
       ${base}
       ORDER BY t."publishedAt" DESC, t."id" ASC
       LIMIT ${limit} OFFSET ${offset}`,

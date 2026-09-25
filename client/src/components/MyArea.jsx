@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { nice, useApi } from '../lib/api.js';
 import { useMyArea } from '../lib/hooks.js';
-import { useUtility } from '../lib/municipality.jsx';
+import { useMunicipality, useUtility } from '../lib/municipality.jsx';
 import { AnswerCard, computeAnswer } from './AreaAnswer.jsx';
 import Icon from './Icon.jsx';
 import SearchBox from './SearchBox.jsx';
@@ -13,7 +13,9 @@ import { Skeleton } from './ui.jsx';
  */
 export default function MyArea({ banner }) {
   const { area, setArea, clear } = useMyArea();
-  const { data, loading } = useApi(area ? `/v1/localities/${area.id}/outages` : null, { refreshMs: 60_000 });
+  const { service } = useMunicipality();
+  const water = service === 'WATER';
+  const { data, loading } = useApi(area ? `/v1/localities/${area.id}/outages?service=${service}` : null, { refreshMs: 60_000 });
   const who = useUtility(data?.municipality?.code);
 
   if (!area) {
@@ -21,7 +23,7 @@ export default function MyArea({ banner }) {
       return (
         <div className="area-banner">
           <span className="row" style={{ gap: 10, fontWeight: 500 }}><Icon name="star" /> Save your area</span>
-          <span className="muted small area-hint">Pick your suburb once and this strip will tell you straight away if your power is out.</span>
+          <span className="muted small area-hint">Pick your suburb once to see if {water ? 'water supply is affected' : 'your power is out'}.</span>
           <div className="area-pick"><SearchBox compact suburbsOnly inline placeholder="Find your suburb…" onPickSuburb={setArea} /></div>
         </div>
       );
@@ -34,7 +36,7 @@ export default function MyArea({ banner }) {
           </div>
           <div>
             <h2 style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-0.015em' }}>Save your area</h2>
-            <p className="muted small">Pick your suburb once and this page will tell you straight away if your power is out.</p>
+            <p className="muted small">Pick your suburb once to see if {water ? 'water supply is affected' : 'your power is out'}.</p>
           </div>
         </div>
         <SearchBox compact suburbsOnly inline placeholder="Find your suburb…" onPickSuburb={setArea} />
@@ -52,7 +54,7 @@ export default function MyArea({ banner }) {
     );
   }
 
-  const answer = computeAnswer(nice(area.name), data.data, data.possible, area.id, who);
+  const answer = computeAnswer(nice(area.name), data.data, data.possible, area.id, who, service);
   if (banner) {
     return (
       <AnswerCard

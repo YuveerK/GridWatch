@@ -1,7 +1,8 @@
 import { prisma } from '../../db/prisma.js';
-import { ALL_CATEGORIES, categorize, categoryLabel } from '../../lib/fault-category.js';
+import { ALL_CATEGORIES, ALL_WATER_CATEGORIES, categorize, categorizeWater, categoryLabel } from '../../lib/fault-category.js';
 import { isLong } from '../../lib/durations.js';
 import { UTILITIES, outageInMunicipality } from './municipality-scope.js';
+import { outageInService } from './service-scope.js';
 
 const HOUR = 3_600_000;
 const MIN_FOR_MEDIAN = 3; // fewer than this is too few to call anything "typical"
@@ -20,7 +21,8 @@ const startOfDay = (date) => Date.parse(`${date}T00:00:00+02:00`); // Johannesbu
  * A named service centre always wins. A municipality whose posts name none (UTILITIES[code].areas === 'region') groups by
  * the region most of its suburbs sit in, lowest code on a tie.
  */
-export function areaOf({ sdcName = null, municipality = null, regions = [] }) {
+export function areaOf({ sdcName = null, municipality = null, regions = [], assetName = null, assetId = null }) {
+  if (assetName) return { area: assetName, filter: null, href: assetId ? `/network/${assetId}` : null };
   if (sdcName) return { area: sdcName, filter: { sdc: sdcName } };
   const u = UTILITIES[municipality];
   if (u?.areas !== 'region') return { area: 'Unknown', filter: null };
@@ -36,12 +38,12 @@ export function areaOf({ sdcName = null, municipality = null, regions = [] }) {
  *   equipment: [{ outageId, nodeId, name, type }]
  *   earliest:  when the oldest outage in the whole database began, so the page can say how much history it stands on
  */
-export function buildInsights({ outages: everything, equipment = [], days, now = new Date(), earliest = null }) {
+export function buildInsights({ outages: everything, equipment = [], days, now = new Date(), earliest = null, categorize: categorizeFn = categorize, categories = ALL_CATEGORIES }) {
   // whole Johannesburg days, today included, so the totals cover exactly the days the trend shows
   const dayList = Array.from({ length: days }, (_, k) => dayOf(new Date(now.getTime() - (days - 1 - k) * 24 * HOUR)));
   const windowStart = startOfDay(dayList[0]);
   const outages = everything.filter((o) => new Date(o.startedAt).getTime() >= windowStart);
-  const cat = new Map(everything.map((o) => [o.id, categorize(o.cause)]));
+  const cat = new Map(everything.map((o) => [o.id, categorizeFn(o.cause)]));
   const total = outages.length;
 
   const counts = new Map();
@@ -56,7 +58,7 @@ export function buildInsights({ outages: everything, equipment = [], days, now =
       wordings.set(c, w);
     }
   }
-  const causes = ALL_CATEGORIES.map((c) => ({
+  const causes = categories.map((c) => ({
     id: c.id,
     label: c.label,
     count: counts.get(c.id) ?? 0,
@@ -165,9 +167,9 @@ export function buildInsights({ outages: everything, equipment = [], days, now =
   };
 }
 
-export async function insights({ days = 14, municipality = null, now = new Date() } = {}) {
+export async function insights({ days = 14, municipality = null, service = 'ELECTRICITY', now = new Date() } = {}) {
   const since = new Date(now.getTime() - Math.max(days, 14) * 24 * HOUR); // at least two weeks back, for the week-on-week comparison
-  const scoped = outageInMunicipality(municipality);
+  const scoped = { ...outageInMunicipality(municipality), ...outageInService(service) };
   const oldest = await prisma.outage.aggregate({ where: { kind: 'UNPLANNED', ...scoped }, _min: { startedAt: true } });
   const outages = await prisma.outage.findMany({
     where: { kind: 'UNPLANNED', startedAt: { gte: since }, ...scoped },
@@ -182,5 +184,20 @@ export async function insights({ days = 14, municipality = null, now = new Date(
     ? await prisma.outageNode.findMany({ where: { outageId: { in: outages.map((o) => o.id) }, node: { type: { notIn: ['SDC', 'CABLE', 'LINE', 'OTHER'] } } }, select: { outageId: true, nodeId: true, node: { select: { name: true, type: true } } } })
     : [];
   const equipment = links.map((l) => ({ outageId: l.outageId, nodeId: l.nodeId, name: l.node.name, type: l.node.type }));
-  return buildInsights({ outages, equipment, days, now, earliest: oldest._min.startedAt });
+  const water = service === 'WATER';
+  if (water) {
+    const prefer = ['RESERVOIR', 'WATER_TOWER', 'WATER_SYSTEM', 'PUMP_STATION', 'PRV', 'DIRECT_FEED', 'TREATMENT_WORKS', 'BOOSTER_STATION'];
+    const rank = (type) => { const i = prefer.indexOf(type); return i === -1 ? 99 : i; };
+    const byOutage = new Map();
+    for (const e of equipment) {
+      if (rank(e.type) >= 99) continue;
+      const current = byOutage.get(e.outageId);
+      if (!current || rank(e.type) < rank(current.type)) byOutage.set(e.outageId, e);
+    }
+    for (const o of outages) {
+      const asset = byOutage.get(o.id);
+      if (asset) { o.assetName = asset.name; o.assetId = asset.nodeId; }
+    }
+  }
+  return buildInsights({ outages, equipment, days, now, earliest: oldest._min.startedAt, categorize: water ? categorizeWater : categorize, categories: water ? ALL_WATER_CATEGORIES : ALL_CATEGORIES });
 }

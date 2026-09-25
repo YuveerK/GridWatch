@@ -4,7 +4,7 @@ import { firstSentence, fmtDay, nice, plural, prettySdc, statusMeta, timeAgo } f
 import { isNewSince } from '../lib/newness.js';
 import { useRefresh } from '../lib/refresh.js';
 import Icon from './Icon.jsx';
-import { Chip, Meter, StatusBadge } from './ui.jsx';
+import { Chip, Meter, ServiceIdentity, StatusBadge } from './ui.jsx';
 
 export function scheduleLabel(s) {
   if (!s) return null;
@@ -45,14 +45,14 @@ function span(o) {
 
 /** One outage as a line in a ledger: status, what is happening, who reported it, how long, when last heard. */
 export function OutageRow({ outage: o }) {
-  const m = statusMeta(o.status);
+  const m = statusMeta(o.status, o.service);
   const { lastBatch } = useRefresh();
   const fresh = isNewSince(o.latest?.ingestedAt, lastBatch);
   const headline = o.latest?.summary || firstSentence(o.cause ? `Cause: ${o.cause}.` : '');
   const areas = (o.localities ?? []).map((l) => nice(l.canonicalName));
   return (
     <li className={`lrow tone-${m.tone}`}>
-      <div className="lrow-status"><StatusBadge status={o.status} kind={o.kind} /></div>
+      <div className="lrow-status"><ServiceIdentity service={o.service} compact /><StatusBadge status={o.status} kind={o.kind} service={o.service} /></div>
       <div className="lrow-main">
         <h3><Link to={`/outages/${o.id}`} className="stretch">{nice(o.title)}</Link>{fresh && <span className="new-pill" title="Updated in the latest fetch">New</span>}</h3>
         {headline && <p className="lrow-sum">{headline}</p>}
@@ -67,7 +67,7 @@ export function OutageRow({ outage: o }) {
 }
 
 export default function OutageCard({ outage: o, compact }) {
-  const m = statusMeta(o.status);
+  const m = statusMeta(o.status, o.service);
   const { lastBatch } = useRefresh();
   const fresh = isNewSince(o.latest?.ingestedAt, lastBatch);
   const areas = o.localities ?? [];
@@ -78,9 +78,9 @@ export default function OutageCard({ outage: o, compact }) {
   const planned = o.kind === 'PLANNED' && o.scheduled;
 
   return (
-    <article className={`card ocard tone-${m.tone}${compact ? ' compact' : ''}`}>
+    <article className={`card ocard tone-${m.tone} service-${o.service === 'WATER' ? 'water' : 'power'}${compact ? ' compact' : ''}`}>
       <div className="row between" style={{ gap: 8 }}>
-        <StatusBadge status={o.status} kind={o.kind} />
+        <span className="outage-card-status"><ServiceIdentity service={o.service} compact /><StatusBadge status={o.status} kind={o.kind} service={o.service} /></span>
         <span className="row small faint" style={{ gap: 8 }}>{fresh && <span className="new-pill" title="Updated in the latest fetch">New update</span>}{o.sdc ? prettySdc(o.sdc) : ''}</span>
       </div>
       <h3><Link to={`/outages/${o.id}`} className="stretch">{nice(o.title)}</Link></h3>

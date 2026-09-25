@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkPostDispositions, effectReadingMismatch, ingestionProblems, plannedOverdue, stuckProcessing } from '../../src/modules/processing/quality.js';
+import { auditSummary, checkPostDispositions, crossServiceLinks, effectReadingMismatch, giantWaterIncidents, ingestionProblems, largeUnplannedOutages, largeWaterIncidentClass, legitimateLargeWaterIncidents, plannedOverdue, recoveringMarkedRestored, stuckProcessing, waterNodesWithElectricityTypes } from '../../src/modules/processing/quality.js';
 import { readingRevision } from '../../src/lib/reading-revision.js';
 
 const linked = (i, outageId = `o${i}`) => ({ faultIndex: i, outcome: 'LINKED', outageId, reason: 'shared node' });
@@ -53,6 +53,11 @@ describe('E10/E11: an effect built from another reading is found', () => {
     expect(effectReadingMismatch({ reading: readingRevision(r) }, { ...r, status: 'RESTORED' })).toBe(true);
     expect(effectReadingMismatch({}, r)).toBeNull();
     expect(effectReadingMismatch(null, r)).toBeNull();
+  });
+  it('treats an unchanged old water fingerprint as unknown until that effect is rebuilt', () => {
+    const water = { ...r, water_state: 'NO_SUPPLY', customer_supply: null };
+    expect(effectReadingMismatch({ reading: readingRevision(water, { legacyWater: true }) }, water)).toBeNull();
+    expect(effectReadingMismatch({ reading: readingRevision(water) }, { ...water, water_state: 'RECOVERING' })).toBe(true);
   });
 });
 
@@ -112,5 +117,68 @@ describe('posts waiting for a person', () => {
   it('a routine sampled spot-check does not count; with no items only NEEDS_REVIEW posts wait', () => {
     expect(awaitingReview(posts, [{ postId: 'c', sampled: true }])).toEqual(['b']);
     expect(awaitingReview(posts)).toEqual(['b']);
+  });
+});
+
+describe('Johannesburg Water bootstrap checks', () => {
+  it('flags a water post joined to an electricity outage', () => {
+    expect(crossServiceLinks([{ postService: 'WATER', outageService: 'ELECTRICITY' }])).toHaveLength(1);
+    expect(crossServiceLinks([{ postService: 'WATER', outageService: 'WATER' }])).toHaveLength(0);
+  });
+  it('flags a reservoir stored as a substation', () => {
+    expect(waterNodesWithElectricityTypes([{ serviceType: 'WATER', type: 'SUBSTATION' }])).toHaveLength(1);
+    expect(waterNodesWithElectricityTypes([{ serviceType: 'WATER', type: 'RESERVOIR' }])).toHaveLength(0);
+  });
+  it('does not treat pumping resumed as customer restoration', () => {
+    expect(recoveringMarkedRestored([{ status: 'RESTORED', text: 'Pumping has resumed. Levels are improving.' }])).toHaveLength(1);
+    expect(recoveringMarkedRestored([{ status: 'RESTORED', text: 'Pumping has resumed and supply has been restored.' }])).toHaveLength(0);
+  });
+  it('does not fail a large explicit supply zone of one water asset', () => {
+    const zone = {
+      serviceType: 'WATER',
+      waterState: 'LOW',
+      nodes: [{ type: 'RESERVOIR' }, { type: 'RESERVOIR' }],
+      localities: Array.from({ length: 25 }, () => ({ impactBasis: 'EXPLICIT_SOURCE' })),
+    };
+    expect(largeWaterIncidentClass(zone)).toBe('legitimate');
+    expect(giantWaterIncidents([zone])).toHaveLength(0);
+    expect(legitimateLargeWaterIncidents([zone])).toHaveLength(1);
+  });
+  it('still fails a water incident that merged unrelated assets', () => {
+    const merged = {
+      serviceType: 'WATER',
+      waterState: 'LOW',
+      effectStates: ['LOW', 'NORMAL'],
+      nodes: ['RESERVOIR', 'RESERVOIR', 'RESERVOIR', 'RESERVOIR', 'RESERVOIR', 'RESERVOIR', 'RESERVOIR', 'RESERVOIR', 'WATER_TOWER', 'WATER_TOWER', 'DIRECT_FEED', 'WATER_SYSTEM'].map((type) => ({ type })),
+      localities: [],
+    };
+    expect(largeWaterIncidentClass(merged)).toBe('suspicious');
+    expect(giantWaterIncidents([merged])).toHaveLength(1);
+  });
+  it('treats a wide planned isolation as legitimate and a wide unplanned merge as suspicious', () => {
+    const planned = { kind: 'PLANNED', localities: Array.from({ length: 30 }, (_, i) => i) };
+    const unplanned = { kind: 'UNPLANNED', localities: Array.from({ length: 30 }, (_, i) => i) };
+    expect(largeUnplannedOutages([planned])).toHaveLength(0);
+    expect(largeUnplannedOutages([unplanned])).toHaveLength(1);
+    expect(largeUnplannedOutages([{ serviceType: 'WATER', kind: 'UNPLANNED', localities: Array.from({ length: 30 }, (_, i) => i) }])).toHaveLength(0);
+  });
+});
+
+describe('audit summary', () => {
+  it('counts hard failures, warnings and notes by service', () => {
+    const summary = auditSummary([
+      { scope: 'ELECTRICITY', hits: [{}, {}] },
+      { scope: 'ELECTRICITY', informational: true, hits: [{}] },
+      { scope: 'WATER', hits: [{}] },
+      { scope: 'WATER', informational: true, hits: [{}, {}, {}] },
+      { scope: 'WATER', kind: 'warn', hits: [{}] },
+      { scope: 'CROSS', hits: [] },
+      { scope: 'PIPELINE', hits: [{ id: 'stuck' }] },
+    ]);
+    expect(summary.buckets.ELECTRICITY).toEqual({ hard: 2, warn: 0, info: 1 });
+    expect(summary.buckets.WATER).toEqual({ hard: 1, warn: 1, info: 3 });
+    expect(summary.buckets.CROSS.hard).toBe(0);
+    expect(summary.buckets.PIPELINE.hard).toBe(1);
+    expect(summary.result).toBe('FAIL');
   });
 });

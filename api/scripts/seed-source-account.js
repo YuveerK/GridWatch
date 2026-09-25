@@ -17,6 +17,8 @@ const handle = flag('handle');
 const externalId = flag('external-id');
 const municipalityCode = flag('municipality-code');
 const municipalityName = flag('municipality-name');
+const serviceType = (flag('service') ?? 'ELECTRICITY').toUpperCase();
+const active = flag('active') !== 'false';
 
 if (!handle || !externalId || !municipalityCode || !municipalityName) {
   console.error('Usage: node scripts/seed-source-account.js --handle <X handle> --external-id <numeric X user id> --municipality-code <CODE> --municipality-name "<Name>"');
@@ -31,8 +33,8 @@ const municipality = await prisma.municipality.upsert({
 
 const account = await prisma.sourceAccount.upsert({
   where: { externalId },
-  create: { id: randomUUID(), platform: 'X', externalId, displayName: handle, municipalityId: municipality.id, updatedAt: new Date() },
-  update: { displayName: handle, municipalityId: municipality.id, active: true },
+  create: { id: randomUUID(), platform: 'X', externalId, displayName: handle, municipalityId: municipality.id, serviceType, active, updatedAt: new Date() },
+  update: { displayName: handle, municipalityId: municipality.id, serviceType, active },
 });
 
 console.log({ municipality, account });

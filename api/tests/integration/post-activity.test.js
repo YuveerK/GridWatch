@@ -16,12 +16,12 @@ afterAll(async () => {
 const get = (path) => fetch(`${base}${path}`);
 
 let n = 0;
-async function post(iso, text, { status = 'RELEVANT', relevance = 'OUTAGE', outage = null } = {}) {
+async function post(iso, text, { status = 'RELEVANT', relevance = 'OUTAGE', outage = null, service = 'ELECTRICITY' } = {}) {
   n += 1;
-  const p = await prisma.sourcePost.create({ data: { id: `pa${n}`, platform: 'X', sourceAccount: 'CityPowerJhb', externalId: String(5000 + n), text, publishedAt: new Date(iso), updatedAt: new Date(iso), processingStatus: status } });
+  const p = await prisma.sourcePost.create({ data: { id: `pa${n}`, platform: 'X', sourceAccount: 'CityPowerJhb', externalId: String(5000 + n), text, publishedAt: new Date(iso), updatedAt: new Date(iso), processingStatus: status, serviceType: service } });
   if (relevance) await prisma.postExtraction.create({ data: { postId: p.id, promptVersion: 'v', model: 'm', status: 'SUCCEEDED', relevance } });
   if (outage) {
-    const o = await prisma.outage.create({ data: { title: outage, startedAt: new Date(iso), lastUpdateAt: new Date(iso) } });
+    const o = await prisma.outage.create({ data: { title: outage, startedAt: new Date(iso), lastUpdateAt: new Date(iso), serviceType: service } });
     await prisma.outagePost.create({ data: { outageId: o.id, postId: p.id, role: 'OPENED', postedAt: new Date(iso) } });
   }
   return p;
@@ -50,6 +50,27 @@ describe('GET /v1/posts/daily', () => {
   it('rejects a silly window', async () => {
     expect((await get('/v1/posts/daily?days=0')).status).toBe(400);
     expect((await get('/v1/posts/daily?days=500')).status).toBe(400);
+  });
+});
+
+describe('service-specific resident feeds', () => {
+  it('keeps water posts and suburb incidents out of electricity views and vice versa', async () => {
+    await post('2026-09-21T10:00:00Z', 'Reservoir supply interrupted', { outage: 'Reservoir interruption', service: 'WATER' });
+    const powerPosts = await (await get('/v1/posts')).json();
+    const waterPosts = await (await get('/v1/posts?service=WATER')).json();
+    expect(powerPosts.total).toBe(4);
+    expect(waterPosts.data.map((p) => p.text)).toEqual(['Reservoir supply interrupted']);
+    expect((await (await get('/v1/posts/daily?days=90&service=WATER')).json()).total).toBe(1);
+    expect((await (await get('/v1/updates?service=WATER&days=30')).json()).data.map((u) => u.title)).toEqual(['Reservoir interruption']);
+
+    await prisma.locality.create({ data: { id: 'service-area', canonicalName: 'Test Area', normalizedName: 'test area', updatedAt: new Date() } });
+    const incidents = await prisma.outage.findMany({ where: { title: { in: ['Fort (Hillbrow)', 'Reservoir interruption'] } } });
+    await prisma.outageLocality.createMany({ data: incidents.map((o) => ({ outageId: o.id, localityId: 'service-area' })) });
+    const powerArea = await (await get('/v1/localities/service-area/outages')).json();
+    const waterArea = await (await get('/v1/localities/service-area/outages?service=WATER')).json();
+    expect(powerArea.data.map((o) => o.title)).toEqual(['Fort (Hillbrow)']);
+    expect(waterArea.data.map((o) => o.title)).toEqual(['Reservoir interruption']);
+    expect((await (await get('/v1/localities/service-area/history?service=WATER')).json()).total).toBe(1);
   });
 });
 

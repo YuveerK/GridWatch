@@ -20,7 +20,8 @@ function Marked({ text, q }) {
 
 /** How many posts the utility in scope made each day, by kind; pick a day or a kind, or search, to read the posts themselves. */
 export default function PostActivity({ days }) {
-  const { param: muniParam } = useMunicipality();
+  const { param: muniParam, service } = useMunicipality();
+  const water = service === 'WATER';
   const { utility } = useUtility();
   const { data, error, loading } = useApi(withMunicipality(`/v1/posts/daily?days=${days}`, muniParam));
   const [type, setType] = useState(null);
@@ -76,7 +77,7 @@ export default function PostActivity({ days }) {
   if (loading && !data) return <Skeleton h={320} />;
   if (!data) return null;
 
-  const cats = data.categories;
+  const cats = data.categories.map((c) => water && c.id === 'OUTAGE' ? { ...c, label: 'New interruptions' } : water && c.id === 'SUMMARY' ? { ...c, label: 'Supply summaries' } : c);
   const catLabel = Object.fromEntries(cats.map((c) => [c.id, c.label]));
   const totalsByCat = Object.fromEntries(cats.map((c) => [c.id, data.daily.reduce((n, d) => n + d.byCategory[c.id], 0)]));
   const shown = (d) => (type ? d.byCategory[type] : d.total);
@@ -137,7 +138,7 @@ export default function PostActivity({ days }) {
             <p className="pa-text"><Marked text={p.text} q={q} /></p>
             {p.outages.length > 0 && (
               <p className="pa-outages">
-                <span className="muted small">In outage:</span>
+                <span className="muted small">In {water ? 'water incident' : 'outage'}:</span>
                 {p.outages.map((o) => <Link key={o.id} to={`/outages/${o.id}`}>{o.title}</Link>)}
               </p>
             )}
@@ -148,4 +149,3 @@ export default function PostActivity({ days }) {
     </div>
   );
 }
-

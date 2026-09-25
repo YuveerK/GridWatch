@@ -45,6 +45,7 @@ function toRows({ tweet, media }, account) {
       id: randomUUID(),
       platform: 'X',
       sourceAccount: account.displayName,
+      serviceType: account.serviceType ?? 'ELECTRICITY',
       externalId: tweet.id,
       authorId: tweet.author_id ?? account.externalId,
       conversationId: tweet.conversation_id ?? tweet.id,
@@ -75,7 +76,7 @@ export async function ingestionStatus(accountExternalId = env.X_SOURCE_ACCOUNT_I
 }
 
 /** Store one page and the cursor that points past it in a single transaction: both happen or neither does. */
-async function persistPage(tx, { run, page, state, account }) {
+async function persistPage(tx, { run, page, state, account, writeState = true }) {
   const ids = page.posts.map((p) => p.tweet.id);
   const existing = new Set((await tx.sourcePost.findMany({ where: { platform: 'X', externalId: { in: ids } }, select: { externalId: true } })).map((r) => r.externalId));
   let inserted = 0;
@@ -106,7 +107,7 @@ async function persistPage(tx, { run, page, state, account }) {
     });
     inserted += 1;
   }
-  await tx.ingestionState.upsert({
+  if (writeState) await tx.ingestionState.upsert({
     where: { accountId: account.externalId },
     create: { accountId: account.externalId, ...state },
     update: state,
@@ -251,4 +252,111 @@ async function runIngestion(ctx, account, { maxPages, fetchPage }) {
     }
   }
   return { runId: run.id, sourceAccountId: account.id, displayName: account.displayName, status, ...stats, checkpointBefore: sinceId, complete: diag.complete, incomplete: !diag.complete, resumedFromCursor: diag.resumedFromCursor, tokenExpired: diag.tokenExpired, error: error?.message ?? null };
+}
+
+/**
+ * Fetch one account's posts inside [from, to), oldest boundary inclusive. The historical cursor and its
+ * original time bounds live on an IngestionRun, separate from the live poller's continuous checkpoint.
+ * X bills whole returned pages, so maxPosts is a soft ceiling: the final page is fully persisted before
+ * stopping and can exceed the requested count by at most one page.
+ */
+export async function backfillAccount({ handle, from, to = null, maxPosts = 2000, fetchPage = fetchTimelinePage } = {}) {
+  if (!from) throw new Error('a start time is required');
+  if (!Number.isSafeInteger(maxPosts) || maxPosts < 1) throw new Error('maxPosts must be a positive integer');
+  const account = await prisma.sourceAccount.findFirst({ where: { displayName: handle } });
+  if (!account) throw new Error(`no source account named ${handle}`);
+  const fromDate = new Date(from);
+  const requestedTo = to ? new Date(to) : null;
+  if (Number.isNaN(fromDate.getTime()) || (requestedTo && Number.isNaN(requestedTo.getTime()))) throw new Error('invalid from/to');
+
+  const outcome = await exclusive(null, async (held) => {
+    const liveState = await prisma.ingestionState.findUnique({ where: { accountId: account.externalId } });
+    const previous = await prisma.ingestionRun.findFirst({
+      where: {
+        sourceAccountId: account.id,
+        AND: [
+          { diagnostics: { path: ['kind'], equals: 'backfill' } },
+          { diagnostics: { path: ['from'], equals: fromDate.toISOString() } },
+          ...(requestedTo ? [{ diagnostics: { path: ['to'], equals: requestedTo.toISOString() } }] : []),
+        ],
+      },
+      orderBy: { startedAt: 'desc' },
+      select: { diagnostics: true },
+    });
+    const resume = Boolean(previous?.diagnostics?.complete === false && previous.diagnostics.cursorToken);
+    const toDate = resume ? new Date(previous.diagnostics.to) : requestedTo ?? new Date();
+    if (toDate <= fromDate) throw new Error('to must be later than from');
+    let token = resume ? previous.diagnostics.cursorToken : null;
+    let newest = resume ? previous.diagnostics.newest : null;
+    const run = await prisma.ingestionRun.create({ data: { id: randomUUID(), sourceAccountId: account.id, checkpointBefore: liveState?.completedHighWater ?? null,
+      diagnostics: { kind: 'backfill', from: fromDate.toISOString(), to: toDate.toISOString(), cursorToken: token, newest, complete: false, ceiling: false } } });
+    const stats = { pagesFetched: 0, postsFetched: 0, postsInserted: 0, postsDeduplicated: 0 };
+    let status = 'SUCCEEDED';
+    let error = null;
+    let complete = false;
+    let ceiling = false;
+
+    try {
+      while (stats.postsFetched < maxPosts && stats.pagesFetched < maxPosts) {
+        held?.assertHeld();
+        let page;
+        try {
+          page = await fetchPage({ userId: account.externalId, paginationToken: token, startTime: fromDate, endTime: toDate });
+        } catch (err) {
+          if (err instanceof XInvalidTokenError && token) {
+            token = null;
+            newest = null;
+            continue;
+          }
+          throw err;
+        }
+        const inWindow = page.posts.filter((item) => {
+          const at = new Date(item.tweet.created_at);
+          return at >= fromDate && (!toDate || at < toDate);
+        });
+        const older = page.posts.some((item) => new Date(item.tweet.created_at) < fromDate);
+        stats.pagesFetched += 1;
+        stats.postsFetched += page.posts.length;
+        let pageNewest = newest;
+        for (const item of inWindow) pageNewest = maxId(pageNewest, item.tweet.id);
+        const windowDone = older || !page.nextToken;
+        const pageCeiling = !windowDone && (stats.postsFetched >= maxPosts || stats.pagesFetched >= maxPosts);
+        const pageComplete = windowDone;
+        // Only a fresh account with no live interval may use a bounded first backfill as its initial
+        // checkpoint. An existing live mark must never leap over the gap before this window.
+        const bootstrap = pageComplete && !liveState?.completedHighWater && !liveState?.incomplete && !liveState?.cursorToken;
+        const next = bootstrap ? { completedHighWater: pageNewest, cursorToken: null, cursorSinceId: null, cursorNewest: null, incomplete: false, lastCompletedAt: new Date() } : null;
+        const saved = await prisma.$transaction(async (tx) => {
+          await assertLeaseInTx(tx, held);
+          const counts = await persistPage(tx, { run, page: { posts: inWindow }, state: next, account, writeState: bootstrap });
+          await tx.ingestionRun.update({ where: { id: run.id }, data: {
+            ...stats, postsInserted: stats.postsInserted + counts.inserted, postsDeduplicated: stats.postsDeduplicated + counts.deduped,
+            diagnostics: { kind: 'backfill', from: fromDate.toISOString(), to: toDate.toISOString(), cursorToken: pageComplete ? null : page.nextToken, newest: pageNewest, complete: pageComplete, ceiling: pageCeiling },
+          } });
+          return counts;
+        }, { timeout: 60_000 });
+        stats.postsInserted += saved.inserted;
+        stats.postsDeduplicated += saved.deduped;
+        newest = pageNewest;
+        complete = pageComplete;
+        ceiling = pageCeiling;
+        token = page.nextToken;
+        if (complete || ceiling) break;
+      }
+    } catch (err) {
+      status = err instanceof XRateLimitError ? 'RATE_LIMITED' : 'FAILED';
+      error = err;
+      logger.error({ err: err.message, account: account.displayName }, 'historical backfill stopped; rerun the same command to resume');
+    } finally {
+      await prisma.ingestionRun.update({
+        where: { id: run.id },
+        data: { ...stats, status, checkpointAfter: complete && !liveState?.completedHighWater && !liveState?.incomplete && !liveState?.cursorToken ? newest : liveState?.completedHighWater ?? null,
+          diagnostics: { kind: 'backfill', from: fromDate.toISOString(), to: toDate.toISOString(), cursorToken: complete ? null : token, newest, complete, ceiling },
+          completedAt: new Date(), errorMessage: error?.message ?? null, errorCategory: error ? status : null },
+      }).catch((err) => logger.error({ err: err.message }, 'could not record the backfill run'));
+    }
+    return { handle, serviceType: account.serviceType, status, ...stats, complete, ceiling, resumed: Boolean(resume), newest, error: error?.message ?? null, from: fromDate, to: toDate };
+  });
+  if (!outcome.acquired) return { skipped: true };
+  return outcome.value;
 }

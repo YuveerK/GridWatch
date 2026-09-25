@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { nice, prettySdc, timeAgo, useApi } from '../lib/api.js';
 import { useMyArea } from '../lib/hooks.js';
+import { useMunicipality } from '../lib/municipality.jsx';
 import Icon from './Icon.jsx';
-import { Skeleton } from './ui.jsx';
+import { ServiceIdentity, Skeleton } from './ui.jsx';
 
 // what each kind of news is called, drawn as, and coloured
 const KIND = {
@@ -43,8 +44,10 @@ export const countNew = (items, seenAt) => (seenAt ? items.filter((u) => new Dat
 /** Meaningful updates, newest first. "My area" limits them to outages that involve your saved suburb. */
 export default function UpdatesFeed({ all, loading, seenAt, markSeen }) {
   const { area } = useMyArea();
+  const { service } = useMunicipality();
+  const water = service === 'WATER';
   const [scope, setScope] = useState('all');
-  const mine = useApi(area && scope === 'area' ? `/v1/updates?limit=30&locality=${area.id}` : null, { refreshMs: 60_000 });
+  const mine = useApi(area && scope === 'area' ? `/v1/updates?limit=30&locality=${area.id}&service=${service}` : null, { refreshMs: 60_000 });
   const items = scope === 'area' ? mine.data?.data : all;
   const busy = scope === 'area' ? mine.loading && !mine.data : loading;
   const seenTimer = useRef(null);
@@ -77,7 +80,8 @@ export default function UpdatesFeed({ all, loading, seenAt, markSeen }) {
                 <span className="urow-glyph" aria-hidden="true"><Icon name={k.icon} /></span>
                 <div className="urow-main">
                   <div className="urow-meta">
-                    <b>{k.label}</b>
+                    <ServiceIdentity service={u.service ?? service} compact />
+                    <b>{water && u.kind === 'restored' ? 'Water supply restored' : water && u.kind === 'opened' ? 'New interruption' : k.label}</b>
                     <span>{timeAgo(u.postedAt)}</span>
                     {u.sdc && <span>{prettySdc(u.sdc)}</span>}
                     {isNew && <em className="new-pill">New</em>}

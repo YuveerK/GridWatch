@@ -101,6 +101,7 @@ async function loadCandidates(post, repairOutageIds = []) {
         },
         // an outage known to belong to a DIFFERENT municipality is never a candidate; one not yet attributed still is (legacy rows)
         ...(post.municipalityId != null ? [{ OR: [{ municipalityId: post.municipalityId }, { municipalityId: null }] }] : []),
+        { serviceType: post.serviceType ?? 'ELECTRICITY' },
       ],
     },
     orderBy: [{ startedAt: 'asc' }, { title: 'asc' }],
@@ -206,7 +207,7 @@ async function askLlm(post, extraction, ranked, { fromDigest = false } = {}) {
   }
   const out = await generateJson({
     systemInstruction:
-      'Decide whether a new City Power post is about the SAME fault as one of the candidate outages (same equipment failing, continued repairs, or its restoration) or a DIFFERENT fault. Sharing a suburb alone is not enough when BOTH sides name different equipment: two faults at different equipment are different outages, even nearby. But if a candidate outage names no equipment (it was first reported only by suburb) and the new post is about the same suburbs within a few hours, treat it as the same fault. Planned maintenance and unplanned faults are never the same. A restoration post belongs to the outage it restores. Answer outage_id = null for a different fault.' + (post.amended ? AMENDED_NOTE : ''),
+      'Decide whether a new City Power post is about the SAME fault as one of the candidate outages (same equipment failing, continued repairs, or its restoration) or a DIFFERENT fault. Sharing a suburb alone is not enough when BOTH sides name different equipment: two faults at different equipment are different outages, even nearby. But if a candidate outage names no equipment (it was first reported only by suburb) and the new post is about the same suburbs within a few hours, treat it as the same fault. The reverse is the same fault too: a new post that names no equipment, whose suburbs are exactly the suburbs of the candidate, within a few hours, continues that incident even when the candidate already names equipment. Planned maintenance and unplanned faults are never the same. A restoration post belongs to the outage it restores. Answer outage_id = null for a different fault.' + (post.amended ? AMENDED_NOTE : ''),
     parts: [{ text: JSON.stringify({ new_post: newPost, candidate_outages: summaries }) }],
     jsonSchema: tieBreakSchema,
     purpose: 'tiebreak',
@@ -264,6 +265,7 @@ async function commitLink({ ctx, post, extraction, facts, outageId, isNew, retro
             title: titleFor(facts, extraction),
             sdcName: facts.sdcNode?.name ?? null,
             municipalityId: post.municipalityId ?? null,
+            serviceType: post.serviceType ?? 'ELECTRICITY',
             primaryNodeId: facts.nodes.at(-1)?.id ?? null,
             retroactive: Boolean(retroactive),
             digest: isDigest(facts),
@@ -358,6 +360,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     kind: postKind,
     sdcName: facts.sdcNode?.name ?? null,
     municipalityId: facts.municipalityId ?? null,
+    serviceType: facts.serviceType ?? postRow.serviceType ?? 'ELECTRICITY',
     nodeIds: new Set(facts.nodes.map((n) => n.id)),
     localityIds: new Set(facts.localityIds),
     // "[AMENDED UPDATE]" / "*Amended*" in the opening words: a correction of an earlier post (not judged for one fault inside a graphic)
@@ -428,6 +431,10 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
   }
 
   if (!manual && !outageId && !post.nodeIds.size && !post.localityIds.size) {
+    // An outage report with no place stays for a person. A status update that names nothing is a notice, not an incident.
+    if (extraction.relevance !== 'OUTAGE') {
+      return decide({ outcome: 'NEW', topScore: top?.score ?? null, reason: 'no infrastructure or locality identified', candidates: summary });
+    }
     return decide({ outcome: 'NEEDS_REVIEW', topScore: top?.score ?? null, reason: 'no infrastructure or locality identified', candidates: summary });
   }
 
@@ -518,25 +525,26 @@ function scheduleFor(extraction, postRow, facts) {
  *    back to "no news for PLANNED_WINDOW_HOURS".
  * Every update repeats its condition in the UPDATE itself, so a post that lands mid-sweep (and refreshes lastUpdateAt) wins.
  */
-export async function sweepStaleOutages(now = new Date(), { ctx } = {}) {
-  const outcome = await exclusive(ctx, () => sweepLocked(now));
+export async function sweepStaleOutages(now = new Date(), { ctx, serviceType = null } = {}) {
+  const outcome = await exclusive(ctx, () => sweepLocked(now, serviceType));
   return outcome.acquired ? outcome.value : { skipped: true };
 }
 
 /** Only the "gone quiet" marking of the sweep, as of `now` (for replaying history; see processPending's sweepAsOf). */
 export const markQuietOutagesStale = (now) => prisma.outage.updateMany({ where: { kind: 'UNPLANNED', lastUpdateAt: { lt: new Date(now.getTime() - env.OUTAGE_AUTOCLOSE_HOURS * HOUR) }, status: { in: ['ACTIVE', 'PARTIALLY_RESTORED'] } }, data: { status: 'STALE' } });
 
-async function sweepLocked(now) {
+async function sweepLocked(now, serviceType = null) {
   const cutoff = new Date(now.getTime() - env.OUTAGE_AUTOCLOSE_HOURS * HOUR);
   const plannedCutoff = new Date(now.getTime() - PLANNED_WINDOW_HOURS * HOUR);
   const graceEnd = new Date(now.getTime() - 6 * HOUR);
-  const stale = await prisma.outage.updateMany({ where: { kind: 'UNPLANNED', lastUpdateAt: { lt: cutoff }, status: { in: ['ACTIVE', 'PARTIALLY_RESTORED'] } }, data: { status: 'STALE' } });
-  const closed = await prisma.outage.updateMany({ where: { lastUpdateAt: { lt: cutoff }, status: { in: ['RESTORED', 'CANCELLED'] } }, data: { status: 'CLOSED' } });
+  const scope = serviceType ? { serviceType } : {};
+  const stale = await prisma.outage.updateMany({ where: { ...scope, kind: 'UNPLANNED', lastUpdateAt: { lt: cutoff }, status: { in: ['ACTIVE', 'PARTIALLY_RESTORED'] } }, data: { status: 'STALE' } });
+  const closed = await prisma.outage.updateMany({ where: { ...scope, lastUpdateAt: { lt: cutoff }, status: { in: ['RESTORED', 'CANCELLED'] } }, data: { status: 'CLOSED' } });
   // planned work with an announced window: closed after the window, however long ago it was announced
-  const closedWindow = await prisma.outage.updateMany({ where: { status: 'PLANNED', scheduledEnd: { lt: graceEnd } }, data: { status: 'CLOSED' } });
+  const closedWindow = await prisma.outage.updateMany({ where: { ...scope, status: 'PLANNED', scheduledEnd: { lt: graceEnd } }, data: { status: 'CLOSED' } });
   // no window stored (older rows): read one from the posts, then fall back to the age rule
   const unknown = await prisma.outage.findMany({
-    where: { status: 'PLANNED', scheduledEnd: null },
+    where: { ...scope, status: 'PLANNED', scheduledEnd: null },
     select: { id: true, posts: { orderBy: { postedAt: 'desc' }, take: 6, select: { post: { select: { text: true, noteTweetText: true, publishedAt: true } } } } },
   });
   const done = [];

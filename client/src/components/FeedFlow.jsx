@@ -29,7 +29,7 @@ export default function FeedFlow({ node }) {
   const areas = node.localities.map((l) => ({ key: l.localityId, label: nice(l.locality.canonicalName), to: `/suburb/${l.localityId}` }));
 
   return (
-    <ol className="fflow" aria-label="How power reaches this equipment and what it feeds">
+    <ol className="fflow" aria-label={node.serviceType === 'WATER' ? 'Known water supply connections' : 'Known electricity connections'}>
       {upstream.map((u) => (
         <li key={u.key} className="fstep">
           <span className="eyebrow">{u.title}</span>

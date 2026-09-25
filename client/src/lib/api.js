@@ -79,7 +79,7 @@ export function dayDiff(isoDate) {
 export const nice = (s) => (s && s.length > 3 && s === s.toUpperCase() && /[A-Z]/.test(s) ? s.toLowerCase().replace(/(^|[\s(/-])([a-z])/g, (_, a, b) => a + b.toUpperCase()) : s);
 export const prettySdc = (s) => (s ?? '').replace(/([a-z])([A-Z])/g, '$1 $2');
 export const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-export const typeLabel = (t) => ({ SWITCHING_STATION: 'Switching station', MINI_SUBSTATION: 'Mini-substation', SDC: 'Service centre' }[t] ?? t.charAt(0) + t.slice(1).toLowerCase());
+export const typeLabel = (t) => ({ SWITCHING_STATION: 'Switching station', MINI_SUBSTATION: 'Mini-substation', SDC: 'Service centre', WATER_SYSTEM: 'Water system', RESERVOIR: 'Reservoir', WATER_TOWER: 'Water tower', PUMP_STATION: 'Pump station', DIRECT_FEED: 'Direct feed', BULK_CONNECTION: 'Bulk connection', TREATMENT_WORKS: 'Treatment works', BOOSTER_STATION: 'Booster station', WATER_PIPELINE: 'Pipeline' }[t] ?? t.charAt(0) + t.slice(1).toLowerCase().replaceAll('_', ' '));
 
 /** Drop hashtags, t.co links and the standard "how to log a call" boilerplate from a post. */
 export function cleanPostText(text) {
@@ -107,7 +107,18 @@ export const STATUS = {
   CLOSED: { label: 'Closed', long: 'Finished', tone: 'idle', icon: 'archive', order: 5 },
   CANCELLED: { label: 'Cancelled', long: 'Planned work cancelled', tone: 'idle', icon: 'x', order: 6 },
 };
-export const statusMeta = (status) => STATUS[status] ?? { label: status, long: status, tone: 'idle', icon: 'clock', order: 9 };
+export const statusMeta = (status, service = 'ELECTRICITY') => {
+  const base = STATUS[status] ?? { label: status, long: status, tone: 'idle', icon: 'clock', order: 9 };
+  if (service !== 'WATER') return base;
+  const long = {
+    ACTIVE: 'Water supply is interrupted',
+    PARTIALLY_RESTORED: 'Supply is returning in some areas',
+    PLANNED: 'Planned water interruption',
+    RESTORED: 'Water supply is restored',
+  }[status];
+  const label = { ACTIVE: 'Supply interrupted', PARTIALLY_RESTORED: 'Supply returning' }[status];
+  return long ? { ...base, long, label: label ?? base.label } : base;
+};
 export const isLive = (s) => s === 'ACTIVE' || s === 'PARTIALLY_RESTORED';
 
 export const ROLE = {

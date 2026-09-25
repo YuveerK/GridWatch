@@ -11,7 +11,8 @@ export function faultLines(contacts = []) {
 }
 
 /** Turn a suburb's outages into one plain answer to "is my power out?". `who` is useUtility() for the suburb's municipality. */
-export function computeAnswer(name, outages = [], possible = [], localityId = null, who = { Utility: 'The utility', contacts: [] }) {
+export function computeAnswer(name, outages = [], possible = [], localityId = null, who = { Utility: 'The utility', contacts: [] }, service = 'ELECTRICITY') {
+  const water = service === 'WATER';
   // A partly restored outage can already be over for THIS suburb: judge each outage by the suburb's own flag, not the outage's overall status.
   const restoredHere = (o) => localityId != null && o.localities?.some((l) => l.id === localityId && l.restored);
   const live = outages.filter((o) => (o.status === 'ACTIVE' || o.status === 'PARTIALLY_RESTORED') && !restoredHere(o));
@@ -22,12 +23,12 @@ export function computeAnswer(name, outages = [], possible = [], localityId = nu
   const recent = (t) => t && Date.now() - new Date(t) < 24 * 3_600_000;
   const justRestored = outages.filter((o) => (o.status === 'RESTORED' && recent(o.restoredAt)) || ((o.status === 'ACTIVE' || o.status === 'PARTIALLY_RESTORED') && restoredHere(o) && recent(o.lastUpdateAt)));
 
-  if (active.length) return { tone: 'live', icon: 'alert', kicker: 'Right now', title: `Power outage reported in ${name}`, outage: active[0], more: active.length - 1 };
-  if (partial.length) return { tone: 'partial', icon: 'half', kicker: 'Right now', title: `Power is being restored in ${name}`, outage: partial[0], more: partial.length - 1 };
+  if (active.length) return { tone: 'live', icon: water ? 'drop' : 'alert', kicker: 'Right now', title: `${water ? 'Water supply interruption' : 'Power outage'} reported in ${name}`, outage: active[0], more: active.length - 1 };
+  if (partial.length) return { tone: 'partial', icon: 'half', kicker: 'Right now', title: `${water ? 'Water supply' : 'Power'} is being restored in ${name}`, outage: partial[0], more: partial.length - 1 };
   if (maybe.length) return { tone: 'partial', icon: 'alert', kicker: 'Possible', title: `There may be an outage affecting ${name}`, note: `${who.Utility}'s posts didn't name your suburb, but the equipment involved usually supplies it.`, outage: maybe[0], more: maybe.length - 1 };
   if (planned.length) return { tone: 'plan', icon: 'calendar', kicker: 'Coming up', title: `Planned maintenance in ${name}`, outage: planned[0], more: planned.length - 1 };
-  if (justRestored.length) return { tone: 'good', icon: 'check', kicker: 'Good news', title: `Power was restored in ${name}`, outage: justRestored[0], more: 0 };
-  return { tone: 'good', icon: 'check', kicker: 'Right now', title: `No outage reported for ${name}`, note: `${who.Utility} hasn't posted about an outage here recently.${who.contacts.length ? ` If your power is out, tell them: ${faultLines(who.contacts)}.` : ''}`, outage: null, more: 0 };
+  if (justRestored.length) return { tone: 'good', icon: 'check', kicker: 'Good news', title: `${water ? 'Water supply' : 'Power'} was restored in ${name}`, outage: justRestored[0], more: 0 };
+  return { tone: 'good', icon: 'check', kicker: 'Right now', title: `No ${water ? 'water interruption' : 'power outage'} reported for ${name}`, note: `${who.Utility} hasn't posted about an interruption here recently.${who.contacts.length ? ` If your ${water ? 'water supply is affected' : 'power is out'}, tell them: ${faultLines(who.contacts)}.` : ''}`, outage: null, more: 0 };
 }
 
 export function AnswerCard({ answer, big, slim, action }) {

@@ -607,6 +607,42 @@ def normalize_records(records: List[Dict[str, Any]], *, include_power: bool) -> 
         for parent in by_name_region.get((g["region"], g["parent_area"].casefold()), []):
             parent["_geom"] = parent["_geom"].union(g["_geom"])
 
+    # Some townships exist only as Ext. 3, Ext. 5, ... with no core polygon. Residents still ask for
+    # "Willowbrook" or "Willowbrook Extensions", so publish one parent shape: the union of those parts.
+    present = {(g["region"], g["area_name"].casefold()) for g in grouped.values()}
+    children_of: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+    for g in grouped.values():
+        if g.get("parent_area"):
+            children_of[(g["region"], g["parent_area"].casefold())].append(g)
+    for (region, _), kids in children_of.items():
+        parent_name = kids[0]["parent_area"]
+        if (region, parent_name.casefold()) in present:
+            continue
+        geom = None
+        aliases = {parent_name, f"{parent_name} Extensions", f"{parent_name} Extension"}
+        regions_touched: set = set()
+        objectids: set = set()
+        for kid in kids:
+            geom = kid["_geom"] if geom is None else geom.union(kid["_geom"])
+            aliases.update(kid["aliases"])
+            regions_touched.update(kid["regions_touched"])
+            objectids.update(kid["source_objectids"])
+        synthetic = dict(kids[0])
+        synthetic.update({
+            "area_name": parent_name,
+            "parent_area": "",
+            "area_type": "township_or_suburb",
+            "extension": 0,
+            "tsg_id": "",
+            "former_name": "",
+            "aliases": aliases,
+            "source_objectids": objectids,
+            "regions_touched": regions_touched,
+            "crosses_region_boundary": len(regions_touched) > 1,
+            "_geom": geom,
+        })
+        grouped[(region, f"synthetic-parent:{parent_name.casefold()}")] = synthetic
+
     output: List[Dict[str, Any]] = []
     for g in grouped.values():
         g.pop("source_objectid", None)

@@ -3,7 +3,7 @@ import Icon from '../components/Icon.jsx';
 import FeedFlow from '../components/FeedFlow.jsx';
 import NodeReach from '../components/NodeReach.jsx';
 import OutageCard from '../components/OutageCard.jsx';
-import { Chip, Crumbs, ErrorState, SectionHead, Skeleton } from '../components/ui.jsx';
+import { Chip, Crumbs, ErrorState, SectionHead, ServiceIdentity, Skeleton } from '../components/ui.jsx';
 import { fmtDay, nice, plural, prettySdc, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
 import { useUtility } from '../lib/municipality.jsx';
@@ -16,18 +16,27 @@ const ABOUT = {
   MINI_SUBSTATION: 'A small street-level unit that steps power down for a few blocks.',
   FEEDER: 'A cable that carries power from one station to the next.',
   TRANSFORMER: 'Steps voltage down before it reaches homes.',
+  RESERVOIR: 'Stores water for the surrounding supply network.',
+  WATER_TOWER: 'Elevated storage that helps maintain water pressure.',
+  PUMP_STATION: 'Moves water through the supply network.',
+  BOOSTER_STATION: 'Helps maintain pressure farther along the supply route.',
+  TREATMENT_WORKS: 'Treats water before it enters the distribution system.',
+  DIRECT_FEED: 'A direct water supply route serving an area.',
+  WATER_SYSTEM: 'A named part of the water supply network.',
+  WATER_PIPELINE: 'A pipeline carrying water between parts of the network.',
 };
 
 export default function NodeDetail() {
   const { id } = useParams();
   const { data: n, error, loading } = useApi(`/v1/infrastructure/${id}`);
   useDocumentTitle(n?.name);
-  const { utility } = useUtility(n?.municipalityId);
+  const { utility } = useUtility(n?.municipalityId, n?.serviceType);
 
   if (error && !n) return <div className="container page"><ErrorState error={error} /></div>;
   if (loading || !n) return <div className="container page stack" aria-busy="true"><Skeleton h={16} w="30%" /><Skeleton h={40} w="50%" /><Skeleton h={200} /></div>;
 
   const live = n.recentOutages.filter((o) => o.status === 'ACTIVE' || o.status === 'PARTIALLY_RESTORED');
+  const water = n.serviceType === 'WATER';
   const past = n.recentOutages.filter((o) => !live.includes(o));
   const grouped = n.children.reduce((acc, c) => {
     (acc[c.child.type] ??= []).push(c);
@@ -40,11 +49,12 @@ export default function NodeDetail() {
 
       <header className="page-head">
         <div className="row" style={{ gap: 10, marginBottom: 8 }}>
+          <ServiceIdentity service={n.serviceType} />
           <span className="eyebrow">{typeLabel(n.type)}</span>
           {live.length > 0 ? <span className="badge tone-live"><Icon name="alert" />{plural(live.length, 'live outage')}</span> : <span className="badge tone-good"><Icon name="check" />No live outage</span>}
         </div>
         <h1>{n.type === 'SDC' ? prettySdc(n.name) : nice(n.name)}</h1>
-        <p>{ABOUT[n.type] ?? `A piece of ${utility}'s equipment.`}</p>
+        <p>{ABOUT[n.type] ?? `An asset mentioned in ${utility}'s posts.`}</p>
       </header>
 
       <div className="cols-3" style={{ marginBottom: 8 }}>
@@ -54,7 +64,7 @@ export default function NodeDetail() {
       </div>
 
       <section className="section" aria-labelledby="flow-h">
-        <SectionHead id="flow-h" title="How power flows here" sub={`The route from the service centre down to suburbs, as far as ${utility}'s posts have shown`} />
+        <SectionHead id="flow-h" title={water ? 'Known supply connections' : 'How power flows here'} sub={`Connections inferred from ${utility}'s posts; this may not show the complete route`} />
         <FeedFlow node={n} />
       </section>
 
@@ -86,11 +96,11 @@ export default function NodeDetail() {
         </section>
       )}
 
-      <NodeReach id={n.id} />
+      <NodeReach id={n.id} service={n.serviceType} />
 
       {n.localities.length > 0 && (
         <section className="section">
-          <SectionHead title="Areas affected when it fails" sub="Suburbs that lost power in outages involving this equipment. More outages make this more complete." />
+          <SectionHead title="Areas affected when it fails" sub={`Suburbs named in ${water ? 'water interruptions' : 'electricity outages'} involving this asset. More reports make this more complete.`} />
           <div className="card card-pad"><div className="chips">{n.localities.map((l) => <Chip key={l.localityId} to={`/suburb/${l.localityId}`} title={`Seen in ${plural(l.evidenceCount, 'post')}`}>{nice(l.locality.canonicalName)} <small>{l.evidenceCount}×</small></Chip>)}</div></div>
         </section>
       )}

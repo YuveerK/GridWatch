@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { categorize } from '../../src/lib/fault-category.js';
+import { categorize, categorizeWater } from '../../src/lib/fault-category.js';
 import { areaOf, buildInsights } from '../../src/modules/api/insights.service.js';
 
 describe('areaOf', () => {
@@ -14,6 +14,9 @@ describe('areaOf', () => {
   it('Johannesburg (grouped by service centre) or no municipality, with no centre: Unknown', () => {
     expect(areaOf({ municipality: 'JOHANNESBURG', regions: ['A'] })).toEqual({ area: 'Unknown', filter: null });
     expect(areaOf({})).toEqual({ area: 'Unknown', filter: null });
+  });
+  it('a named water asset is the area, and links to that asset', () => {
+    expect(areaOf({ assetName: 'Olivedale Reservoir', assetId: 'n1', municipality: 'JOHANNESBURG' })).toEqual({ area: 'Olivedale Reservoir', filter: null, href: '/network/n1' });
   });
 });
 
@@ -37,6 +40,17 @@ describe('fault categories', () => {
     ['', 'UNKNOWN'],
     [null, 'UNKNOWN'],
   ])('%s -> %s', (cause, id) => expect(categorize(cause)).toBe(id));
+
+  it.each([
+    ['burst pipe', 'BURST'],
+    ['no pumping overnight', 'NO_PUMPING'],
+    ['poor incoming supply', 'INCOMING'],
+    ['on bypass', 'BYPASS'],
+    ['supply and demand imbalances', 'DEMAND'],
+    ['overnight closure', 'CLOSURE'],
+    ['repairs to the valve', 'REPAIRS'],
+    ['', 'UNKNOWN'],
+  ])('water %s -> %s', (cause, id) => expect(categorizeWater(cause)).toBe(id));
 });
 
 describe('buildInsights', () => {

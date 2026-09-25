@@ -102,15 +102,16 @@ const at = (pts, u) => {
  *  layers    { outages, equipment }
  * Suburb positions are their centres, and equipment positions are inferred; the page says so in words.
  */
-export default function MapView({ points = [], hubs = [], flow = null, coverage = null, focus = null, layers = { outages: true, equipment: false }, selectedHub = null, onPickSuburb, onPickHub, onClear, height = 460, cooperative = false, label = 'Map' }) {
+export default function MapView({ points = [], hubs = [], flow = null, coverage = null, focus = null, layers = { outages: true, equipment: false }, selectedHub = null, onPickSuburb, onPickCluster, onPickHub, onClear, height = 460, cooperative = false, label = 'Map' }) {
   const box = useRef(null);
   const mapRef = useRef(null);
   const readyRef = useRef(false);
   const latest = useRef({});
-  latest.current = { points, hubs, flow, coverage, focus, layers, selectedHub, onPickSuburb, onPickHub, onClear };
+  latest.current = { points, hubs, flow, coverage, focus, layers, selectedHub, onPickSuburb, onPickCluster, onPickHub, onClear };
   const dark = useIsDark();
   const raf = useRef(0);
   const framed = useRef(false);
+  const gestureUntil = useRef(0);
   const [ready, setReady] = useState(0);
 
   const setData = (id, data) => mapRef.current?.getSource(id)?.setData(data);
@@ -136,18 +137,27 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
       })),
     };
   };
+  const zoneCollection = () => ({
+    type: 'FeatureCollection',
+    features: latest.current.hubs.filter((h) => h.boundary).map((h) => ({
+      type: 'Feature',
+      geometry: h.boundary,
+      properties: { id: h.id, name: h.name },
+    })),
+  });
   const hubCollection = () => ({
     type: 'FeatureCollection',
-    features: latest.current.hubs.map((h) => ({
+    features: latest.current.hubs.filter((h) => h.lon != null && h.lat != null).map((h) => ({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [h.lon, h.lat] },
-      properties: { id: h.id, name: h.name, type: h.type, live: h.live ? 1 : 0, served: h.served ?? 0, selected: h.id === latest.current.selectedHub ? 1 : 0 },
+        properties: { id: h.id, name: h.name, type: h.type, service: h.service ?? '', live: h.live ? 1 : 0, served: h.served ?? 0, selected: h.id === latest.current.selectedHub ? 1 : 0 },
     })),
   });
 
   const fitTo = (bounds, opts = {}) => {
     const map = mapRef.current;
     if (!map || !bounds) return;
+    if (!opts.force && (Date.now() < gestureUntil.current || map.isZooming() || map.isMoving())) return;
     map.fitBounds(bounds, { padding: 64, maxZoom: 14, duration: 700, ...opts });
   };
 
@@ -157,24 +167,81 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
     const { layers: l, selectedHub: sel, flow: fl } = latest.current;
     const vis = (ids, on) => ids.forEach((id) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'));
     vis(['cluster-halo', 'cluster', 'cluster-count', 'dots-halo', 'dots', 'dot-labels', 'suburb-boundary-fill', 'suburb-boundary-outline'], l.outages);
-    vis(['hubs'], l.equipment || sel != null || fl != null);
+    vis(['hubs', 'water-zone-fill', 'water-zone-outline'], l.equipment || sel != null || fl != null);
   };
 
   // ── build the map (again when the theme changes, since the base style is swapped)
   useEffect(() => {
-    const map = new maplibregl.Map({ container: box.current, style: dark ? STYLE.dark : STYLE.light, center: JHB, zoom: 9.6, attributionControl: { compact: true }, cooperativeGestures: cooperative });
+    const map = new maplibregl.Map({ container: box.current, style: dark ? STYLE.dark : STYLE.light, center: JHB, zoom: 9.6, attributionControl: { compact: true }, cooperativeGestures: cooperative, trackResize: false });
     mapRef.current = map;
     readyRef.current = false;
     framed.current = false;
+    // MapLibre eases each mouse-wheel notch for ~200ms, then the next notch
+    // cancels that ease and the camera snaps back. Apply the zoom immediately.
+    map.scrollZoom.disable();
+    const onWheel = (e) => {
+      if (cooperative && !e.ctrlKey && !e.metaKey) return;
+      if (map.dragPan?.isActive()) return;
+      e.preventDefault();
+      gestureUntil.current = Date.now() + 700;
+      map.stop();
+      let value = e.deltaY;
+      if (e.deltaMode === 1) value *= 40;
+      else if (e.deltaMode === 2) value *= 800;
+      if (!value) return;
+      if (e.shiftKey) value /= 4;
+      const precise = Math.abs(value) < 4;
+      const rate = precise ? 1 / 100 : 1 / 450;
+      let scale = 2 / (1 + Math.exp(-Math.abs(value * rate)));
+      if (value > 0) scale = 1 / scale;
+      const zoom = Math.min(map.getMaxZoom(), Math.max(map.getMinZoom(), map.getZoom() + Math.log2(scale)));
+      const rect = map.getCanvas().getBoundingClientRect();
+      map.easeTo({ zoom, around: map.unproject([e.clientX - rect.left, e.clientY - rect.top]), duration: 0 });
+    };
+    map.getCanvasContainer().addEventListener('wheel', onWheel, { passive: false });
+    let pointerDown = false;
+    const holdGesture = () => { gestureUntil.current = Date.now() + 800; };
+    map.on('dragstart', holdGesture);
+    map.on('mousedown', () => { pointerDown = true; holdGesture(); });
+    map.on('mouseup', () => { pointerDown = false; });
+    map.on('touchstart', () => { pointerDown = true; holdGesture(); });
+    map.on('touchend', () => { pointerDown = false; });
     if (import.meta.env.DEV) window.__gwMap = map;
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
     const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 14, maxWidth: '260px' });
-    const nudge = requestAnimationFrame(() => map.resize());
+    map.on('dragstart', () => popup.remove());
+    // MapLibre's own resize observer calls stop() on every size change, which cancels a
+    // scroll-zoom and snaps the camera back. A 1px jitter during the gesture then repeats
+    // that snap. Resize only when the container actually changes, and not mid-zoom.
+    let lastW = 0;
+    let lastH = 0;
+    let resizeTimer = 0;
+    const resizeIfSettled = () => {
+      const rect = box.current?.getBoundingClientRect();
+      if (!rect) return;
+      const w = Math.round(rect.width);
+      const h = Math.round(rect.height);
+      if (Math.abs(w - lastW) < 2 && Math.abs(h - lastH) < 2) return;
+      // map.resize() calls stop(), which aborts a pan and snaps the camera back.
+      // Wait until the pointer is up instead of hooking moveend (stop() fires that too).
+      if (pointerDown || map.isMoving()) {
+        window.clearTimeout(resizeTimer);
+        resizeTimer = window.setTimeout(resizeIfSettled, 200);
+        return;
+      }
+      lastW = w;
+      lastH = h;
+      map.resize();
+    };
+    const resizeObserver = new ResizeObserver(resizeIfSettled);
+    resizeObserver.observe(box.current);
+    const nudge = requestAnimationFrame(resizeIfSettled);
     map.on('error', (e) => console.warn('map:', e.error?.message ?? e.message ?? 'error'));
 
     map.on('load', () => {
       const c = colors();
       map.addImage('hub-idle', hubImage(c.plan, c.card));
+      map.addImage('hub-water', hubImage('#2f7d9a', c.card));
       map.addImage('hub-live', hubImage(c.live, c.card));
       map.addImage('hub-sel', hubImage(c.ink, c.card, 56));
 
@@ -189,11 +256,14 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
       map.addLayer({ id: 'suburb-boundary-outline', type: 'line', source: 'suburb-boundaries', paint: { 'line-color': ['get', 'color'], 'line-width': 1.6, 'line-opacity': ['case', ['==', ['get', 'dim'], 1], 0.25, 0.9] } });
 
       // equipment
+      map.addSource('water-zones', { type: 'geojson', data: zoneCollection() });
+      map.addLayer({ id: 'water-zone-fill', type: 'fill', source: 'water-zones', paint: { 'fill-color': '#2f6fad', 'fill-opacity': 0.12 } });
+      map.addLayer({ id: 'water-zone-outline', type: 'line', source: 'water-zones', paint: { 'line-color': '#2f6fad', 'line-width': 1.4, 'line-dasharray': [2, 2], 'line-opacity': 0.7 } });
       map.addSource('hubs', { type: 'geojson', data: hubCollection() });
       map.addLayer({
         id: 'hubs', type: 'symbol', source: 'hubs',
         layout: {
-          'icon-image': ['case', ['==', ['get', 'selected'], 1], 'hub-sel', ['==', ['get', 'live'], 1], 'hub-live', 'hub-idle'],
+          'icon-image': ['case', ['==', ['get', 'selected'], 1], 'hub-sel', ['==', ['get', 'service'], 'WATER'], 'hub-water', ['==', ['get', 'live'], 1], 'hub-live', 'hub-idle'],
           'icon-size': ['interpolate', ['linear'], ['zoom'], 9, ['+', 0.4, ['*', 0.012, ['min', ['get', 'served'], 20]]], 13, ['+', 0.65, ['*', 0.02, ['min', ['get', 'served'], 20]]]],
           'icon-allow-overlap': true,
           'text-field': ['step', ['zoom'], '', 12, ['get', 'name']], 'text-font': FONT, 'text-size': 11, 'text-offset': [0, 1.3], 'text-anchor': 'top', 'text-optional': true,
@@ -248,7 +318,7 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
     const pop = (lngLat, html) => popup.setLngLat(lngLat).setHTML(html).addTo(map);
     const hit = (point, ids) => map.queryRenderedFeatures(point, { layers: ids.filter((l) => map.getLayer(l) && map.getLayoutProperty(l, 'visibility') !== 'none') });
     map.on('mousemove', (e) => {
-      if (!readyRef.current) return;
+      if (!readyRef.current || pointerDown || map.dragPan?.isActive()) return;
       const hub = hit(e.point, ['hubs'])[0];
       const dot = hit(e.point, ['dots'])[0];
       const cluster = hit(e.point, ['cluster'])[0];
@@ -269,7 +339,13 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
       if (hub) return latest.current.onPickHub?.(hub.properties.id);
       const cluster = hit(e.point, ['cluster'])[0];
       if (cluster) {
-        return map.getSource('pts').getClusterExpansionZoom(cluster.properties.cluster_id).then((z) => map.easeTo({ center: cluster.geometry.coordinates, zoom: z + 0.4, duration: 500 }));
+        const source = map.getSource('pts');
+        const zoomIn = () => source.getClusterExpansionZoom(cluster.properties.cluster_id).then((z) => map.easeTo({ center: cluster.geometry.coordinates, zoom: z + 0.4, duration: 500 }));
+        const choose = latest.current.onPickCluster;
+        if (!choose) return zoomIn();
+        return source.getClusterLeaves(cluster.properties.cluster_id, 80, 0).then((leaves) => {
+          if (!choose(leaves.map((f) => f.properties.id))) zoomIn();
+        });
       }
       const dot = hit(e.point, ['dots'])[0];
       if (dot) return latest.current.onPickSuburb?.(dot.properties.id);
@@ -277,7 +353,10 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
     });
 
     return () => {
+      map.getCanvasContainer().removeEventListener('wheel', onWheel);
       cancelAnimationFrame(nudge);
+      window.clearTimeout(resizeTimer);
+      resizeObserver.disconnect();
       cancelAnimationFrame(raf.current);
       popup.remove();
       map.remove();
@@ -295,6 +374,7 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
   useEffect(() => {
     if (!readyRef.current) return;
     setData('hubs', hubCollection());
+    setData('water-zones', zoneCollection());
     applyLayers();
   }, [hubs, selectedHub, ready]);
   useEffect(() => {
@@ -333,7 +413,7 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
     const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
     const paths = flow.edges.map((e, i) => {
       const dist = Math.hypot(e.to[0] - e.from[0], e.to[1] - e.from[1]);
-      return { pts: curve(e.from, e.to, (i % 2 ? 1 : -1) * 0.16), color: e.live ? c.live : c.brand, delay: Math.min(700, dist * 9000), phase: (i * 0.37) % 1, kind: e.kind };
+      return { pts: curve(e.from, e.to, (i % 2 ? 1 : -1) * 0.16), color: e.color || (e.live ? c.live : c.brand), delay: Math.min(700, dist * 9000), phase: (i * 0.37) % 1, kind: e.kind };
     });
     const bounds = new maplibregl.LngLatBounds();
     paths.forEach((p) => p.pts.forEach((pt) => bounds.extend(pt)));

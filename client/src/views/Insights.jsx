@@ -2,14 +2,15 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import PostActivity from '../components/PostActivity.jsx';
-import { EmptyState, ErrorState, SectionHead, Skeleton } from '../components/ui.jsx';
+import SuburbSupply from '../components/SuburbSupply.jsx';
+import { EmptyState, ErrorState, SectionHead, ServiceIdentity, Skeleton } from '../components/ui.jsx';
 import { nice, plural, prettySdc, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
 import { useMunicipality, useUtility, withMunicipality } from '../lib/municipality.jsx';
 
 const WINDOWS = [7, 14, 30];
 // short column names for the cause-by-area grid
-const SHORT = { THEFT_VANDALISM: 'Theft', EXTERNAL: 'Accident', MAINTENANCE: 'Isolation', CABLE: 'Cable', EQUIPMENT: 'Equipment', OVERLOAD: 'Overload', OTHER: 'Other', UNKNOWN: 'Not stated' };
+const SHORT = { THEFT_VANDALISM: 'Theft', EXTERNAL: 'Accident', MAINTENANCE: 'Isolation', CABLE: 'Cable', EQUIPMENT: 'Equipment', OVERLOAD: 'Overload', BURST: 'Pipe', NO_PUMPING: 'Pumping', INCOMING: 'Incoming', BYPASS: 'Bypass', DEMAND: 'Demand', CLOSURE: 'Closure', REPAIRS: 'Repairs', OTHER: 'Other', UNKNOWN: 'Not stated' };
 const pct = (x) => `${Math.round(x * 100)}%`;
 
 function hoursLabel(h) {
@@ -71,7 +72,8 @@ function Trend({ rows }) {
 }
 
 /** What the area rows are: City Power posts name a service centre, Tshwane's are grouped by region. */
-function areaKind(rows) {
+function areaKind(rows, water) {
+  if (water || rows.some((r) => r.href)) return { title: 'By supply asset', column: 'Asset' };
   const kinds = new Set(rows.flatMap((r) => Object.keys(r.filter ?? {})));
   if (kinds.has('region')) return kinds.has('sdc') ? { title: 'By service centre or region', column: 'Area' } : { title: 'By region', column: 'Region' };
   return { title: 'By service centre', column: 'Service centre' };
@@ -80,14 +82,15 @@ function areaKind(rows) {
 const areaLink = (filter) => `/outages?${new URLSearchParams({ ...filter, status: 'all' })}`;
 
 /** Areas down the side, causes across the top. Darker = a bigger share of that area's outages. */
-function AreaGrid({ rows, causes }) {
+function AreaGrid({ rows, causes, water }) {
   const cols = causes.filter((c) => c.id !== 'UNKNOWN').slice(0, 6).map((c) => c.id);
+  const kind = areaKind(rows, water);
   return (
     <div className="matrix-wrap">
       <table className="matrix">
         <thead>
           <tr>
-            <th scope="col">{areaKind(rows).column}</th>
+            <th scope="col">{kind.column}</th>
             {cols.map((id) => <th key={id} scope="col" className="num-col">{SHORT[id]}</th>)}
             <th scope="col" className="num-col">Total</th>
             <th scope="col">More than usual here</th>
@@ -96,7 +99,7 @@ function AreaGrid({ rows, causes }) {
         <tbody>
           {rows.map((r) => (
             <tr key={r.area}>
-              <th scope="row">{r.filter ? <Link to={areaLink(r.filter)}>{prettySdc(r.area)}</Link> : prettySdc(r.area)}</th>
+              <th scope="row">{r.href ? <Link to={r.href}>{nice(r.area)}</Link> : r.filter ? <Link to={areaLink(r.filter)}>{prettySdc(r.area)}</Link> : prettySdc(r.area)}</th>
               {cols.map((id) => {
                 const n = r.cells[id] ?? 0;
                 return <td key={id} className="num-col"><span className={n ? 'heat on' : 'heat'} style={n ? { '--level': 0.15 + 0.85 * (n / r.total) } : undefined}>{n || ''}</span></td>;
@@ -156,7 +159,7 @@ function Restore({ byCause, minimum }) {
           <span className="restore-n num">{plural(r.n, 'case')}</span>
         </li>
       ))}
-      <li className="restore-note">Median time from the first post to the post saying power is back. Shown only with at least {minimum} cases.</li>
+      <li className="restore-note">Median time from the first post to the post saying supply is back. Shown only with at least {minimum} cases.</li>
     </ul>
   );
 }
@@ -164,22 +167,27 @@ function Restore({ byCause, minimum }) {
 export default function Insights() {
   useDocumentTitle('Insights');
   const [days, setDays] = useState(14);
-  const { param: muniParam, name } = useMunicipality();
+  const { param: muniParam, name, service } = useMunicipality();
+  const water = service === 'WATER';
   const { utility, Utility, single } = useUtility();
   const { data, error, loading, refreshing } = useApi(withMunicipality(`/v1/insights?days=${days}`, muniParam));
+  const known = data ? Math.max(0, data.total - (data.causes.find((c) => c.id === 'UNKNOWN')?.count ?? 0)) : 0;
 
   return (
     <div className="container page">
-      <header className="page-head">
-        <h1>Insights{name ? ` · ${name}` : ''}</h1>
-        <p>What is causing the outages, where, and how long they take to fix. Built from the causes {utility} states in its posts.</p>
+      <header className="page-head insights-head">
+        <ServiceIdentity service={service} />
+        <h1>{water ? 'Water supply insights' : 'Electricity insights'}{name ? ` · ${name}` : ''}</h1>
+        <p>{water ? `What is affecting water supply, which assets, and how long restoration takes. Built from what ${utility} states in its posts.` : `What is causing the outages, where, and how long they take to fix. Built from the causes ${utility} states in its posts.`}</p>
       </header>
+
+      <SuburbSupply />
 
       <div className="toolbar">
         <div className="seg" role="group" aria-label="Time window">
           {WINDOWS.map((d) => <button key={d} type="button" aria-pressed={d === days} onClick={() => setDays(d)}>Last {d} days</button>)}
         </div>
-        {data && <span className="small muted">History: {plural(data.dataDays, 'day')} · {plural(data.total, 'unplanned outage')} · cause stated for {plural(data.stated, 'outage')} ({pct(1 - data.unknownShare)})</span>}
+        {data && <span className="small muted">Based on {plural(data.dataDays, 'day')} of collected posts</span>}
       </div>
 
       {error && !data && <ErrorState error={error} />}
@@ -187,19 +195,24 @@ export default function Insights() {
       {data && data.total === 0 && <EmptyState icon="search" title="No outages in this period">Try a longer window.</EmptyState>}
 
       {data && data.total > 0 && (
-        <div className={refreshing ? 'fading' : undefined}>
+        <div className={`insights-body ${water ? 'service-water' : 'service-power'}${refreshing ? ' fading' : ''}`}>
+          <div className="insight-summary" aria-label="Period summary">
+            <div className="insight-stat"><span><Icon name={water ? 'drop' : 'bolt'} /> Unplanned {water ? 'water incidents' : 'power outages'}</span><strong className="num">{data.total}</strong><small>Last {days} days</small></div>
+            <div className="insight-stat"><span><Icon name="info" /> Cause stated</span><strong className="num">{pct(known / data.total)}</strong><small>{plural(known, 'incident')} with a stated cause</small></div>
+            <div className="insight-stat"><span><Icon name="check" /> Recorded restorations</span><strong className="num">{data.restore.byCause.reduce((sum, row) => sum + row.n, 0)}</strong><small>Timing by cause appears below when enough cases exist</small></div>
+          </div>
           <div className="notice" role="note">
             <Icon name="info" />
             <div>Causes are <b>as stated by {utility}</b>, sorted into groups by GridWatch. A post naming a cause is not confirmation of it. Small groups over a short period are noisy, so treat differences as hints, not conclusions.</div>
           </div>
 
           <section className="section" aria-labelledby="cause-h">
-            <SectionHead id="cause-h" title="What is causing outages" sub="Share of unplanned outages by stated cause. Open a row to see the exact wording." />
+            <SectionHead id="cause-h" title={water ? 'What is affecting supply' : 'What is causing outages'} sub={water ? 'Share of unplanned supply incidents by stated cause. Open a row to see the exact wording.' : 'Share of unplanned outages by stated cause. Open a row to see the exact wording.'} />
             <CauseList causes={data.causes} total={data.total} />
           </section>
 
           <section className="section" aria-labelledby="trend-h">
-            <SectionHead id="trend-h" title="Day by day" sub="One square per day, darker means more outages of that kind began" />
+            <SectionHead id="trend-h" title="Day by day" sub={`One square per day; darker means more ${water ? 'water incidents' : 'electricity outages'} of that kind began`} />
             <Trend rows={data.trend} />
           </section>
 
@@ -209,19 +222,19 @@ export default function Insights() {
           </section>
 
           <section className="section" aria-labelledby="area-h">
-            <SectionHead id="area-h" title={areaKind(data.byArea).title} sub="How many outages of each kind, and what each area has more of than everywhere shown here" />
-            <AreaGrid rows={data.byArea} causes={data.causes} />
+            <SectionHead id="area-h" title={areaKind(data.byArea, water).title} sub={water ? 'How many incidents of each kind, and what each asset has more of than the others shown here' : 'How many outages of each kind, and what each area has more of than everywhere shown here'} />
+            <AreaGrid rows={data.byArea} causes={data.causes} water={water} />
           </section>
 
           <p className="history-note">This page stands on {plural(data.dataDays, 'day')} of collected posts. Differences firm up as more is collected: with only a few cases in a group, treat it as a hint.</p>
 
           <div className="cols-2 lower">
             <section className="section" aria-labelledby="fix-h">
-              <SectionHead id="fix-h" title="How long power takes to come back" sub="Typical time by cause" />
+              <SectionHead id="fix-h" title={water ? 'How long supply takes to come back' : 'How long power takes to come back'} sub="Typical time by cause" />
               {data.restore.byCause.length ? <Restore byCause={data.restore.byCause} minimum={data.restore.minimum} /> : <p className="muted">No restorations recorded in this period yet.</p>}
             </section>
             <section className="section" aria-labelledby="rep-h">
-              <SectionHead id="rep-h" title="Equipment that keeps failing" sub="Involved in more than one outage in this period" />
+              <SectionHead id="rep-h" title={water ? 'Assets that keep failing' : 'Equipment that keeps failing'} sub={water ? 'Involved in more than one supply incident in this period' : 'Involved in more than one outage in this period'} />
               {data.repeat.length ? (
                 <ul className="repeat">
                   {data.repeat.map((n) => (
@@ -235,7 +248,7 @@ export default function Insights() {
                     </li>
                   ))}
                 </ul>
-              ) : <p className="muted">No equipment appears in more than one outage in this period.</p>}
+              ) : <p className="muted">No {water ? 'water asset' : 'equipment'} appears in more than one incident in this period.</p>}
             </section>
           </div>
 

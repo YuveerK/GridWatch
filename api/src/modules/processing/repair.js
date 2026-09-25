@@ -1,5 +1,6 @@
 import { assertLeaseInTx } from '../coordination/lease.js';
 import { refoldOutage } from '../outages/outage-state.js';
+import { decodeEdgeEvidenceRef } from '../../lib/evidence-edge.js';
 
 // Repairs (re-linking a post, a correction, a node merge) are STAGED and REVERSIBLE:
 //   1. before anything changes, a snapshot is taken of everything the repair can touch for the posts involved: their outage entries and
@@ -26,9 +27,10 @@ export async function snapshotForPosts(prisma, postIds, now = new Date()) {
   for (const e of evidence) {
     if (e.kind === 'NODE') nodeIds.add(e.refA);
     else if (e.kind === 'EDGE') {
+      const { childId, relationType } = decodeEdgeEvidenceRef(e.refB);
       nodeIds.add(e.refA);
-      nodeIds.add(e.refB);
-      edgeKeys.push({ parentId: e.refA, childId: e.refB });
+      nodeIds.add(childId);
+      edgeKeys.push({ parentId: e.refA, childId, relationType });
     } else if (e.kind === 'NODE_LOCALITY') {
       nodeIds.add(e.refA);
       nlKeys.push({ nodeId: e.refA, localityId: e.refB });
@@ -44,8 +46,8 @@ export async function snapshotForPosts(prisma, postIds, now = new Date()) {
 }
 
 const CONFIRM_AT = 2;
-const NODE_FIELDS = ['type', 'name', 'normalizedKey', 'municipalityId', 'lifecycle', 'evidenceCount', 'firstSeenAt', 'lastSeenAt'];
-const edgeKey = (a, b) => a + '|' + b;
+const NODE_FIELDS = ['type', 'name', 'normalizedKey', 'serviceType', 'municipalityId', 'lifecycle', 'evidenceCount', 'firstSeenAt', 'lastSeenAt'];
+const edgeKey = (a, b, relationType = 'LEGACY_PARENT') => `${a}|${b}|${relationType}`;
 /** How many contributions each graph fact has: NODE|id, EDGE|parent|child, NODE_LOCALITY|node|locality. */
 function tally(rows) {
   const m = new Map();
@@ -55,7 +57,7 @@ function tally(rows) {
   }
   return m;
 }
-const OUTAGE_FIELDS = ['id', 'kind', 'status', 'title', 'sdcName', 'municipalityId', 'cause', 'etaText', 'restorationPercent', 'primaryNodeId', 'retroactive', 'digest', 'startedAt', 'lastUpdateAt', 'restoredAt', 'scheduledStart', 'scheduledEnd', 'createdAt'];
+const OUTAGE_FIELDS = ['id', 'kind', 'status', 'serviceType', 'waterState', 'title', 'sdcName', 'municipalityId', 'cause', 'etaText', 'restorationPercent', 'primaryNodeId', 'retroactive', 'digest', 'startedAt', 'lastUpdateAt', 'restoredAt', 'scheduledStart', 'scheduledEnd', 'createdAt'];
 const pick = (row, keys) => Object.fromEntries(keys.filter((k) => k in row).map((k) => [k, row[k]]));
 
 /** Undo a repair: put the snapshot back. `ctx` is the held pipeline lease. Returns what was restored. */
@@ -104,7 +106,7 @@ export async function restoreSnapshot({ prisma, snapshot: raw, ctx }) {
       const wasCounts = tally(s.evidence);
       const keys = [...new Set([...nowCounts.keys(), ...wasCounts.keys()])].sort((x, y) => (x.startsWith('NODE|') ? 0 : 1) - (y.startsWith('NODE|') ? 0 : 1));
       const nodeById = new Map(s.nodes.map((n) => [n.id, n]));
-      const edgeBy = new Map(s.edges.map((e) => [edgeKey(e.parentId, e.childId), e]));
+      const edgeBy = new Map(s.edges.map((e) => [edgeKey(e.parentId, e.childId, e.relationType), e]));
       const nlBy = new Map(s.nodeLocalities.map((l) => [edgeKey(l.nodeId, l.localityId), l]));
       for (const k of keys) {
         const delta = (wasCounts.get(k) ?? 0) - (nowCounts.get(k) ?? 0);
@@ -127,11 +129,14 @@ export async function restoreSnapshot({ prisma, snapshot: raw, ctx }) {
         } else {
           const isEdge = kind === 'EDGE';
           const model = isEdge ? tx.infraEdge : tx.nodeLocality;
-          const where = isEdge ? { parentId_childId: { parentId: a, childId: b } } : { nodeId_localityId: { nodeId: a, localityId: b } };
-          const snap = (isEdge ? edgeBy : nlBy).get(edgeKey(a, b));
+          const decoded = isEdge ? decodeEdgeEvidenceRef(b) : null;
+          const snap = isEdge ? edgeBy.get(edgeKey(a, decoded.childId, decoded.relationType)) : nlBy.get(edgeKey(a, b));
+          const relationType = decoded?.relationType;
+          const childId = decoded?.childId;
+          const where = isEdge ? { parentId_childId_relationType: { parentId: a, childId, relationType } } : { nodeId_localityId: { nodeId: a, localityId: b } };
           const cur = await model.findUnique({ where });
           if (!cur) {
-            if (snap && (wasCounts.get(k) ?? 0) > 0) await model.create({ data: isEdge ? { parentId: a, childId: b, evidenceCount: wasCounts.get(k), lastSeenAt: snap.lastSeenAt } : { nodeId: a, localityId: b, evidenceCount: wasCounts.get(k), lastSeenAt: snap.lastSeenAt } });
+            if (snap && (wasCounts.get(k) ?? 0) > 0) await model.create({ data: isEdge ? { parentId: a, childId, relationType, evidenceCount: wasCounts.get(k), lastSeenAt: snap.lastSeenAt } : { nodeId: a, localityId: b, evidenceCount: wasCounts.get(k), lastSeenAt: snap.lastSeenAt } });
             continue;
           }
           const evidenceCount = cur.evidenceCount + delta;

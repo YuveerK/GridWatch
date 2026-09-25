@@ -3,10 +3,10 @@ import { readingRevision } from '../../lib/reading-revision.js';
 import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
-import { knowledgeContext, sdcFromText } from '../infrastructure/knowledge-context.js';
+import { knowledgeContext, sdcFromText, waterKnowledgeContext } from '../infrastructure/knowledge-context.js';
 import { generateJson } from './gemini.client.js';
-import { extractionJsonSchema, extractionSchema } from './extraction.schema.js';
-import { buildSystemPrompt, buildUserText } from './prompt.js';
+import { readerFor } from './reader-registry.js';
+import { classifyWaterNotice, waterNoticeSummary } from './readers/water.reader.js';
 
 const MAX_IMAGES = 4;
 
@@ -16,11 +16,12 @@ const MAX_IMAGES = 4;
  * changing a per-account hint in prompt.js - makes older readings show up as stale (npm run audit) and
  * `npm run reread` refreshes exactly those. `sourceAccountName` is SourcePost.sourceAccount.
  */
-export function readingStamp(sourceAccountName) {
-  const prompt = createHash('sha1').update(buildSystemPrompt(sourceAccountName)).update(JSON.stringify(extractionJsonSchema)).digest('hex').slice(0, 10);
+export function readingStamp(sourceAccountName, serviceType = 'ELECTRICITY') {
+  const reader = readerFor(serviceType ?? 'ELECTRICITY');
+  const prompt = createHash('sha1').update(reader.buildSystemPrompt(sourceAccountName)).update(JSON.stringify(reader.jsonSchema)).digest('hex').slice(0, 10);
   return { prompt, model: env.GEMINI_MODEL };
 }
-export const isStale = (row, sourceAccountName) => row?.result?.__reading?.prompt !== readingStamp(sourceAccountName).prompt || row?.model !== env.GEMINI_MODEL;
+export const isStale = (row, sourceAccountName, serviceType = 'ELECTRICITY') => row?.result?.__reading?.prompt !== readingStamp(sourceAccountName, serviceType).prompt || row?.model !== env.GEMINI_MODEL;
 
 export function postText(post) {
   return post.noteTweetText || post.text;
@@ -95,42 +96,60 @@ async function loadImages(post) {
 }
 
 export async function extractPost(postId, { force = false, signal } = {}) {
-  const promptVersion = env.AI_PROMPT_VERSION;
+  const post = await prisma.sourcePost.findUniqueOrThrow({ where: { id: postId }, include: { PostMedia: true } });
+  const serviceType = post.serviceType ?? 'ELECTRICITY';
+  const reader = readerFor(serviceType);
+  const promptVersion = reader.promptVersion ?? env.AI_PROMPT_VERSION;
   const existing = await prisma.postExtraction.findUnique({ where: { postId_promptVersion: { postId, promptVersion } } });
+  if (existing && !force && serviceType === 'WATER' && existing.status === 'NEEDS_REVIEW' && existing.result) {
+    const noticeClass = classifyWaterNotice(existing.result, postText(post));
+    if (noticeClass) {
+      const result = { ...existing.result, relevance: noticeClass };
+      return prisma.postExtraction.update({ where: { id: existing.id }, data: { status: 'SUCCEEDED', relevance: noticeClass, result, error: null } });
+    }
+  }
   if (existing?.status === 'SUCCEEDED' && !force) return existing;
 
-  const post = await prisma.sourcePost.findUniqueOrThrow({ where: { id: postId }, include: { PostMedia: true } });
   const text = postText(post);
   const started = Date.now();
   const { parts: imageParts, failed, reasons: imageFailures } = await loadImages(post);
-  const knowledge = env.KNOWLEDGE_CONTEXT === 'on' ? await knowledgeContext(sdcFromText(text)) : null;
-  const userText = buildUserText({
+  const knowledge = env.KNOWLEDGE_CONTEXT === 'on'
+    ? serviceType === 'WATER'
+      ? await waterKnowledgeContext(text)
+      : await knowledgeContext(sdcFromText(text))
+    : null;
+  const userText = reader.buildUserText({
     post: { text, publishedAtLocal: sast(post.publishedAt), isReply: post.conversationId !== post.externalId },
     knowledge,
   });
 
   let result = null;
   let error = null;
+  let rawJson = null;
   let usage = { inputTokens: 0, outputTokens: 0 };
   for (let attempt = 1; attempt <= 2 && !result; attempt++) {
     try {
       const out = await generateJson({
-        systemInstruction: buildSystemPrompt(post.sourceAccount),
+        systemInstruction: reader.buildSystemPrompt(post.sourceAccount),
         parts: [{ text: userText }, ...imageParts],
-        jsonSchema: extractionJsonSchema,
+        jsonSchema: reader.jsonSchema,
         hasImages: imageParts.length > 0,
         signal,
       });
       usage = { inputTokens: (usage.inputTokens ?? 0) + (out.inputTokens ?? 0), outputTokens: (usage.outputTokens ?? 0) + (out.outputTokens ?? 0) };
-      result = { ...extractionSchema.parse(JSON.parse(out.text)), __reading: readingStamp(post.sourceAccount) };
+      rawJson = JSON.parse(out.text);
+      const parsed = reader.parse ? reader.parse(rawJson) : reader.zodSchema.parse(rawJson);
+      result = reader.normaliseReading({ ...parsed, __reading: readingStamp(post.sourceAccount, serviceType) });
       error = null;
     } catch (err) {
       error = err.message;
-      logger.warn({ postId, attempt, err: err.message }, 'extraction attempt failed');
+      logger.warn({ postId, promptVersion, model: env.GEMINI_MODEL, attempt, issues: err.issues ?? null, raw: rawJson, err: err.message }, 'extraction attempt failed');
     }
   }
 
-  const needsReview = !result || failed > 0 || result.confidence < 0.6;
+  const noticeClass = serviceType === 'WATER' && result ? classifyWaterNotice(result, text) : null;
+  if (noticeClass && result) result = { ...result, relevance: noticeClass };
+  const needsReview = !result || failed > 0 || (result.confidence < 0.6 && !noticeClass);
   const data = {
     model: env.GEMINI_MODEL,
     status: !result ? 'FAILED' : needsReview ? 'NEEDS_REVIEW' : 'SUCCEEDED',
@@ -169,6 +188,19 @@ export async function extractPost(postId, { force = false, signal } = {}) {
     }
     return tx.postExtraction.upsert({ where: { postId_promptVersion: { postId, promptVersion } }, create: { postId, promptVersion, ...data }, update: data });
   });
+}
+
+/** A water reading often has no resident sentence (cause is null). Fill the missing post summary from the reading. */
+export async function ensureWaterSummaries(postId, result) {
+  if (!result || await prisma.postSummary.count({ where: { postId } })) return;
+  const faults = result.faults ?? [];
+  const multi = faults.length >= 2 || (faults.length === 1 && result.relevance === 'SDC_SUMMARY');
+  const rows = multi
+    ? faults.map((f, i) => ({ faultIndex: i, summary: waterNoticeSummary(result, f) }))
+    : [{ faultIndex: 0, summary: waterNoticeSummary(result) }];
+  for (const r of rows.filter((x) => x.summary?.trim())) {
+    await prisma.postSummary.create({ data: { postId, faultIndex: r.faultIndex, summary: r.summary.trim(), model: 'water-notice' } });
+  }
 }
 
 /** The fault layout a reading implies: what the linker keys its per-fault decisions on. */

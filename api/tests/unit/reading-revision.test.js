@@ -34,4 +34,10 @@ describe('E10: which reading an effect came from', () => {
   it('is null when there is no reading', () => {
     expect(readingRevision(null)).toBeNull();
   });
+  it('keeps the legacy fingerprint available for already-stored water effects', () => {
+    const water = { ...base(), water_state: 'NO_SUPPLY', customer_supply: null,
+      faults: [{ entities: [{ type: 'RESERVOIR', name: 'Alpha' }], localities: [], water_state: 'NO_SUPPLY' }] };
+    expect(readingRevision(water, { legacyWater: true })).not.toBe(readingRevision(water));
+    expect(readingRevision({ ...water, water_state: 'RECOVERING' }, { legacyWater: true })).toBe(readingRevision(water, { legacyWater: true }));
+  });
 });

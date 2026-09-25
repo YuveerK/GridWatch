@@ -4,9 +4,10 @@ import { statusMeta, timeAgo } from '../lib/api.js';
 import { useTick } from '../lib/hooks.js';
 import { useUtility } from '../lib/municipality.jsx';
 import Icon from './Icon.jsx';
+import ServiceIdentity from './ServiceIdentity.jsx';
 
-export function StatusBadge({ status, kind, large }) {
-  const m = statusMeta(status);
+export function StatusBadge({ status, kind, large, service }) {
+  const m = statusMeta(status, service);
   const label = kind === 'PLANNED' && status !== 'PLANNED' && status !== 'CANCELLED' ? `Planned · ${m.label.toLowerCase()}` : m.label;
   return (
     <span className={`badge tone-${m.tone}${large ? ' lg' : ''}`}>
@@ -15,6 +16,8 @@ export function StatusBadge({ status, kind, large }) {
     </span>
   );
 }
+
+export { ServiceIdentity };
 
 /** Suburb / equipment chip. `to` makes it a link. */
 export function Chip({ to, children, restored, soft, title }) {

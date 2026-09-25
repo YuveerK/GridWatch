@@ -102,6 +102,43 @@ describe('scoreCandidate', () => {
   });
 });
 
+describe('a suburb-only update of the same area', () => {
+  const area = outage({ nodeIds: new Set(['station']), localityIds: new Set(['a', 'b']) });
+  const update = { nodeIds: new Set(), relatedNodeIds: new Set(), localityIds: new Set(['a', 'b']), relevance: 'OUTAGE', status: 'INVESTIGATING', postedAt: hoursLater(4) };
+
+  it('links when the update names no equipment and the suburb set matches exactly', () => {
+    const r = scoreCandidate(post(update), area);
+    expect(r.reasons).toContain('same suburbs, no new equipment');
+    expect(r.score).toBeGreaterThanOrEqual(0.7);
+  });
+
+  it('stays a possible new incident when the update names different equipment', () => {
+    const r = scoreCandidate(post({ ...update, nodeIds: new Set(['other-station']) }), area);
+    expect(r.reasons).not.toContain('same suburbs, no new equipment');
+    expect(r.score).toBeLessThan(0.7);
+  });
+
+  it('stays a possible new incident when the update names only one shared suburb', () => {
+    const r = scoreCandidate(post({ ...update, localityIds: new Set(['a']) }), area);
+    expect(r.score).toBeLessThan(0.7);
+  });
+
+  it('stays a possible new incident when the update also names other suburbs', () => {
+    const r = scoreCandidate(post({ ...update, localityIds: new Set(['a', 'b', 'c']) }), area);
+    expect(r.reasons).not.toContain('same suburbs, no new equipment');
+    expect(r.score).toBeLessThan(0.7);
+  });
+
+  it('never links a planned post to an unplanned incident that covers the same suburbs', () => {
+    expect(scoreCandidate(post({ ...update, kind: 'PLANNED', relevance: 'PLANNED_OUTAGE' }), area).score).toBe(0);
+  });
+
+  it('does not apply the electricity suburb rule to a water post', () => {
+    const r = scoreCandidate(post({ ...update, serviceType: 'WATER' }), { ...area, serviceType: 'WATER' });
+    expect(r.reasons ?? []).not.toContain('same suburbs, no new equipment');
+  });
+});
+
 describe('a restoration that names different equipment but all the same suburbs', () => {
   it('reaches the tie-break instead of opening a duplicate outage (the Weltevredenpark case)', () => {
     const o = outage({ nodeIds: new Set(['other-station']), localityIds: new Set(['a', 'b', 'c', 'd']) });

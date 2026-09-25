@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useApi } from './api.js';
+import { useService } from './service.jsx';
 
 const STORAGE_KEY = 'gridwatch:municipality';
 const MunicipalityContext = createContext(null);
@@ -16,6 +17,7 @@ function readStored() {
  * navigation and reloads; every page threads `municipality` from this into its own API calls. */
 export function MunicipalityProvider({ children }) {
   const [code, setCode] = useState(readStored);
+  const { service } = useService();
   const list = useApi('/v1/municipalities');
   useEffect(() => {
     try {
@@ -27,8 +29,8 @@ export function MunicipalityProvider({ children }) {
   const options = list.data?.data ?? [];
   // a code from a previous visit that no longer exists (renamed/removed) falls back to "all" rather than filtering to nothing
   useEffect(() => {
-    if (code && options.length && !options.some((m) => m.code === code)) setCode('');
-  }, [code, options]);
+    if (code && options.length && !options.some((m) => m.code === code && (!m.services?.length || m.services.includes(service)))) setCode('');
+  }, [code, options, service]);
   const value = useMemo(() => ({ code, setCode, options }), [code, options]);
   return <MunicipalityContext.Provider value={value}>{children}</MunicipalityContext.Provider>;
 }
@@ -36,9 +38,12 @@ export function MunicipalityProvider({ children }) {
 /** { code, setCode, options, name, param } - `param` is the ready-to-append query fragment ("" or "municipality=X"). */
 export function useMunicipality() {
   const ctx = useContext(MunicipalityContext);
+  const { service } = useService();
   const name = ctx?.options.find((m) => m.code === ctx.code)?.name ?? null;
-  const param = ctx?.code ? `municipality=${encodeURIComponent(ctx.code)}` : '';
-  return { ...ctx, name, param };
+  const parts = [];
+  if (ctx?.code) parts.push(`municipality=${encodeURIComponent(ctx.code)}`);
+  parts.push(`service=${encodeURIComponent(service)}`);
+  return { ...ctx, name, param: parts.join('&'), service };
 }
 
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -50,17 +55,18 @@ const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
  * { utility: "City Power" | "the City of Tshwane" | "the utility", Utility (capitalised), accounts: [X handles],
  *   contacts: [{ name, utility, contact }] (one per municipality in scope), single (true when one municipality is in scope) }
  */
-export function useUtility(which = null) {
-  const { code, options = [] } = useMunicipality();
+export function useUtility(which = null, forService = null) {
+  const { code, options = [], service } = useMunicipality();
   const own = which ? options.find((m) => m.code === which || m.id === which || m.name === which) : null;
   const scoped = own ?? options.find((m) => m.code === code) ?? null;
   const inScope = scoped ? [scoped] : options;
-  const utility = scoped?.utility ?? 'the utility';
+  const water = (forService ?? service) === 'WATER';
+  const utility = water ? scoped?.waterUtility ?? 'Johannesburg Water' : scoped?.utility ?? 'the utility';
   return {
     utility,
     Utility: cap(utility),
     accounts: inScope.flatMap((m) => m.accounts ?? []),
-    contacts: inScope.filter((m) => m.contact).map((m) => ({ name: m.name, utility: m.utility, contact: m.contact })),
+    contacts: inScope.filter((m) => (water ? m.waterContact : m.contact)).map((m) => ({ name: m.name, utility: water ? m.waterUtility ?? 'Johannesburg Water' : m.utility, contact: water ? m.waterContact : m.contact })),
     single: Boolean(scoped),
   };
 }

@@ -1,7 +1,9 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
-import { extractPost, faultLayout } from '../ai/extraction.service.js';
+import { ensureWaterSummaries, extractPost, faultLayout } from '../ai/extraction.service.js';
+import { isUnsplitWaterBoard, waterFaultItems } from '../ai/readers/water.reader.js';
+import { unsupportedService } from '../ai/service-fit.js';
 import { LeaseLostError, assertLeaseInTx, exclusive, recoverStaleWork } from '../coordination/lease.js';
 import { learnFromExtraction, removeContributions } from '../infrastructure/infrastructure.service.js';
 import { readingRevision } from '../../lib/reading-revision.js';
@@ -26,16 +28,19 @@ const setStatus = (id, processingStatus) => prisma.sourcePost.update({ where: { 
 
 // SourceAccount.displayName -> municipalityId, memoized (accounts are seeded rarely; geography is effectively static per run).
 // Returns null for an account with no municipality set, or that doesn't exist - callers already treat null as "unscoped".
-let municipalityByAccount = null;
-async function municipalityForAccount(displayName) {
-  if (!municipalityByAccount) {
-    const rows = await prisma.sourceAccount.findMany({ select: { displayName: true, municipalityId: true } });
-    municipalityByAccount = new Map(rows.map((r) => [r.displayName, r.municipalityId]));
+let accountByName = null;
+async function accountFor(displayName) {
+  if (!accountByName) {
+    const rows = await prisma.sourceAccount.findMany({ select: { displayName: true, municipalityId: true, serviceType: true } });
+    accountByName = new Map(rows.map((r) => [r.displayName, r]));
   }
-  return municipalityByAccount.get(displayName) ?? null;
+  return accountByName.get(displayName) ?? { municipalityId: null, serviceType: 'ELECTRICITY' };
+}
+async function municipalityForAccount(displayName) {
+  return (await accountFor(displayName)).municipalityId ?? null;
 }
 export function resetMunicipalityCache() {
-  municipalityByAccount = null;
+  accountByName = null;
 }
 
 /**
@@ -72,12 +77,10 @@ export function faultItems(extraction) {
 function finalStatus(items, decisions, extraction) {
   const byIndex = new Map(decisions.map((d) => [d.faultIndex, d]));
   const review = items.filter((it) => byIndex.get(it.faultIndex)?.outcome === 'NEEDS_REVIEW');
-  if (review.length) {
-    // "Reminder of upcoming planned maintenance" with no place named has nothing to attach to: a notice, not a to-do.
-    // An outage report with no place is different (someone may be without power), so that one stays flagged.
-    const harmless = items.length === 1 && /no infrastructure or locality/.test(byIndex.get(0)?.reason ?? '') && ['PLANNED_OUTAGE', 'UPDATE', 'RESTORATION'].includes(extraction.relevance);
-    return harmless ? 'GENERAL_NOTICE' : 'NEEDS_REVIEW';
-  }
+  // A status update that names no asset or suburb is a notice. An outage report with no place stays flagged.
+  const harmless = items.length === 1 && /no infrastructure or locality/.test(byIndex.get(0)?.reason ?? '') && ['PLANNED_OUTAGE', 'UPDATE', 'RESTORATION'].includes(extraction.relevance);
+  if (harmless) return 'GENERAL_NOTICE';
+  if (review.length) return 'NEEDS_REVIEW';
   return items.length > 1 ? 'RELEVANT' : STATUS_BY_RELEVANCE[extraction.relevance];
 }
 
@@ -106,7 +109,22 @@ async function processLocked(postId, ctx, { force = false, repairOutageIds = [],
       await setStatus(postId, extraction.status === 'FAILED' ? 'PROCESSING_ERROR' : 'NEEDS_REVIEW');
       return { postId, outcome: extraction.status };
     }
-    const items = faultItems(extraction);
+    const account = await accountFor(postRow.sourceAccount);
+    const municipalityId = account.municipalityId ?? null;
+    const serviceType = postRow.serviceType ?? account.serviceType ?? 'ELECTRICITY';
+    if (serviceType === 'WATER') await ensureWaterSummaries(postId, extraction.result);
+    const other = unsupportedService({ serviceType, text: postRow.noteTweetText || postRow.text, result: extraction.result });
+    if (other) {
+      await recordDecision(ctx, { id: postId, faultIndex: 0 }, { outcome: 'NEW', reason: `unsupported service: ${other} content on an ${serviceType} account` });
+      await setStatus(postId, 'IRRELEVANT');
+      return { postId, outcome: 'UNSUPPORTED_SERVICE' };
+    }
+    if (serviceType === 'WATER' && isUnsplitWaterBoard(extraction.result)) {
+      await recordDecision(ctx, { id: postId, faultIndex: 0 }, { outcome: 'NEW', reason: 'system status board: several assets without per-asset faults' });
+      await setStatus(postId, 'GENERAL_NOTICE');
+      return { postId, outcome: 'SYSTEM_STATUS_BOARD' };
+    }
+    const items = serviceType === 'WATER' ? waterFaultItems(extraction) : faultItems(extraction);
     const have = new Set((await decisionsOf(postId)).map((d) => d.faultIndex));
     const todo = items.filter((it) => !have.has(it.faultIndex));
     if (!todo.length) {
@@ -115,12 +133,11 @@ async function processLocked(postId, ctx, { force = false, repairOutageIds = [],
     }
 
     // Faults are handled one at a time and each commits its own decision: after a failure the next attempt does only what is missing.
-    const municipalityId = await municipalityForAccount(postRow.sourceAccount);
     let single = null;
     for (const item of todo) {
       ctx?.assertHeld();
       const source = { postId, faultIndex: item.faultIndex };
-      const facts = { ...(await learnFromExtraction(item.extraction, postRow.publishedAt, { source, ctx, municipalityId })), fromDigest: item.fromDigest };
+      const facts = { ...(await learnFromExtraction(item.extraction, postRow.publishedAt, { source, ctx, municipalityId, serviceType })), fromDigest: item.fromDigest };
       if (item.fromDigest && !facts.nodes.length && !facts.localityIds.length) {
         await recordDecision(ctx, { id: postId, faultIndex: item.faultIndex }, { outcome: 'NEW', reason: 'fault names no equipment or suburbs' });
         continue;
@@ -183,8 +200,25 @@ export async function processPost(postId, { ctx, force = false } = {}) {
  * older incident it restores, which arrives next cycle. Their posts simply wait, still UNPROCESSED, until the interval is whole. */
 async function incompleteAccounts() {
   const states = await prisma.ingestionState.findMany({ where: { incomplete: true }, select: { accountId: true } });
-  if (!states.length) return [];
-  const accounts = await prisma.sourceAccount.findMany({ where: { externalId: { in: states.map((s) => s.accountId) } }, select: { displayName: true } });
+  // Historical cursors are kept on their own runs, but their newest-first pages need the same
+  // chronological hold as an unfinished live interval. The latest run for a start boundary wins;
+  // a retry with a new end bound supersedes the earlier attempt.
+  const backfills = await prisma.ingestionRun.findMany({
+    where: { diagnostics: { path: ['kind'], equals: 'backfill' } },
+    orderBy: { startedAt: 'desc' },
+    select: { sourceAccountId: true, diagnostics: true },
+  });
+  const latest = new Map();
+  for (const run of backfills) {
+    const key = `${run.sourceAccountId}:${run.diagnostics?.from}`;
+    if (!latest.has(key)) latest.set(key, run);
+  }
+  const heldBackfillIds = [...latest.values()].filter((r) => r.diagnostics?.complete === false).map((r) => r.sourceAccountId);
+  if (!states.length && !heldBackfillIds.length) return [];
+  const accounts = await prisma.sourceAccount.findMany({
+    where: { OR: [{ externalId: { in: states.map((s) => s.accountId) } }, { id: { in: heldBackfillIds } }] },
+    select: { displayName: true },
+  });
   return accounts.map((a) => a.displayName);
 }
 
@@ -197,15 +231,17 @@ async function incompleteAccounts() {
  * that wants everything processed now. Every other caller (the live cycle, `scripts/process.js`, `scripts/ingest.js --process`)
  * gets the chronological-ordering protection by default, with no wiring required on their part.
  */
-export async function processPending({ limit, onPost, onStart, from, to, ctx, sweepAsOf = false, ignoreIncomplete = false } = {}) {
+export async function processPending({ limit, onPost, onStart, from, to, ctx, sweepAsOf = false, ignoreIncomplete = false, sourceAccount = null, serviceType = null } = {}) {
   const outcome = await exclusive(ctx, async (held) => {
     await recoverStaleWork();
     const heldAccounts = ignoreIncomplete ? [] : await incompleteAccounts();
     const baseWhere = {
       processingStatus: { in: PENDING_STATUSES },
+      ...(sourceAccount ? { sourceAccount } : {}),
+      ...(serviceType ? { serviceType } : {}),
       ...(from || to ? { publishedAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } } : {}),
     };
-    const where = { ...baseWhere, ...(heldAccounts.length ? { sourceAccount: { notIn: heldAccounts } } : {}) };
+    const where = heldAccounts.length ? { AND: [baseWhere, { sourceAccount: { notIn: heldAccounts } }] } : baseWhere;
     const take = limit == null ? undefined : Math.max(0, Math.floor(limit));
     const posts = take === 0 ? [] : await prisma.sourcePost.findMany({ where, orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }], select: { id: true, publishedAt: true }, ...(take ? { take } : {}) });
     let sweptAt = 0;
@@ -232,7 +268,7 @@ export async function processPending({ limit, onPost, onStart, from, to, ctx, sw
     // `remaining` keeps its old meaning (every post still pending, held-back or not); `held` breaks out how much of that is
     // deliberately paused for ordering rather than actually stuck.
     const remaining = await prisma.sourcePost.count({ where: baseWhere });
-    const heldCount = heldAccounts.length ? await prisma.sourcePost.count({ where: { ...baseWhere, sourceAccount: { in: heldAccounts } } }) : 0;
+    const heldCount = heldAccounts.length ? await prisma.sourcePost.count({ where: { AND: [baseWhere, { sourceAccount: { in: heldAccounts } }] } }) : 0;
     return { total: posts.length, attempted: done, tally, remaining, held: heldCount };
   });
   return outcome.acquired ? outcome.value : { skipped: true, total: 0, attempted: 0, tally: {}, remaining: null, held: null };
@@ -331,7 +367,9 @@ export async function reprocessPost(postId, { ctx, reextract = false } = {}) {
     // temporal rule (an outage cannot be about a post published before it opened) would then wrongly exclude the very outage it belonged to.
     const repairOutageIds = Object.entries(touched).filter(([, v]) => v !== 'deleted').map(([id]) => id);
     const res = await processLocked(postId, held, { force: false, repairOutageIds, reading });
-    return { ...res, reprocessed: true, outagesRecomputed: Object.keys(touched).length, outagesDeleted: Object.values(touched).filter((v) => v === 'deleted').length };
+    const { reconcileReviewItems } = await import('../review/review.service.js');
+    const review = await reconcileReviewItems({ prisma, postIds: [postId] });
+    return { ...res, reprocessed: true, outagesRecomputed: Object.keys(touched).length, outagesDeleted: Object.values(touched).filter((v) => v === 'deleted').length, reviewResolved: review.resolved };
   });
   return outcome.acquired ? outcome.value : { postId, outcome: 'BUSY' };
 }
@@ -342,13 +380,15 @@ async function adoptLegacyEvidence(postId, ctx) {
   if (await prisma.evidenceContribution.findFirst({ where: { postId }, select: { postId: true } })) return;
   if (!(await prisma.linkDecision.findFirst({ where: { postId }, select: { id: true } }))) return;
   const [row, extraction] = await Promise.all([
-    prisma.sourcePost.findUniqueOrThrow({ where: { id: postId }, select: { publishedAt: true, sourceAccount: true } }),
+    prisma.sourcePost.findUniqueOrThrow({ where: { id: postId }, select: { publishedAt: true, sourceAccount: true, serviceType: true } }),
     prisma.postExtraction.findFirst({ where: { postId, status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' } }),
   ]);
   if (!extraction) return;
-  const municipalityId = await municipalityForAccount(row.sourceAccount);
-  for (const item of faultItems(extraction)) {
-    await learnFromExtraction(item.extraction, row.publishedAt, { source: { postId, faultIndex: item.faultIndex }, mode: 'record-only', ctx, municipalityId });
+  const account = await accountFor(row.sourceAccount);
+  const serviceType = row.serviceType ?? account.serviceType ?? 'ELECTRICITY';
+  const items = serviceType === 'WATER' ? waterFaultItems(extraction) : faultItems(extraction);
+  for (const item of items) {
+    await learnFromExtraction(item.extraction, row.publishedAt, { source: { postId, faultIndex: item.faultIndex }, mode: 'record-only', ctx, municipalityId: account.municipalityId ?? null, serviceType });
   }
 }
 

@@ -50,10 +50,10 @@ const reading = (relevance, status, equipment, extra = {}) => ({
 const fault = (status, equipment, extra = {}) => ({ status, cause: null, eta_text: null, restoration_percent: null, summary: 's', equipment: equipment.map((name) => ({ type: 'SUBSTATION', name, parent_name: null })), localities: [], ...extra });
 
 let n = 0;
-async function addPost(min, text, r) {
+async function addPost(min, text, r, extra = {}) {
   n += 1;
   const id = `p${n}`;
-  await prisma.sourcePost.create({ data: { id, platform: 'X', sourceAccount: 'a', externalId: String(9000 + n), text, publishedAt: at(min), updatedAt: at(min), conversationId: String(9000 + n) } });
+  await prisma.sourcePost.create({ data: { id, platform: 'X', sourceAccount: 'a', externalId: String(9000 + n), text, publishedAt: at(min), updatedAt: at(min), conversationId: String(9000 + n), ...extra } });
   readings.set(id, r);
   return id;
 }
@@ -909,5 +909,99 @@ describe('B6: a repair can be undone', () => {
     const [row] = await describeChange(prisma, snap);
     expect(row.changed).toBe(true);
     expect(row.was[0].label).toMatch(/Zulu/i);
+  });
+});
+
+describe('electricity and water in the same suburb stay separate', () => {
+  it('a Johannesburg Water post does not join a City Power outage', async () => {
+    const power = await addPost(0, 'Power out in Willowbrook', reading('OUTAGE', 'INVESTIGATING', ['Willowbrook Sub'], { localities: [{ name: 'Willowbrook', state: 'AFFECTED' }] }));
+    await processPost(power);
+    const waterReading = {
+      status: 'SUCCEEDED',
+      relevance: 'OUTAGE',
+      inputTokens: 0,
+      outputTokens: 0,
+      result: { ...base, relevance: 'OUTAGE', status: 'INVESTIGATING', water_state: 'NO_SUPPLY', entities: [{ type: 'RESERVOIR', name: 'Honeydew Reservoir', parent_name: null }], localities: [{ name: 'Willowbrook', state: 'AFFECTED' }], faults: [] },
+    };
+    const water = await addPost(30, 'No water in Willowbrook', waterReading, { serviceType: 'WATER' });
+    await processPost(water);
+    const rows = await prisma.outage.findMany({ orderBy: { startedAt: 'asc' } });
+    expect(rows.map((o) => o.serviceType)).toEqual(['ELECTRICITY', 'WATER']);
+    expect(rows[1].waterState).toBe('NO_SUPPLY');
+  });
+
+  it('a clear water notice on an electricity account creates no outage and no review', async () => {
+    const id = await addPost(0, '#WaterSupplyInterruption A water pipe burst in Sunnyside. Water tankers are on site.', reading('OUTAGE', 'INVESTIGATING', [], { review_reason: 'This post is about a water utility rather than electricity.', confidence: 0.4 }));
+    expect((await processPost(id)).outcome).toBe('UNSUPPORTED_SERVICE');
+    expect(await prisma.outage.count()).toBe(0);
+    expect((await prisma.sourcePost.findUnique({ where: { id } })).processingStatus).toBe('IRRELEVANT');
+    const { detectSuspicious } = await import('../../src/modules/review/review.service.js');
+    expect([...(await detectSuspicious({ prisma, postIds: [id] })).keys()]).toEqual([]);
+  });
+
+  it('a system-status board with several assets does not open one outage', async () => {
+    const board = {
+      status: 'SUCCEEDED',
+      relevance: 'UPDATE',
+      inputTokens: 0,
+      outputTokens: 0,
+      result: {
+        ...base,
+        relevance: 'UPDATE',
+        status: 'RESTORED',
+        water_state: 'NORMAL',
+        entities: ['Illovo Reservoir', 'Bryanston Reservoir', 'Morningside Reservoir', 'Linksfield Reservoir'].map((name) => ({ type: 'RESERVOIR', name, parent_name: null })),
+        localities: [],
+        faults: [],
+      },
+    };
+    const id = await addPost(0, 'Sandton System Update', board, { serviceType: 'WATER' });
+    expect((await processPost(id)).outcome).toBe('SYSTEM_STATUS_BOARD');
+    expect(await prisma.outage.count()).toBe(0);
+  });
+});
+
+describe('water posts leave a current summary', () => {
+  const water = (relevance, extra) => ({
+    status: 'SUCCEEDED',
+    relevance,
+    inputTokens: 0,
+    outputTokens: 0,
+    result: { ...base, relevance, status: 'INVESTIGATING', entities: [{ type: 'PRV', name: 'Valve PRV', parent_name: null }], localities: [{ name: 'Randpark Ridge', state: 'AFFECTED', impact: 'NO_SUPPLY' }], faults: [], cause: null, update_summary: null, ...extra },
+  });
+
+  it('persists a summary for an outage, an update, a recovery, and a linked restoration', async () => {
+    const opened = await addPost(0, 'No water at the valve', water('OUTAGE', { water_state: 'NO_SUPPLY', customer_supply: null }), { serviceType: 'WATER' });
+    await processPost(opened);
+    const outage = await prisma.postSummary.findFirst({ where: { postId: opened } });
+    expect(outage.summary).toMatch(/no water supply/i);
+
+    const update = 'Crews are repairing the valve and supply remains interrupted in the area.';
+    const updated = await addPost(10, 'Update on the valve', water('UPDATE', { water_state: 'LOW', cause: update, update_summary: update }), { serviceType: 'WATER' });
+    await processPost(updated);
+    expect((await prisma.postSummary.findFirst({ where: { postId: updated } })).summary).toBe(update);
+
+    const recovering = await addPost(20, 'The valve is recovering', water('UPDATE', { water_state: 'RECOVERING', customer_supply: null, localities: [{ name: 'Randpark Ridge', state: 'AFFECTED', impact: 'AFFECTED' }] }), { serviceType: 'WATER' });
+    await processPost(recovering);
+    const recovery = (await prisma.postSummary.findFirst({ where: { postId: recovering } })).summary;
+    expect(recovery).toMatch(/recovering/i);
+    expect(recovery).not.toMatch(/restored/i);
+
+    const restored = await addPost(30, 'Water supply has been restored at the valve', water('RESTORATION', { water_state: 'RECOVERING', customer_supply: 'RESTORED', localities: [{ name: 'Randpark Ridge', state: 'RESTORED', impact: 'RESTORED' }] }), { serviceType: 'WATER' });
+    const done = await processPost(restored);
+    expect(done.outcome).toBe('LINKED');
+    expect((await prisma.outage.findUnique({ where: { id: done.outageId } })).status).toBe('RESTORED');
+    const summary = (await prisma.postSummary.findFirst({ where: { postId: restored } })).summary;
+    expect(summary).toMatch(/restored/i);
+    expect(summary.length).toBeGreaterThanOrEqual(25);
+  });
+
+  it('leaves an electricity restoration summary as it was written', async () => {
+    const sentence = 'Power has been restored at Alpha Substation after the cable fault was repaired.';
+    const id = await addPost(0, 'Power restored at Alpha', reading('RESTORATION', 'RESTORED', ['Alpha'], { update_summary: sentence }));
+    await prisma.postSummary.create({ data: { postId: id, faultIndex: 0, summary: sentence, model: 'm' } });
+    await processPost(id);
+    const rows = await prisma.postSummary.findMany({ where: { postId: id } });
+    expect(rows.map((row) => row.summary)).toEqual([sentence]);
   });
 });

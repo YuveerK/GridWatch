@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/db/prisma.js';
 import { extractPost, faultLayout, isStale } from '../src/modules/ai/extraction.service.js';
+import { readerFor } from '../src/modules/ai/reader-registry.js';
 import { PIPELINE, withLease } from '../src/modules/coordination/lease.js';
 import { readingRevision } from '../src/lib/reading-revision.js';
 
@@ -23,7 +24,6 @@ const CONCURRENCY = Number(arg('concurrency', 4));
 const ALL = process.argv.includes('--all');
 const RESTORE = arg('restore', '');
 const [inP, outP] = env.GEMINI_MODEL.includes('3.5-flash-lite') ? [0.3, 2.5] : [0.75, 3.75];
-const pv = env.AI_PROMPT_VERSION;
 const FIELDS = ['model', 'status', 'relevance', 'result', 'imageText', 'imageCount', 'inputTokens', 'outputTokens', 'durationMs', 'error'];
 const pick = (row) => Object.fromEntries(FIELDS.map((f) => [f, row[f] ?? null]));
 const faultsOf = (r) => r?.faults?.length ?? 0;
@@ -33,7 +33,7 @@ if (RESTORE) {
   const rows = JSON.parse(fs.readFileSync(RESTORE, 'utf8'));
   for (const r of rows) {
     await prisma.$transaction(async (tx) => {
-      await tx.postExtraction.update({ where: { postId_promptVersion: { postId: r.postId, promptVersion: pv } }, data: pick(r) });
+      await tx.postExtraction.update({ where: { postId_promptVersion: { postId: r.postId, promptVersion: r.promptVersion ?? env.AI_PROMPT_VERSION } }, data: pick(r) });
       if (r.summaries) {
         // the summaries that belonged to that reading come back with it (and any the reading did not have are removed)
         await tx.postSummary.deleteMany({ where: { postId: r.postId } });
@@ -45,9 +45,10 @@ if (RESTORE) {
   return;
 }
 
-const rows = await prisma.postExtraction.findMany({ where: { promptVersion: pv }, include: { post: { select: { publishedAt: true, sourceAccount: true } } } });
+const allRows = await prisma.postExtraction.findMany({ include: { post: { select: { publishedAt: true, sourceAccount: true, serviceType: true } } } });
+const rows = allRows.filter((r) => r.promptVersion === (readerFor(r.post.serviceType).promptVersion ?? env.AI_PROMPT_VERSION));
 const todo = rows
-  .filter((r) => ALL || isStale(r, r.post.sourceAccount))
+  .filter((r) => ALL || isStale(r, r.post.sourceAccount, r.post.serviceType))
   .sort((a, b) => a.post.publishedAt - b.post.publishedAt)
   .slice(0, LIMIT || undefined);
 
@@ -57,7 +58,7 @@ const backup = path.join(dir, `extractions-${new Date().toISOString().replace(/[
 const summaryRows = await prisma.postSummary.findMany({ orderBy: [{ postId: 'asc' }, { faultIndex: 'asc' }] });
 const summariesOf = new Map();
 for (const x of summaryRows) summariesOf.set(x.postId, [...(summariesOf.get(x.postId) ?? []), { faultIndex: x.faultIndex, summary: x.summary, model: x.model, promptVersion: x.promptVersion }]);
-fs.writeFileSync(backup, JSON.stringify(rows.map((r) => ({ postId: r.postId, ...pick(r), summaries: summariesOf.get(r.postId) ?? [] }))));
+fs.writeFileSync(backup, JSON.stringify(rows.map((r) => ({ postId: r.postId, promptVersion: r.promptVersion, ...pick(r), summaries: summariesOf.get(r.postId) ?? [] }))));
 console.log(`Backup of ${rows.length} readings: ${backup}`);
 console.log(`Model ${env.GEMINI_MODEL}: re-reading ${todo.length} of ${rows.length} posts, ${CONCURRENCY} at a time, spend cap $${MAX_USD}\n`);
 

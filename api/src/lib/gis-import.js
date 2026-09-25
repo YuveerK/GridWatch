@@ -30,6 +30,12 @@ import { baseNormalize } from './normalize.js';
  *   dataset carries an `electricity_supply_match` field worth flagging deviations from; omit if none is trustworthy
  * @param {boolean} [opts.dryRun]
  */
+/** "Willowbrook Extensions" is the same place as the official parent "Willowbrook". */
+export function extensionsGroupKey(name) {
+  const key = baseNormalize(name);
+  return key ? `${key} ext` : '';
+}
+
 export async function importGisAreas({ records, municipalityId, baseTypes, source, primarySupplierName, dryRun = false }) {
   const regions = await prisma.region.findMany({ where: { municipalityId } });
   const regionByCode = new Map(regions.map((r) => [r.code, r]));
@@ -86,6 +92,17 @@ export async function importGisAreas({ records, municipalityId, baseTypes, sourc
     const any = byNameAnywhere.get(key);
     if (any?.length === 1) return any[0];
     if (any?.length > 1) stats.ambiguous.push(name);
+    return null;
+  }
+
+  /** An existing row named "X Extensions" / "X Extension". Older rows stored that phrase without collapsing it to "ext". */
+  function findExtensionsGroup(name) {
+    const plain = String(name ?? '').toLowerCase().replace(/\./g, '').replace(/\s+/g, ' ').trim();
+    const keys = [extensionsGroupKey(name), plain && `${plain} extensions`, plain && `${plain} extension`].filter(Boolean);
+    for (const key of keys) {
+      const hits = byNameAnywhere.get(key);
+      if (hits?.length === 1) return hits[0];
+    }
     return null;
   }
 
@@ -149,9 +166,16 @@ export async function importGisAreas({ records, municipalityId, baseTypes, sourc
 
   for (const r of baseRecords) {
     const existing = findExisting(r.area_name, r.region);
+    const extensionsGroup = findExtensionsGroup(r.area_name);
     if (existing) {
       stats.baseMatched += 1;
       await enrich(existing, r);
+      if (extensionsGroup && extensionsGroup.id !== existing.id) await enrich(extensionsGroup, r);
+      continue;
+    }
+    if (extensionsGroup) {
+      stats.baseMatched += 1;
+      await enrich(extensionsGroup, r);
       continue;
     }
     stats.baseCreated += 1;

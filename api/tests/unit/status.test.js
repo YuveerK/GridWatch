@@ -111,6 +111,18 @@ describe('E06: an overall percentage and explicit per-suburb restoration', () =>
     const { suburbRestored } = await import('../../src/modules/outages/outage-state.js');
     expect(suburbRestored({ status: 'RESTORED', partial: false, locs: [{ restored: false }], restored: false })).toBe(true);
   });
+  it('keeps equipment named by the earliest post when later digests do not expand the incident', async () => {
+    const { foldEffects } = await import('../../src/modules/outages/outage-state.js');
+    const early = { status: 'PARTIALLY_RESTORED', pct: null, expand: false, headlineLocalities: [{ state: 'AFFECTED' }], locs: [{ id: 'cbd', restored: false }], nodeIds: ['river', 'bellom'] };
+    const later = { status: 'RESTORED', pct: 100, expand: false, headlineLocalities: [{ state: 'RESTORED' }], locs: [{ id: 'cbd', restored: true }, { id: 'extra', restored: true }], nodeIds: ['river', 'other'] };
+    const folded = foldEffects([
+      { postId: 'a', postedAt: new Date('2026-08-11T11:00:00Z'), faultIndex: 0, effect: early },
+      { postId: 'b', postedAt: new Date('2026-08-11T13:00:00Z'), faultIndex: 0, effect: later },
+    ]);
+    expect([...folded.nodeIds].sort()).toEqual(['bellom', 'river']);
+    expect(folded.localities.has('extra')).toBe(false);
+    expect(folded.localities.get('cbd')).toBe(true);
+  });
 });
 
 describe('E09: an emergency-isolation programme is one kind of work from its first post to its last', () => {

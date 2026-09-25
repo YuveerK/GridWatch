@@ -74,11 +74,11 @@ export function buildLocalityHistory({ outages, days, now = new Date(), earliest
   };
 }
 
-export async function localityHistory({ localityId, days = 90, now = new Date() }) {
+export async function localityHistory({ localityId, days = 90, service = 'ELECTRICITY', now = new Date() }) {
   const since = new Date(now.getTime() - days * 24 * HOUR);
   const [outages, oldest] = await Promise.all([
     prisma.outage.findMany({
-      where: { startedAt: { gte: since }, localities: { some: { localityId } } },
+      where: { startedAt: { gte: since }, serviceType: service, localities: { some: { localityId } } },
       select: {
         id: true, title: true, kind: true, status: true, retroactive: true, cause: true, startedAt: true, restoredAt: true,
         nodes: { where: { node: { type: { notIn: ['SDC', 'CABLE', 'LINE', 'OTHER'] } } }, select: { node: { select: { name: true } } } },
@@ -87,7 +87,7 @@ export async function localityHistory({ localityId, days = 90, now = new Date() 
       orderBy: [{ startedAt: 'desc' }, { id: 'asc' }],
       take: 200,
     }),
-    prisma.outage.aggregate({ _min: { startedAt: true } }),
+    prisma.outage.aggregate({ where: { serviceType: service }, _min: { startedAt: true } }),
   ]);
   return buildLocalityHistory({
     outages: outages.map((o) => ({ ...o, equipment: o.nodes.map((n) => n.node.name), alsoAffected: o.localities.map((l) => l.locality.canonicalName).slice(0, 6) })),

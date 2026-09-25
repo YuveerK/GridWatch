@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { equipmentHubs, serviceCentrePlaces, weightedCentre, withoutOutliers } from '../../src/modules/geo/equipment-map.service.js';
+import { equipmentHubs, placeWaterHub, serviceCentrePlaces, supplyView, weightedCentre, withoutOutliers } from '../../src/modules/geo/equipment-map.service.js';
 import { prisma } from '../../src/db/prisma.js';
 
 afterEach(() => vi.restoreAllMocks());
@@ -42,6 +42,35 @@ describe('equipment position', () => {
     expect(c[0]).toBeCloseTo(28.25);
     expect(c[1]).toBeCloseTo(-26.25);
     expect(weightedCentre([])).toBeNull();
+  });
+
+  it('places a water asset on the suburbs it supplies when the asset itself has no coordinates', () => {
+    const placed = placeWaterHub({
+      id: 'res', name: 'Aeroton Reservoir', type: 'RESERVOIR', lat: null, lon: null,
+      localities: [{ evidenceCount: 2, locality: { lat: -26.2, lon: 28.0 } }, { evidenceCount: 2, locality: { lat: -26.4, lon: 28.2 } }],
+    }, true);
+    expect(placed).toMatchObject({ id: 'res', type: 'RESERVOIR', served: 2, live: true, derived: true });
+    expect(placed.lon).toBeCloseTo(28.1);
+    expect(placed.lat).toBeCloseTo(-26.3);
+    expect(placeWaterHub({ id: 'bare', name: 'Bare', type: 'RESERVOIR', lat: null, lon: null, localities: [] })).toBeNull();
+  });
+
+  it('returns power and water assets that can be drawn for one suburb', () => {
+    const points = new Map([['sub', [{ lon: 28, lat: -26, w: 1 }]]]);
+    const view = supplyView(
+      { id: 'fourways', canonicalName: 'Fourways', lat: -26.02, lon: 28.01, boundary: { type: 'Polygon' } },
+      [
+        { evidenceCount: 3, node: { id: 'sub', name: 'Fourways substation', type: 'SUBSTATION', serviceType: 'ELECTRICITY', lat: null, lon: null } },
+        { evidenceCount: 2, node: { id: 'res', name: 'Douglasdale Reservoir', type: 'RESERVOIR', serviceType: 'WATER', lat: -26.05, lon: 28.03 } },
+        { evidenceCount: 9, node: { id: 'sdc', name: 'Randburg', type: 'SDC', serviceType: 'ELECTRICITY', lat: -26, lon: 28 } },
+      ],
+      points,
+      new Set(['res']),
+    );
+    expect(view.locality).toMatchObject({ name: 'Fourways', boundary: { type: 'Polygon' } });
+    expect(view.assets.map((asset) => asset.id)).toEqual(['sub', 'res']);
+    expect(view.assets[0]).toMatchObject({ service: 'ELECTRICITY', lon: 28, lat: -26 });
+    expect(view.assets[1]).toMatchObject({ service: 'WATER', live: true, lat: -26.05 });
   });
 });
 

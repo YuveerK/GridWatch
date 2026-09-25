@@ -11,6 +11,7 @@ vi.mock('../../src/modules/ai/gemini.client.js', () => ({
 }));
 
 const { extractPost, faultLayout, mediaUrl, _fetchImageForTest } = await import('../../src/modules/ai/extraction.service.js');
+const { processPost } = await import('../../src/modules/processing/processor.service.js');
 const { env } = await import('../../src/config/env.js');
 const { prisma, resetDb } = await import('./db.js');
 
@@ -124,6 +125,57 @@ describe('E03: an uncertain re-read is not accepted over a good reading', () => 
     replies.push(reading({ confidence: 0.2 }));
     const first = await extractPost('p');
     expect(first.status).toBe('NEEDS_REVIEW');
+  });
+});
+
+describe('a fact-free water notice is not held just because confidence is low', () => {
+  const water = (over = {}) => ({
+    relevance: 'INFORMATIONAL', kind: 'UNPLANNED', water_state: 'UNKNOWN', customer_supply: null, cause: null, eta_text: null, restoration_percent: null,
+    systems: [], entities: [], localities: [], faults: [], image_text: '', confidence: 0.2, review_reason: null, ...over,
+  });
+  const add = (id, text) => prisma.sourcePost.create({ data: { id, platform: 'X', sourceAccount: 'JHBWater', externalId: id, serviceType: 'WATER', text, publishedAt: new Date(), updatedAt: new Date(), conversationId: id } });
+
+  it('accepts trivia and a promotional post as irrelevant, and a link-only bulletin as a notice', async () => {
+    await add('trivia', 'Before water reaches your tap, where is it commonly stored within the distribution network?');
+    replies.push(water({ review_reason: 'Notice is a trivia question rather than an operational notice.', image_text: 'Before water reaches your tap, where is it commonly stored?' }));
+    expect((await extractPost('trivia')).relevance).toBe('IRRELEVANT');
+    expect((await processPost('trivia')).outcome).not.toBe('NEEDS_REVIEW');
+    expect((await prisma.sourcePost.findUnique({ where: { id: 'trivia' } })).processingStatus).toBe('IRRELEVANT');
+
+    await add('promo', 'Join our community water-wise fun day this Saturday.');
+    replies.push(water({ review_reason: 'promotional community post', confidence: 0.25 }));
+    expect((await extractPost('promo')).relevance).toBe('IRRELEVANT');
+    expect((await prisma.sourcePost.findUnique({ where: { id: 'promo' } })).processingStatus).not.toBe('IRRELEVANT');
+    await processPost('promo');
+    expect((await prisma.sourcePost.findUnique({ where: { id: 'promo' } })).processingStatus).toBe('IRRELEVANT');
+
+    await add('link', '#JoburgUpdates\nCentral Systems Update\nhttps://t.co/rA149B7EcY');
+    await prisma.postExtraction.create({
+      data: {
+        postId: 'link', promptVersion: 'water-2', model: 'm', status: 'NEEDS_REVIEW', relevance: 'GENERAL_NOTICE',
+        result: water({ confidence: 0.3, relevance: 'GENERAL_NOTICE', review_reason: 'Notice contains only a system update link without specific operational details or impacts.', image_text: 'Central Systems Update' }),
+      },
+    });
+    const accepted = await extractPost('link');
+    expect(accepted.status).toBe('SUCCEEDED');
+    expect(accepted.relevance).toBe('GENERAL_NOTICE');
+    expect(replies).toHaveLength(0);
+    await processPost('link');
+    expect((await prisma.sourcePost.findUnique({ where: { id: 'link' } })).processingStatus).toBe('GENERAL_NOTICE');
+    expect(await prisma.outage.count()).toBe(0);
+  });
+
+  it('still holds a low-confidence water outage for a person', async () => {
+    await add('unclear', 'Water supply affected. See picture.');
+    const unclear = water({
+      relevance: 'INTERRUPTION', water_state: 'NO_SUPPLY', confidence: 0.4, review_reason: 'cannot tell which reservoir failed',
+      entities: [{ type: 'RESERVOIR', name: 'Unclear Reservoir', operator: null, parent_name: null, relationType: null }],
+      localities: [{ name: 'Soweto', impact: 'NO_SUPPLY' }],
+    });
+    replies.push(unclear, unclear);
+    expect((await extractPost('unclear')).status).toBe('NEEDS_REVIEW');
+    expect((await processPost('unclear')).outcome).toBe('NEEDS_REVIEW');
+    expect((await prisma.sourcePost.findUnique({ where: { id: 'unclear' } })).processingStatus).toBe('NEEDS_REVIEW');
   });
 });
 

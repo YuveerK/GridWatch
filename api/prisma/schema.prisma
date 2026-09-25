@@ -13,6 +13,11 @@ enum SourcePlatform {
   X
 }
 
+enum ServiceType {
+  ELECTRICITY
+  WATER
+}
+
 enum SourcePostProcessingStatus {
   UNPROCESSED
   PROCESSING
@@ -36,6 +41,7 @@ model SourceAccount {
   externalId     String         @unique
   displayName    String
   municipalityId String?
+  serviceType    ServiceType    @default(ELECTRICITY)
   active         Boolean        @default(true)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime
@@ -47,6 +53,7 @@ model SourcePost {
   id                  String                     @id
   platform            SourcePlatform             @default(X)
   sourceAccount       String
+  serviceType         ServiceType                @default(ELECTRICITY)
   externalId          String
   authorId            String?
   conversationId      String?
@@ -274,6 +281,66 @@ enum InfrastructureType {
   LINE
   CIRCUIT
   OTHER
+  WATER_SYSTEM
+  RESERVOIR
+  WATER_TOWER
+  PUMP_STATION
+  DIRECT_FEED
+  BULK_CONNECTION
+  BULK_METER
+  BOOSTER_STATION
+  TREATMENT_WORKS
+  PRV
+  WATER_PIPELINE
+  WATER_OTHER
+}
+
+enum InfrastructureRelationType {
+  LEGACY_PARENT
+  SUPPLIES
+  PUMPS_TO
+  DIRECTLY_SUPPLIES
+  FEEDS
+  PART_OF
+  UPSTREAM_OF
+  BYPASSES
+  BACKFEEDS
+}
+
+enum NodeLocalityRelationType {
+  ASSOCIATED
+  SERVES
+}
+
+enum KnowledgeSourceType {
+  OFFICIAL_WEB
+  OFFICIAL_DOCUMENT
+  MANUAL_CURATED
+}
+
+enum ImpactBasis {
+  EXPLICIT_SOURCE
+  INFERRED_TOPOLOGY
+}
+
+enum WaterOperationalState {
+  NORMAL
+  STABLE
+  CONSTRAINED
+  LOW
+  CRITICAL
+  EMPTY
+  NO_INCOMING_SUPPLY
+  NO_PUMPING
+  PUMPING_REDUCED
+  OUTLET_CLOSED
+  PARTIAL_SUPPLY
+  LOW_PRESSURE
+  NO_SUPPLY
+  BYPASS
+  THROTTLED
+  RECOVERING
+  UNKNOWN
 }
 
 /// Equipment identity is namespaced by municipality: the same station/distributor name in two different tracked utilities is
@@ -289,7 +356,13 @@ model InfraNode {
   type           InfrastructureType
   name           String
   normalizedKey  String
+  serviceType    ServiceType        @default(ELECTRICITY)
   municipalityId String?
+  metadata       Json?
+  lat            Float?
+  lon            Float?
+  boundary       Json?
+  geoSource      String?
   lifecycle      KnowledgeLifecycle @default(CANDIDATE)
   evidenceCount  Int                @default(1)
   firstSeenAt    DateTime
@@ -305,8 +378,9 @@ model InfraNode {
   primaryFor   Outage[]
   Municipality Municipality?  @relation(fields: [municipalityId], references: [id])
 
-  @@unique([type, normalizedKey, municipalityId])
+  @@unique([serviceType, type, normalizedKey, municipalityId])
   @@index([normalizedKey])
+  @@index([serviceType, municipalityId])
 }
 
 model NodeAlias {
@@ -324,25 +398,56 @@ model NodeAlias {
 model InfraEdge {
   parentId      String
   childId       String
-  evidenceCount Int       @default(1)
+  relationType  InfrastructureRelationType @default(LEGACY_PARENT)
+  evidenceCount Int                        @default(1)
   lastSeenAt    DateTime
-  parent        InfraNode @relation("EdgeParent", fields: [parentId], references: [id], onDelete: Cascade)
-  child         InfraNode @relation("EdgeChild", fields: [childId], references: [id], onDelete: Cascade)
+  parent        InfraNode                  @relation("EdgeParent", fields: [parentId], references: [id], onDelete: Cascade)
+  child         InfraNode                  @relation("EdgeChild", fields: [childId], references: [id], onDelete: Cascade)
 
-  @@id([parentId, childId])
+  @@id([parentId, childId, relationType])
   @@index([childId])
 }
 
 model NodeLocality {
   nodeId        String
   localityId    String
-  evidenceCount Int       @default(1)
+  relationType  NodeLocalityRelationType @default(ASSOCIATED)
+  evidenceCount Int                      @default(1)
   lastSeenAt    DateTime
-  node          InfraNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-  locality      Locality  @relation(fields: [localityId], references: [id], onDelete: Cascade)
+  node          InfraNode                @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  locality      Locality                 @relation(fields: [localityId], references: [id], onDelete: Cascade)
 
   @@id([nodeId, localityId])
   @@index([localityId])
+}
+
+model KnowledgeSource {
+  id          String              @id @default(cuid())
+  sourceType  KnowledgeSourceType
+  title       String?
+  url         String
+  publishedAt DateTime?
+  fetchedAt   DateTime            @default(now())
+  metadata    Json?
+  evidence    InfrastructureEvidence[]
+
+  @@unique([sourceType, url])
+}
+
+model InfrastructureEvidence {
+  id           String                      @id @default(cuid())
+  sourceId     String
+  nodeId       String?
+  parentId     String?
+  childId      String?
+  localityId   String?
+  relationType InfrastructureRelationType?
+  evidenceKind String
+  metadata     Json?
+  source       KnowledgeSource             @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([nodeId])
+  @@index([sourceId])
 }
 
 // ───────────── Outages + linking ─────────────
@@ -378,6 +483,8 @@ model Outage {
   id                 String       @id @default(cuid())
   kind               OutageKind   @default(UNPLANNED)
   status             OutageStatus @default(ACTIVE)
+  serviceType        ServiceType  @default(ELECTRICITY)
+  waterState         WaterOperationalState?
   title              String
   sdcName            String?
   cause              String?
@@ -406,6 +513,8 @@ model Outage {
   decisions    LinkDecision[]
 
   @@index([status, lastUpdateAt(sort: Desc)])
+  @@index([serviceType, status, lastUpdateAt(sort: Desc)])
+  @@index([municipalityId, serviceType, lastUpdateAt(sort: Desc)])
 }
 
 model OutageNode {
@@ -421,9 +530,10 @@ model OutageNode {
 model OutageLocality {
   outageId   String
   localityId String
-  restored   Boolean  @default(false)
-  outage     Outage   @relation(fields: [outageId], references: [id], onDelete: Cascade)
-  locality   Locality @relation(fields: [localityId], references: [id], onDelete: Cascade)
+  restored   Boolean     @default(false)
+  impactBasis ImpactBasis @default(EXPLICIT_SOURCE)
+  outage     Outage      @relation(fields: [outageId], references: [id], onDelete: Cascade)
+  locality   Locality    @relation(fields: [localityId], references: [id], onDelete: Cascade)
 
   @@id([outageId, localityId])
   @@index([localityId])

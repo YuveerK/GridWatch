@@ -7,9 +7,9 @@ import SearchBox from '../components/SearchBox.jsx';
 import SyncStatus from '../components/SyncStatus.jsx';
 import UpdatesFeed, { countNew, useSeenUpdates } from '../components/UpdatesFeed.jsx';
 import { ColumnChart, Sparkline } from '../components/charts.jsx';
-import { Chip, EmptyState, ErrorState, Freshness, Meter, SectionHead, Skeleton, StatusBadge } from '../components/ui.jsx';
+import { Chip, EmptyState, ErrorState, Freshness, Meter, SectionHead, ServiceIdentity, Skeleton, StatusBadge } from '../components/ui.jsx';
 import { nice, plural, prettySdc, statusMeta, timeAgo, useApi } from '../lib/api.js';
-import { useDocumentTitle, useTick } from '../lib/hooks.js';
+import { useDocumentTitle, useMyArea, useTick } from '../lib/hooks.js';
 import { isNewSince } from '../lib/newness.js';
 import { useMunicipality, useUtility, withMunicipality } from '../lib/municipality.jsx';
 import { useRefresh } from '../lib/refresh.js';
@@ -49,16 +49,17 @@ function Metric({ label, value, hint, to, tone, spark, delta, loading }) {
 /** One live outage in the stage list. Selecting it frames it on the map and opens the detail underneath. */
 function StageRow({ o, selected, onSelect }) {
   const { lastBatch } = useRefresh();
-  const m = statusMeta(o.status);
+  const m = statusMeta(o.status, o.service);
   const fresh = isNewSince(o.latestIngestedAt, lastBatch);
   const areas = o.places.filter((p) => !p.restored).map((p) => nice(p.name));
   return (
-    <li className={`srow tone-${m.tone}${selected ? ' is-selected' : ''}`}>
+    <li className={`srow tone-${m.tone}${selected ? ' is-selected' : ''}`} data-outage={o.id}>
       <button type="button" className="srow-btn" aria-pressed={selected} onClick={() => onSelect(selected ? null : o.id)}>
         <span className="srow-glyph" aria-hidden="true"><Icon name={m.icon} /></span>
         <span className="srow-main">
           <span className="srow-title">{nice(o.title)}{fresh && <em className="new-pill">New</em>}</span>
           <span className="srow-meta">
+            <ServiceIdentity service={o.service} compact />
             <b>{m.label}</b>
             {o.sdc && <span>{prettySdc(o.sdc)}</span>}
             <span className="num">{since(o.startedAt)} so far</span>
@@ -106,10 +107,14 @@ function HistoryStrips({ rows }) {
 export default function Overview() {
   useDocumentTitle();
   useTick(60_000);
-  const { param: muniParam } = useMunicipality();
+  const { param: muniParam, service } = useMunicipality();
+  const water = service === 'WATER';
   const { Utility, utility, accounts } = useUtility();
   const { data, error, loading } = useApi(withMunicipality('/v1/overview', muniParam), { refreshMs: 60_000 });
   const map = useApi(withMunicipality('/v1/map', muniParam), { refreshMs: 60_000 });
+  const { area } = useMyArea();
+  const areaDetail = useApi(area ? `/v1/localities/${area.id}` : null);
+  const areaShape = areaDetail.data?.id === area?.id ? areaDetail.data : null;
   const [selectedId, setSelectedId] = useState(null);
   const [filter, setFilter] = useState('all'); // all | ACTIVE | PARTIALLY_RESTORED
   const [tab, setTab] = useState(() => (new URLSearchParams(window.location.search).get('panel') === 'updates' ? 'updates' : 'outages')); // outages | updates (?panel=updates links straight to the feed)
@@ -124,24 +129,47 @@ export default function Overview() {
   const shown = filter === 'all' ? outages : outages.filter((o) => o.status === filter);
   const selected = outages.find((o) => o.id === selectedId) ?? null;
 
-  const points = useMemo(
-    () => shown.flatMap((o) => o.places.map((p) => ({ id: `${o.id}:${p.id}`, sub: p.id, oid: o.id, name: nice(p.name), lat: p.lat, lon: p.lon, tone: p.restored ? 'good' : TONE[o.status] ?? 'live', groups: [], dim: Boolean(selectedId) && o.id !== selectedId, note: nice(o.title) })),
-    ),
-    [shown, selectedId],
-  );
+  const points = useMemo(() => {
+    const pts = shown.flatMap((o) => o.places.map((p) => ({
+      id: `${o.id}:${p.id}`, sub: p.id, oid: o.id, name: nice(p.name), lat: p.lat, lon: p.lon,
+      boundary: p.boundary ?? null, inferred: p.inferred, tone: p.restored ? 'good' : TONE[o.status] ?? 'live',
+      groups: [o.id], dim: Boolean(selectedId) && o.id !== selectedId, note: nice(o.title),
+    })));
+    if (areaShape?.lat != null && areaShape.lon != null && !pts.some((p) => p.sub === areaShape.id)) {
+      pts.push({
+        id: `area:${areaShape.id}`, sub: areaShape.id, oid: null, name: nice(areaShape.name), lat: areaShape.lat, lon: areaShape.lon,
+        boundary: areaShape.boundary ?? null, inferred: false, tone: 'plan', groups: [], dim: Boolean(selectedId), note: 'Your saved area',
+      });
+    }
+    return pts;
+  }, [shown, selectedId, areaShape]);
   const focus = useMemo(() => {
-    if (!selected) return null;
-    const pts = selected.places.filter((p) => p.lat != null);
-    if (!pts.length) return null;
-    const lons = pts.map((p) => p.lon);
-    const lats = pts.map((p) => p.lat);
-    const pad = 0.012;
-    return { key: selected.id, bounds: [[Math.min(...lons) - pad, Math.min(...lats) - pad], [Math.max(...lons) + pad, Math.max(...lats) + pad]] };
-  }, [selected]);
-  const pick = (pointId) => {
-    const hit = points.find((p) => p.id === pointId);
-    setSelectedId(hit ? hit.oid : null);
+    const frame = (pts, key) => {
+      if (!pts.length) return null;
+      const lons = pts.map((p) => p.lon);
+      const lats = pts.map((p) => p.lat);
+      const pad = 0.012;
+      return { key, bounds: [[Math.min(...lons) - pad, Math.min(...lats) - pad], [Math.max(...lons) + pad, Math.max(...lats) + pad]] };
+    };
+    if (selected) return frame(selected.places.filter((p) => p.lat != null), selected.id);
+    if (areaShape?.lat != null && areaShape.lon != null) return frame([areaShape], `area:${areaShape.id}`);
+    return null;
+  }, [selected, areaShape]);
+  const outageFor = (ids) => {
+    const hits = [...new Set(ids.map((id) => points.find((p) => p.id === id)?.oid).filter(Boolean))];
+    return hits.length === 1 ? hits[0] : null;
   };
+  const pick = (pointId) => setSelectedId(outageFor([pointId]));
+  const pickCluster = (ids) => {
+    const oid = outageFor(ids);
+    if (!oid) return false;
+    setSelectedId(oid);
+    return true;
+  };
+  useEffect(() => {
+    if (!selectedId || tab !== 'outages') return;
+    document.querySelector(`[data-outage="${selectedId}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [selectedId, tab]);
   useEffect(() => {
     const esc = (e) => e.key === 'Escape' && setSelectedId(null);
     document.addEventListener('keydown', esc);
@@ -160,13 +188,13 @@ export default function Overview() {
       <section className="statusbar" aria-label="Right now">
         <div className="wide statusbar-row">
           <div className="statusbar-lead">
-            <h1>Is your power out?</h1>
+            <h1><Icon name={water ? 'drop' : 'bolt'} /> {water ? 'Is your water supply affected?' : 'Is your power out?'}</h1>
             <p className="dateline"><Freshness lastPostAt={data?.lastPostAt} /></p>
           </div>
           <div className="metrics">
-            <Metric label="Outages right now" value={c?.live} to="/outages" tone="live" spark={daily.map((d) => d.count)} delta={<Delta now={today} before={yesterday} unit="vs yesterday" />} loading={loadingAll} />
-            <Metric label="Being restored" value={c?.partial} to="/outages" tone="partial" hint="Some suburbs are back on" loading={loadingAll} />
-            <Metric label="Restored in 24 hours" value={c?.restored24h} to="/outages?status=restored" tone="good" hint="Power is back on" loading={loadingAll} />
+            <Metric label={water ? 'Supply interruptions now' : 'Outages right now'} value={c?.live} to="/outages" tone="live" spark={daily.map((d) => d.count)} delta={<Delta now={today} before={yesterday} unit="vs yesterday" />} loading={loadingAll} />
+            <Metric label="Being restored" value={c?.partial} to="/outages" tone="partial" hint={water ? 'Supply is returning' : 'Some suburbs are back on'} loading={loadingAll} />
+            <Metric label="Restored in 24 hours" value={c?.restored24h} to="/outages?status=restored" tone="good" hint={water ? 'Water supply restored' : 'Power is back on'} loading={loadingAll} />
             <Metric label="Planned ahead" value={c?.plannedUpcoming} to="/planned" tone="plan" hint="Scheduled maintenance" loading={loadingAll} />
           </div>
           <div className="statusbar-actions"><SyncStatus /><RefreshButton /></div>
@@ -196,7 +224,7 @@ export default function Overview() {
           ) : (
             <>
           <div className="stage-head">
-            <h2>Where power is out</h2>
+            <h2>{water ? 'Where water is interrupted' : 'Where power is out'}</h2>
             <div className="seg" role="group" aria-label="Filter">
               {[['all', 'All'], ['ACTIVE', 'Out'], ['PARTIALLY_RESTORED', 'Restoring']].map(([id, label]) => (
                 <button key={id} type="button" aria-pressed={filter === id} onClick={() => { setFilter(id); setSelectedId(null); }}>{label}</button>
@@ -217,24 +245,39 @@ export default function Overview() {
         </aside>
         <div className="stage-map">
           <Suspense fallback={<div className="map-fallback" />}>
-            <MapView points={points.map((p) => ({ ...p, id: p.id }))} layers={LAYERS} height="100%" focus={focus} onPickSuburb={pick} onClear={() => setSelectedId(null)} label="Map of suburbs with an outage right now" />
+            <MapView points={points} layers={LAYERS} height="100%" focus={focus} onPickSuburb={pick} onPickCluster={pickCluster} onClear={() => setSelectedId(null)} label="Map of suburbs with an outage right now" />
           </Suspense>
+          {selected && (
+            <div className="map-pick">
+              <button type="button" className="map-pick-x" aria-label="Clear selection" onClick={() => setSelectedId(null)}><Icon name="close" /></button>
+              <StatusBadge status={selected.status} service={selected.service} />
+              <h2>{nice(selected.title)}</h2>
+              {selected.latest && <p>{selected.latest}</p>}
+              <div className="panel-h">{water ? 'Areas affected' : 'Suburbs affected'}</div>
+              <div className="chips">
+                {selected.places.map((p) => <span key={p.id} className="chip">{p.restored && <Icon name="check" />}{nice(p.name)}</span>)}
+                {selected.places.length === 0 && <span className="small faint">No suburb has been named yet.</span>}
+              </div>
+              <Link to={`/outages/${selected.id}`} className="btn small primary">Open the timeline <Icon name="arrow" /></Link>
+            </div>
+          )}
           <div className="map-key" aria-hidden="true">
-            <span><i className="key-dot tone-live" /> Power out</span>
+            {areaShape && <span><i className="key-dot tone-plan" /> Your area</span>}
+            <span><i className="key-dot tone-live" /> {water ? 'Supply interrupted' : 'Power out'}</span>
             <span><i className="key-dot tone-partial" /> Being restored</span>
-            <span><i className="key-dot tone-good" /> Back on</span>
+            <span><i className="key-dot tone-good" /> {water ? 'Supply restored' : 'Back on'}</span>
           </div>
           <Link to="/map" className="map-open btn small">Full map <Icon name="arrow" /></Link>
         </div>
       </section>
 
       <div className="wide below">
-        <section className="section" aria-labelledby="hist-h">
+        {!water && <section className="section" aria-labelledby="hist-h">
           <SectionHead id="hist-h" title="The last 14 days" sub="Outages that began, by service centre" />
           {data ? (
             data.history?.length ? <HistoryStrips rows={data.history} /> : <p className="muted">No outages recorded in the last 14 days.</p>
           ) : <Skeleton h={220} />}
-        </section>
+        </section>}
 
         <section className="section" aria-labelledby="plan-h">
           <SectionHead id="plan-h" title="Planned maintenance" sub="Scheduled interruptions coming up" action={<Link to="/planned" className="link">Full schedule <Icon name="arrow" /></Link>} />
@@ -260,7 +303,7 @@ export default function Overview() {
         </section>
 
         <section className="section" aria-labelledby="daily-h">
-          <SectionHead id="daily-h" title="Outages reported per day" sub="Last 10 days, unplanned faults only" />
+          <SectionHead id="daily-h" title={water ? 'Water interruptions reported per day' : 'Outages reported per day'} sub="Last 10 days, unplanned incidents only" />
           {data ? <ColumnChart data={data.daily} /> : <Skeleton h={170} />}
         </section>
       </div>

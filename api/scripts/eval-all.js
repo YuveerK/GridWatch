@@ -11,7 +11,9 @@ import { fileURLToPath } from 'node:url';
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/db/prisma.js';
 import { faultItems } from '../src/modules/processing/processor.service.js';
-import { checkPostDispositions } from '../src/modules/processing/quality.js';
+import { checkPostDispositions, readingFaultItems } from '../src/modules/processing/quality.js';
+import { readerFor } from '../src/modules/ai/reader-registry.js';
+import { checkWaterReviewCases, isPairwiseGroupingFile } from '../src/lib/golden-sets.js';
 
 const dir = fileURLToPath(new URL('../tests/golden/', import.meta.url));
 const pct = (a, b) => (b ? `${((a / b) * 100).toFixed(1)}%` : 'n/a');
@@ -19,21 +21,22 @@ const pct = (a, b) => (b ? `${((a / b) * 100).toFixed(1)}%` : 'n/a');
 // 1 + 2: reading and coverage, over every post
 const posts = await prisma.sourcePost.findMany({
   select: {
-    id: true, processingStatus: true, text: true, noteTweetText: true,
-    extractions: { where: { promptVersion: env.AI_PROMPT_VERSION }, orderBy: { createdAt: 'desc' }, take: 1, select: { status: true, result: true, relevance: true } },
+    id: true, serviceType: true, processingStatus: true, text: true, noteTweetText: true,
+    extractions: { orderBy: { createdAt: 'desc' }, select: { promptVersion: true, status: true, result: true, relevance: true } },
     linkDecisions: { select: { faultIndex: true, outcome: true, outageId: true, reason: true } },
     outagePosts: { select: { faultIndex: true, outageId: true } },
   },
 });
 const replies = posts.filter((p) => /^\s*@\w+/.test(p.noteTweetText || p.text || ''));
 const readable = posts.filter((p) => !replies.includes(p));
-const by = (s) => readable.filter((p) => p.extractions[0]?.status === s).length;
+const current = (p) => p.extractions.find((e) => e.promptVersion === (readerFor(p.serviceType).promptVersion ?? env.AI_PROMPT_VERSION));
+const by = (s) => readable.filter((p) => current(p)?.status === s).length;
 let expected = 0;
 let ok = 0;
 for (const p of readable) {
-  const e = p.extractions[0];
+  const e = current(p);
   if (e?.status !== 'SUCCEEDED') continue;
-  const idx = faultItems({ ...e, result: e.result }).map((i) => i.faultIndex);
+  const idx = readingFaultItems(p, e, faultItems).map((i) => i.faultIndex);
   expected += idx.length;
   const v = checkPostDispositions({ expectedIndices: idx, decisions: p.linkDecisions, outagePosts: p.outagePosts });
   ok += idx.length - new Set(v.problems.map((m) => /fault (\d+)/.exec(m)?.[1]).filter((x) => x != null)).size;
@@ -44,8 +47,15 @@ console.log('2. COVERAGE  ', `${ok} of ${expected} expected faults have exactly 
 // 3: grouping, per set, holdouts apart from the sets that may have been tuned on
 console.log('3. GROUPING  (pairwise F1 against hand labels)');
 const rows = [];
-for (const f of fs.readdirSync(dir).filter((x) => /\.json$/.test(x) && !['corrections.json', 'states.json'].includes(x)).sort()) {
-  const kind = JSON.parse(fs.readFileSync(dir + f, 'utf8'))._kind ?? 'tuning';
+const waterReview = [];
+for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.json')).sort()) {
+  const parsed = JSON.parse(fs.readFileSync(dir + f, 'utf8'));
+  if (f === 'water-reviews.json' || parsed?._kind === 'water-review' || Array.isArray(parsed)) {
+    if (f === 'water-reviews.json' || parsed?._kind === 'water-review') waterReview.push(checkWaterReviewCases(parsed));
+    continue;
+  }
+  if (!isPairwiseGroupingFile(f, parsed)) continue;
+  const kind = parsed._kind ?? 'tuning';
   let out = '';
   try {
     out = execFileSync(process.execPath, ['scripts/eval.js', `--file=${f}`], { encoding: 'utf8', env: process.env });
@@ -63,11 +73,14 @@ for (const kind of ['holdout', 'tuning', 'regression']) {
   const avg = set.filter((r) => r.f1 != null).reduce((a, r, _, l) => a + r.f1 / l.length, 0);
   console.log(`     ${''.padEnd(10)} ${'average'.padEnd(20)}             F1 ${avg.toFixed(1)}%`);
 }
+const review = waterReview.reduce((a, r) => ({ cases: a.cases + r.cases, passed: a.passed + r.passed, failed: a.failed + r.failed }), { cases: 0, passed: 0, failed: 0 });
 
 // 4 + 5: corrections and final state
 const pairs = execFileSync(process.execPath, ['scripts/eval-pairs.js'], { encoding: 'utf8', env: process.env }).split('\n').filter(Boolean);
 const line = (k) => (pairs.find((l) => l.startsWith(k)) ?? '').replace(/^[A-Z ]+: /, '');
 console.log(`4. CORRECTIONS ${line('CORRECTIONS')} (manual corrections the engine now gets right)`);
+console.log('WATER REVIEW REGRESSIONS');
+console.log(`     cases ${review.cases}  passed ${review.passed}  failed ${review.failed}`);
 console.log(`5. FINAL STATE ${line('FINAL STATE')} (statuses, kinds and planned windows)`);
 for (const l of pairs.filter((x) => x.includes('FAIL'))) console.log(l);
 await prisma.$disconnect();

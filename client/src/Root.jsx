@@ -3,11 +3,12 @@ import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import Icon from './components/Icon.jsx';
 import MunicipalitySwitcher from './components/MunicipalitySwitcher.jsx';
+import ServiceSwitcher from './components/ServiceSwitcher.jsx';
 import RefreshButton, { OperatorSignIn } from './components/RefreshButton.jsx';
 import SearchBox from './components/SearchBox.jsx';
 import { EmptyState } from './components/ui.jsx';
 import { useTheme } from './lib/hooks.js';
-import { useUtility } from './lib/municipality.jsx';
+import { useMunicipality, useUtility } from './lib/municipality.jsx';
 import About from './views/About.jsx';
 import Activity from './views/Activity.jsx';
 import Insights from './views/Insights.jsx';
@@ -60,6 +61,7 @@ function SearchOverlay({ onClose }) {
 export default function Root() {
   const { dark, toggle } = useTheme();
   const { accounts } = useUtility();
+  const { service } = useMunicipality();
   const [searching, setSearching] = useState(false);
   const { pathname } = useLocation();
 
@@ -88,9 +90,10 @@ export default function Root() {
             <span className="wordmark">GridWatch<i aria-hidden="true" /></span>
           </Link>
           <nav className="nav" aria-label="Main">
-            {NAV.map(([to, label, , end]) => <NavLink key={to} to={to} end={end}>{label}</NavLink>)}
+            {NAV.map(([to, label, icon, end]) => <NavLink key={to} to={to} end={end}><Icon name={icon} />{to === '/outages' && service === 'WATER' ? 'Interruptions' : label}</NavLink>)}
           </nav>
           <div className="header-actions">
+            <ServiceSwitcher />
             <MunicipalitySwitcher />
             <RefreshButton compact />
             <button className="icon-btn" onClick={() => setSearching(true)} aria-label="Search">
@@ -104,8 +107,8 @@ export default function Root() {
       </header>
 
       <main id="main">
-        <ErrorBoundary resetKey={pathname}>
-        <Routes>
+        <ErrorBoundary resetKey={`${pathname}:${service}`}>
+        <Routes key={service}>
           <Route path="/" element={<Overview />} />
           <Route path="/outages" element={<Outages />} />
           <Route path="/outages/:id" element={<OutageDetail />} />
@@ -137,7 +140,7 @@ export default function Root() {
 
       <nav className="mobile-nav" aria-label="Main">
         {NAV.map(([to, label, icon, end]) => (
-          <NavLink key={to} to={to} end={end}><Icon name={icon} />{label}</NavLink>
+          <NavLink key={to} to={to} end={end}><Icon name={icon} />{to === '/outages' && service === 'WATER' ? 'Interruptions' : label}</NavLink>
         ))}
       </nav>
 

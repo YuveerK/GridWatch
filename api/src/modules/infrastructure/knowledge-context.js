@@ -24,3 +24,24 @@ export async function knowledgeContext(sdcName, limit = 40) {
   }
   return lines.length ? lines.join('\n') : null;
 }
+
+/** Bounded water context: assets whose names appear in the notice, plus one hop. */
+export async function waterKnowledgeContext(text, limit = 24) {
+  const words = infraKey(text ?? '').split(' ').filter((w) => w.length >= 5).slice(0, 8);
+  if (!words.length) return null;
+  const nodes = await prisma.infraNode.findMany({
+    where: { serviceType: 'WATER', OR: words.map((w) => ({ normalizedKey: { contains: w } })) },
+    take: limit,
+    select: { id: true, name: true, type: true },
+  });
+  if (!nodes.length) return null;
+  const ids = nodes.map((n) => n.id);
+  const edges = await prisma.infraEdge.findMany({
+    where: { OR: [{ parentId: { in: ids } }, { childId: { in: ids } }], relationType: { not: 'LEGACY_PARENT' } },
+    include: { parent: { select: { name: true, type: true } }, child: { select: { name: true, type: true } } },
+    take: limit,
+  });
+  const lines = nodes.map((n) => `- ${n.type} ${n.name}`);
+  for (const e of edges) lines.push(`- ${e.parent.name} ${e.relationType} ${e.child.name}`);
+  return lines.join('\n');
+}

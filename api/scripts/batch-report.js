@@ -4,6 +4,8 @@
 //   npm run batch -- --runs=2   cover the last 2 fetches that brought posts
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/db/prisma.js';
+import { readerFor } from '../src/modules/ai/reader-registry.js';
+import { waterFaultItems } from '../src/modules/ai/readers/water.reader.js';
 import { faultItems } from '../src/modules/processing/processor.service.js';
 import { awaitingReview, checkPostDispositions, effectReadingMismatch, ingestionProblems, latestNonemptyRuns, stuckProcessing } from '../src/modules/processing/quality.js';
 
@@ -12,11 +14,16 @@ const RUNS = Number((process.argv.find((a) => a.startsWith('--runs=')) ?? '--run
 const short = (t, n = 150) => (t ?? '').replace(/#\w+/g, '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, n);
 const PRICE = { 'gemini-3.5-flash-lite': [0.3, 2.5], 'gemini-3.1-flash-lite': [0.25, 1.5], 'gemini-3.6-flash': [0.75, 3.75] };
 
-const runs = await prisma.ingestionRun.findMany({ orderBy: { startedAt: 'desc' }, take: 6 });
+const runs = await prisma.ingestionRun.findMany({ orderBy: { startedAt: 'desc' }, take: 12, include: { SourceAccount: { select: { displayName: true, serviceType: true } } } });
 const withPosts = await latestNonemptyRuns(prisma, RUNS); // found directly: however many empty polls came after them
+const active = await prisma.sourceAccount.findMany({ where: { active: true }, select: { id: true, displayName: true, serviceType: true } });
+for (const account of active) {
+  const latest = await prisma.ingestionRun.findFirst({ where: { sourceAccountId: account.id, postsInserted: { gt: 0 } }, orderBy: { startedAt: 'desc' } });
+  if (latest && !withPosts.some((run) => run.id === latest.id)) withPosts.push(latest);
+}
 const batch = withPosts.at(-1);
 console.log('RECENT FETCH RUNS');
-for (const r of runs) console.log(`  ${r.startedAt.toISOString().slice(5, 19)}  ${r.status.padEnd(10)} fetched ${String(r.postsFetched).padStart(3)}  inserted ${String(r.postsInserted).padStart(3)}${r.errorMessage ? `  ERROR ${r.errorMessage.slice(0, 70)}` : ''}${withPosts.some((w) => w.id === r.id) ? '   <-- audited' : ''}`);
+for (const r of runs) console.log(`  ${r.startedAt.toISOString().slice(5, 19)}  ${(r.SourceAccount?.displayName ?? '').padEnd(14)} ${r.status.padEnd(10)} fetched ${String(r.postsFetched).padStart(3)}  inserted ${String(r.postsInserted).padStart(3)}${r.errorMessage ? `  ERROR ${r.errorMessage.slice(0, 70)}` : ''}${withPosts.some((w) => w.id === r.id) ? '   <-- audited' : ''}`);
 for (const w of withPosts) if (!runs.some((r) => r.id === w.id)) console.log(`  ${w.startedAt.toISOString().slice(5, 19)}  ${w.status.padEnd(10)} fetched ${String(w.postsFetched).padStart(3)}  inserted ${String(w.postsInserted).padStart(3)}   <-- audited (older than the list above)`);
 if (!batch) {
   console.log('\nNo fetch has ever brought new posts.');
@@ -31,7 +38,7 @@ const posts = await prisma.sourcePost.findMany({
   where: recorded ? { IngestionRunPost: { some: { ingestionRunId: { in: runIds } } } } : { createdAt: { gte: batch.startedAt, ...(batch.completedAt ? { lte: batch.completedAt } : {}) } },
   orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }],
   include: {
-    extractions: { where: { promptVersion: env.AI_PROMPT_VERSION }, orderBy: { createdAt: 'desc' }, take: 1 },
+    extractions: { orderBy: { createdAt: 'desc' } },
     linkDecisions: { orderBy: { faultIndex: 'asc' }, include: { outage: { select: { id: true, title: true, status: true, kind: true, restoredAt: true, restorationPercent: true, createdAt: true, _count: { select: { posts: true } } } } } },
     outagePosts: { select: { faultIndex: true, outageId: true, effect: true } },
     summaries: true,
@@ -50,7 +57,8 @@ const model = new Set();
 const newOutageIds = new Set();
 
 for (const x of posts) {
-  const e = x.extractions[0];
+  const promptVersion = readerFor(x.serviceType ?? 'ELECTRICITY').promptVersion ?? env.AI_PROMPT_VERSION;
+  const e = x.extractions.find((extraction) => extraction.promptVersion === promptVersion);
   const r = e?.result;
   if (e) {
     inTok += e.inputTokens ?? 0;
@@ -69,7 +77,7 @@ for (const x of posts) {
   if (x.linkDecisions.length === 0) flag(x, 'no link decision');
   // EVERY expected fault of the current reading must have exactly one disposition, a linked one its timeline entry, and a left-out one a reason
   if (e?.status === 'SUCCEEDED' && r) {
-    const items = faultItems({ ...e, result: r });
+    const items = (x.serviceType === 'WATER' ? waterFaultItems : faultItems)({ ...e, result: r });
     const verdict = checkPostDispositions({ expectedIndices: items.map((i) => i.faultIndex), decisions: x.linkDecisions, outagePosts: x.outagePosts });
     for (const p of verdict.problems) flag(x, `disposition: ${p}`);
     for (const d of verdict.excluded) if (linkable) flag(x, `fault ${d.faultIndex} produced no outage (${d.reason})`);

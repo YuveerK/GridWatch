@@ -22,6 +22,7 @@ export function applyRevivalRule(candidate, post, { windowHours, highScore }) {
 }
 
 export function scoreCandidate(post, outage) {
+  if (post.serviceType === 'WATER') return scoreWaterCandidate(post, outage);
   const reasons = [];
   let score = 0;
 
@@ -82,6 +83,16 @@ export function scoreCandidate(post, outage) {
   const ageH = Math.max(0, (post.postedAt - outage.lastUpdateAt) / HOUR);
   score += 0.1 * Math.exp(-ageH / 24);
 
+  // An update that names no equipment, and whose suburbs are exactly the live incident's suburbs, is that incident
+  // continuing. A station named only on the earlier report is not a different fault. A different named asset, a
+  // single shared suburb, or extra suburbs stay out of this rule.
+  const sameSuburbSet = sharedLocalities.length >= 2 && sharedLocalities.length === post.localityIds.size && sharedLocalities.length === outage.localityIds.size;
+  const differentSdc = post.sdcName && outage.sdcName && squash(post.sdcName) !== squash(outage.sdcName);
+  if (sameSuburbSet && post.nodeIds.size === 0 && ageH <= 12 && !differentSdc) {
+    score += 0.35;
+    reasons.push('same suburbs, no new equipment');
+  }
+
   if (outage.status === 'CANCELLED' && post.status !== 'CANCELLED') {
     score -= 0.5;
     reasons.push('outage was cancelled');
@@ -100,5 +111,44 @@ export function scoreCandidate(post, outage) {
       reasons.push('new fault after restoration');
     }
   }
+  return { score: Math.min(1, Math.max(0, Number(score.toFixed(3)))), reasons };
+}
+
+/** Water incidents do not reuse SDC scoring. Locality overlap alone stays under a confident link when assets differ. */
+export function scoreWaterCandidate(post, outage) {
+  const reasons = [];
+  let score = 0;
+  if (post.kind !== outage.kind) return { score: 0, reasons: ['planned/unplanned mismatch'] };
+  if (post.conversationId && outage.conversationIds.has(post.conversationId)) {
+    score += 0.6;
+    reasons.push('same thread');
+  }
+  const sharedNodes = intersect(post.nodeIds, outage.nodeIds);
+  const conflictingAssets = post.nodeIds.size && outage.nodeIds.size && !sharedNodes.length && !intersect(post.relatedNodeIds, outage.nodeIds).length;
+  if (sharedNodes.length) {
+    score += Math.min(0.55, 0.35 + 0.2 * (sharedNodes.length / post.nodeIds.size));
+    reasons.push(`shared water asset x${sharedNodes.length}`);
+  } else if (intersect(post.relatedNodeIds, outage.nodeIds).length) {
+    score += 0.3;
+    reasons.push('one-hop water relationship');
+  }
+  const sharedLocalities = intersect(post.localityIds, outage.localityIds);
+  if (sharedLocalities.length && !conflictingAssets) {
+    const coef = sharedLocalities.length / Math.min(post.localityIds.size, outage.localityIds.size);
+    score += 0.35 * coef;
+    reasons.push(`locality overlap ${(coef * 100).toFixed(0)}%`);
+  } else if (sharedLocalities.length && conflictingAssets) {
+    score -= 0.3;
+    reasons.push('different water asset');
+  }
+  if (post.waterSystem && outage.waterSystem && squash(post.waterSystem) === squash(outage.waterSystem)) {
+    score += 0.15;
+    reasons.push('same water system');
+  }
+  if (outage.digest && !reasons.includes('same thread')) {
+    reasons.push('multi-system bulletin');
+    score = Math.min(score, 0.3);
+  }
+  if (score <= 0) return { score: 0, reasons: reasons.length ? reasons : ['no shared thread/asset/locality'] };
   return { score: Math.min(1, Math.max(0, Number(score.toFixed(3)))), reasons };
 }

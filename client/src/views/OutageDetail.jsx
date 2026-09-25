@@ -1,18 +1,18 @@
 import { Link, useParams } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import { scheduleLabel } from '../components/OutageCard.jsx';
-import { Chip, Crumbs, ErrorState, Meter, Skeleton, StatusBadge } from '../components/ui.jsx';
+import { Chip, Crumbs, ErrorState, Meter, ServiceIdentity, Skeleton, StatusBadge } from '../components/ui.jsx';
 import { ROLE, nice, cleanPostText, duration, firstSentence, fmtDateTime, fmtDay, fmtTime, plural, prettySdc, statusMeta, timeAgo, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
 import { useUtility } from '../lib/municipality.jsx';
 
-function TimelineItem({ t, last, utility }) {
+function TimelineItem({ t, last, utility, service }) {
   const role = ROLE[t.role] ?? ROLE.UPDATE;
   const text = cleanPostText(t.text) || t.text;
   return (
     <li className={`tone-${role.tone}`}>
       <div className="top">
-        <span className="role">{role.label}</span>
+        <span className="role">{t.role === 'RESTORATION' && service === 'WATER' ? 'Water supply restored' : role.label}</span>
         <span className="when">{fmtDay(t.postedAt)}, {fmtTime(t.postedAt)} · {timeAgo(t.postedAt)}</span>
         {last && <span className="badge tone-plan" style={{ padding: '1px 8px', fontSize: 11 }}>Latest</span>}
       </div>
@@ -66,7 +66,7 @@ export default function OutageDetail() {
   const { id } = useParams();
   const { data: o, error, loading } = useApi(`/v1/outages/${id}`, { refreshMs: 60_000 });
   useDocumentTitle(o?.title);
-  const { utility, Utility } = useUtility(o?.municipality?.code);
+  const { utility, Utility } = useUtility(o?.municipality?.code, o?.service);
 
   if (error && !o) return <div className="container page"><ErrorState error={error} /></div>;
   if (loading || !o) {
@@ -79,7 +79,7 @@ export default function OutageDetail() {
     );
   }
 
-  const m = statusMeta(o.status);
+  const m = statusMeta(o.status, o.service);
   const restored = o.localities.filter((l) => l.restored);
   const affected = o.localities.filter((l) => !l.restored);
   const last = o.timeline.at(-1);
@@ -94,7 +94,10 @@ export default function OutageDetail() {
       <div className={`dhero tone-${m.tone}`}>
         <div className="row between">
           <div className="row" style={{ gap: 10 }}>
-            <StatusBadge status={o.status} kind={o.kind} large />
+            <ServiceIdentity service={o.service} />
+            <StatusBadge status={o.status} kind={o.kind} service={o.service} large />
+            {o.service === 'WATER' && o.waterState && <p className="small" style={{ margin: '8px 0 0' }}>Supply condition: {o.waterState.replaceAll('_', ' ').toLowerCase()}. A recovering system is not the same as supply restored.</p>}
+            {o.service === 'WATER' && o.localities?.some((l) => l.impactBasis === 'INFERRED_TOPOLOGY') && <p className="small faint">Potential downstream impact is based on the known supply network. It is not an official confirmation.</p>}
             <span className="small muted">{m.long}</span>
           </div>
           <span className="small faint">Last update {timeAgo(o.lastUpdateAt)}</span>
@@ -104,7 +107,7 @@ export default function OutageDetail() {
         {o.sdc && <div className="muted small">Reported by the {prettySdc(o.sdc)} service centre</div>}
 
         <div className="callout" style={{ '--tint': `var(--${m.tone === 'idle' ? 'idle' : m.tone === 'live' ? 'live' : m.tone === 'plan' ? 'plan' : m.tone}-tint)` }}>
-          <div className="lab"><Icon name="bolt" /> {ended ? 'How it ended' : 'What is happening now'}</div>
+          <div className="lab"><Icon name={o.service === 'WATER' ? 'drop' : 'bolt'} /> {ended ? 'How it ended' : 'What is happening now'}</div>
           <p>{headline}</p>
           <div className="when">
             {isPlanned && o.scheduled && <span className="row" style={{ gap: 6, fontWeight: 500 }}><Icon name="calendar" /> {scheduleLabel(o.scheduled)}</span>}
@@ -133,7 +136,7 @@ export default function OutageDetail() {
             </div>
           </div>
           <ol className="tl">
-            {o.timeline.map((t, i) => <TimelineItem key={t.url} t={t} last={i === o.timeline.length - 1} utility={Utility} />)}
+            {o.timeline.map((t, i) => <TimelineItem key={t.url} t={t} last={i === o.timeline.length - 1} utility={Utility} service={o.service} />)}
           </ol>
         </section>
 
@@ -160,7 +163,7 @@ export default function OutageDetail() {
               )}
               {restored.length > 0 && (
                 <div>
-                  <div className="small muted" style={{ marginBottom: 6 }}>Power back on</div>
+                  <div className="small muted" style={{ marginBottom: 6 }}>{o.service === 'WATER' ? 'Water supply restored' : 'Power back on'}</div>
                   <div className="chips">{restored.map((l) => <Chip key={l.id} to={`/suburb/${l.id}`} restored>{nice(l.canonicalName)}</Chip>)}</div>
                 </div>
               )}
