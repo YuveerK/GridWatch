@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import SearchBox from '../components/SearchBox.jsx';
-import { EmptyState, ErrorState, ServiceIdentity, Skeleton, StatusBadge } from '../components/ui.jsx';
+import { EmptyState, ErrorState, Skeleton, StatusBadge } from '../components/ui.jsx';
 import { nice, placeTone, plural, timeAgo, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
 import { estimateCoverage } from '../lib/coverage.js';
@@ -223,22 +223,15 @@ export default function MapPage() {
   const hubList = useMemo(() => [...allHubs].filter((h) => !kind || h.type === kind).sort((a, b) => Number(b.live) - Number(a.live) || (b.served ?? 0) - (a.served ?? 0) || String(a.name).localeCompare(String(b.name))).slice(0, 60), [allHubs, kind]);
 
   const back = <button type="button" className="link back" onClick={reset}><Icon name="arrow" className="flip" /> {mode === 'infrastructure' ? (water ? 'All assets' : 'All equipment') : water ? 'All incidents' : 'All outages'}</button>;
+  const heading = water
+    ? (mode === 'infrastructure' ? 'Water network map' : 'Water supply map')
+    : (mode === 'infrastructure' ? 'Electricity network map' : 'Electricity outage map');
 
   return (
-    <div className="container page">
-      <header className="page-head">
-        <ServiceIdentity service={service} />
-        <h1>{service === 'WATER' ? (mode === 'infrastructure' ? 'Water network map' : 'Water supply map') : mode === 'infrastructure' ? 'Electricity network map' : 'Electricity outage map'}</h1>
-        <p>{service === 'WATER'
-          ? (mode === 'infrastructure'
-            ? 'Reservoirs, towers and direct feeds. Selecting one shades the suburbs it supplies.'
-            : 'Where Johannesburg Water has reported a supply problem. A recovering system is not the same as supply restored.')
-          : (mode === 'infrastructure' ? 'Pick a service centre, substation or distributor to highlight the suburbs it supplies.' : 'Where power is out right now. Switch to Infrastructure to explore equipment and the suburbs it supplies.')}</p>
-      </header>
-
+    <div className="container page map-page">
+      <h1 className="sr">{heading}</h1>
       {error && <ErrorState error={live.error} />}
-      {!live.data && !error && <Skeleton h={560} r={16} />}
-      {live.data && (
+      {!error && (
         <div className="map-layout">
           <div className="card map-card">
             <div className="map-bar">
@@ -252,38 +245,50 @@ export default function MapPage() {
               <button type="button" className="btn small ghost" onClick={reset} title="Show everything again"><Icon name="refresh" /> Reset</button>
             </div>
             <div className="map-stage">
-              <Suspense fallback={<MapFallback height={580} />}>
-                <MapView
-                  key={service}
-                  points={points}
-                  hubs={hubs}
-                  flow={flow}
-                  coverage={coverage}
-                  focus={focus}
-                  layers={layers}
-                  selectedHub={hubId}
-                  onPickSuburb={mode === 'outages' ? pickSuburb : undefined}
-                  onPickHub={pickHub}
-                  onClear={() => (mode === 'outages' ? go({}) : hubId && go({ view: 'infrastructure' }))}
-                  height={580}
-                  label={mode === 'infrastructure' ? `Map of ${utility}'s facilities and estimated coverage` : `Map of suburbs with ${service === 'WATER' ? 'water interruptions' : 'power outages'}`}
-                />
-              </Suspense>
-              {hubId && !node && !hubData.error && <div className="map-toast">Loading coverage…</div>}
-              {coverage && <div className="map-toast coverage-note">{isSdc ? 'Estimated service area' : 'Estimated coverage'} · based on mapped suburbs</div>}
-              {mode === 'infrastructure' && !hubId && <div className="map-toast">Click a diamond to highlight its coverage</div>}
-            </div>
-            <div className="map-foot">
-              {mode === 'outages' ? (
-                <Legend items={water ? [['live', 'No supply'], ['partial', 'Reduced or recovering'], ['good', 'Supply restored'], ['live', 'Likely area', 'hollow']] : [['live', 'Power out'], ['partial', 'Partly restored'], ['good', 'Power back'], ['live', 'Likely area', 'hollow']]} />
-              ) : (
-                <Legend items={[['plan', water ? 'Supply asset' : 'Equipment / service centre', 'diamond'], ['live', water ? 'Incident now' : 'Outage now', 'diamond'], ...(hasShapes ? [['plan', 'Suburb it supplies']] : []), ...(coverage ? [['plan', 'Estimated coverage', 'coverage']] : [])]} />
+              {!live.data ? <MapFallback height="100%" /> : (
+                <>
+                  <Suspense fallback={<MapFallback height="100%" />}>
+                    <MapView
+                      key={service}
+                      points={points}
+                      hubs={hubs}
+                      flow={flow}
+                      coverage={coverage}
+                      focus={focus}
+                      layers={layers}
+                      selectedHub={hubId}
+                      onPickSuburb={mode === 'outages' ? pickSuburb : undefined}
+                      onPickHub={pickHub}
+                      onClear={() => (mode === 'outages' ? go({}) : hubId && go({ view: 'infrastructure' }))}
+                      height="100%"
+                      label={mode === 'infrastructure' ? `Map of ${utility}'s facilities and estimated coverage` : `Map of suburbs with ${service === 'WATER' ? 'water interruptions' : 'power outages'}`}
+                    />
+                  </Suspense>
+                  {hubId && !node && !hubData.error && <div className="map-toast">Loading coverage…</div>}
+                  {coverage && <div className="map-toast coverage-note">{isSdc ? 'Estimated service area' : 'Estimated coverage'} · based on mapped suburbs</div>}
+                  {mode === 'infrastructure' && !hubId && <div className="map-toast">Click a diamond to highlight its coverage</div>}
+                  <div className="map-key">
+                    {mode === 'outages' ? (
+                      <Legend items={water ? [['live', 'No supply'], ['partial', 'Reduced or recovering'], ['good', 'Supply restored'], ['live', 'Likely area', 'hollow']] : [['live', 'Power out'], ['partial', 'Partly restored'], ['good', 'Power back'], ['live', 'Likely area', 'hollow']]} />
+                    ) : (
+                      <Legend items={[['plan', water ? 'Supply asset' : 'Equipment / service centre', 'diamond'], ['live', water ? 'Incident now' : 'Outage now', 'diamond'], ...(hasShapes ? [['plan', 'Suburb it supplies']] : []), ...(coverage ? [['plan', 'Estimated coverage', 'coverage']] : [])]} />
+                    )}
+                  </div>
+                </>
               )}
-              <span className="small faint">Map © OpenStreetMap contributors</span>
             </div>
           </div>
 
           <aside className="map-panel" aria-label="Details">
+            {!live.data ? (
+              <div className="card card-pad stack" aria-busy="true" style={{ gap: 12 }}>
+                <Skeleton h={18} w="55%" />
+                <Skeleton h={64} />
+                <Skeleton h={64} />
+                <Skeleton h={64} />
+              </div>
+            ) : (
+            <>
             {/* ── Outages view ── */}
             {mode === 'outages' && !sel && (
               <>
@@ -413,6 +418,8 @@ export default function MapPage() {
                   </>
                 )}
               </div>
+            )}
+            </>
             )}
           </aside>
         </div>
