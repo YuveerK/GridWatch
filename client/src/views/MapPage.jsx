@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import SearchBox from '../components/SearchBox.jsx';
 import { EmptyState, ErrorState, ServiceIdentity, Skeleton, StatusBadge } from '../components/ui.jsx';
-import { nice, plural, timeAgo, typeLabel, useApi } from '../lib/api.js';
+import { nice, placeTone, plural, timeAgo, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
 import { estimateCoverage } from '../lib/coverage.js';
 import { useMunicipality, useUtility, withMunicipality } from '../lib/municipality.jsx';
@@ -26,7 +26,6 @@ export function Legend({ items }) {
 
 const ORDER = { live: 0, partial: 1, good: 2 };
 const worst = (a, b) => ((ORDER[a] ?? 9) <= (ORDER[b] ?? 9) ? a : b);
-const toneOf = (status, restored) => (restored ? 'good' : status === 'PARTIALLY_RESTORED' ? 'partial' : 'live');
 const boundsOf = (pts) => {
   if (!pts.length) return null;
   const xs = pts.map((p) => p.lon);
@@ -34,7 +33,7 @@ const boundsOf = (pts) => {
   return [[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]];
 };
 const POWER_HUB_KINDS = [['', 'All'], ['SDC', 'Service centres'], ['SUBSTATION', 'Substations'], ['SWITCHING_STATION', 'Switching stations'], ['DISTRIBUTOR', 'Distributors']];
-const WATER_HUB_KINDS = [['', 'All'], ['RESERVOIR', 'Reservoirs'], ['WATER_TOWER', 'Towers'], ['PUMP_STATION', 'Pump stations'], ['PRV', 'Pressure valves'], ['WATER_SYSTEM', 'Systems'], ['DIRECT_FEED', 'Direct feeds'], ['TREATMENT_WORKS', 'Treatment works']];
+const WATER_HUB_KINDS = [['', 'All'], ['RESERVOIR', 'Reservoirs'], ['WATER_TOWER', 'Towers'], ['PUMP_STATION', 'Pump stations'], ['PRV', 'Pressure valves'], ['WATER_SYSTEM', 'Systems'], ['DIRECT_FEED', 'Direct feeds'], ['TREATMENT_WORKS', 'Treatment works'], ['WATER_OTHER', 'Depots']];
 
 /**
  * Two views of the same map:
@@ -70,7 +69,7 @@ export default function MapPage() {
     const m = new Map();
     for (const o of outages) {
       for (const p of o.places) {
-        const tone = toneOf(o.status, p.restored);
+        const tone = placeTone(o, p.restored);
         const cur = m.get(p.id);
         if (!cur) m.set(p.id, { id: p.id, name: nice(p.name), lat: p.lat, lon: p.lon, boundary: p.boundary ?? null, tone, groups: [o.id], inferred: p.inferred, outages: [o] });
         else {
@@ -131,7 +130,11 @@ export default function MapPage() {
     const b = boundsOf(pts);
     if (b) setFocus({ key: Math.random(), bounds: pts.length === 1 ? [[b[0][0] - 0.01, b[0][1] - 0.008], [b[1][0] + 0.01, b[1][1] + 0.008]] : b });
   };
-  const go = (next) => setParams(next, { replace: true });
+  const go = (next) => {
+    const p = new URLSearchParams(next);
+    if (params.get('service')) p.set('service', params.get('service')); // the address keeps saying which service this is
+    setParams(p, { replace: true });
+  };
   const focused = useRef(null);
 
   // switching municipality re-centres the map on what's actually shown, so picking "City of Tshwane" doesn't
@@ -219,7 +222,7 @@ export default function MapPage() {
   const suburbSel = sel?.type === 'suburb' ? suburbs.get(sel.id) ?? (extra?.id === sel.id ? { ...extra, outages: [], tone: 'good' } : null) : null;
   const hubList = useMemo(() => [...allHubs].filter((h) => !kind || h.type === kind).sort((a, b) => Number(b.live) - Number(a.live) || (b.served ?? 0) - (a.served ?? 0) || String(a.name).localeCompare(String(b.name))).slice(0, 60), [allHubs, kind]);
 
-  const back = <button type="button" className="link back" onClick={reset}><Icon name="arrow" className="flip" /> {mode === 'infrastructure' ? 'All equipment' : 'All outages'}</button>;
+  const back = <button type="button" className="link back" onClick={reset}><Icon name="arrow" className="flip" /> {mode === 'infrastructure' ? (water ? 'All assets' : 'All equipment') : water ? 'All incidents' : 'All outages'}</button>;
 
   return (
     <div className="container page">
@@ -272,9 +275,9 @@ export default function MapPage() {
             </div>
             <div className="map-foot">
               {mode === 'outages' ? (
-                <Legend items={water ? [['live', 'No supply'], ['partial', 'Partly restored'], ['good', 'Supply back'], ['live', 'Likely area', 'hollow']] : [['live', 'Power out'], ['partial', 'Partly restored'], ['good', 'Power back'], ['live', 'Likely area', 'hollow']]} />
+                <Legend items={water ? [['live', 'No supply'], ['partial', 'Reduced or recovering'], ['good', 'Supply restored'], ['live', 'Likely area', 'hollow']] : [['live', 'Power out'], ['partial', 'Partly restored'], ['good', 'Power back'], ['live', 'Likely area', 'hollow']]} />
               ) : (
-                <Legend items={[['plan', water ? 'Supply asset' : 'Equipment / service centre', 'diamond'], ['live', water ? 'Interruption now' : 'Outage now', 'diamond'], ...(hasShapes ? [['plan', 'Suburb it supplies']] : []), ...(coverage ? [['plan', 'Estimated coverage', 'coverage']] : [])]} />
+                <Legend items={[['plan', water ? 'Supply asset' : 'Equipment / service centre', 'diamond'], ['live', water ? 'Incident now' : 'Outage now', 'diamond'], ...(hasShapes ? [['plan', 'Suburb it supplies']] : []), ...(coverage ? [['plan', 'Estimated coverage', 'coverage']] : [])]} />
               )}
               <span className="small faint">Map © OpenStreetMap contributors</span>
             </div>
@@ -285,7 +288,7 @@ export default function MapPage() {
             {mode === 'outages' && !sel && (
               <>
                 <div className="small muted" style={{ marginBottom: 8 }}>{plural(outages.length, 'live outage')}{mapped < outages.length ? ` · ${outages.length - mapped} could not be placed` : ''}</div>
-                {outages.length === 0 && <EmptyState icon="check" title="No live outages right now">When {utility} reports one, the affected suburbs will show up here.</EmptyState>}
+                {outages.length === 0 && <EmptyState icon="check" title={water ? "No live water incidents right now" : "No live outages right now"}>When {utility} reports one, the affected suburbs will show up here.</EmptyState>}
                 <ul className="rows card">
                   {outages.map((o) => (
                     <li key={o.id}>
@@ -293,7 +296,7 @@ export default function MapPage() {
                         <span className="t">{nice(o.title)}</span>
                         <span className="small muted clamp2">{o.latest ?? 'Waiting for the next update'}</span>
                         <span className="row small" style={{ gap: 8 }}>
-                          <StatusBadge status={o.status} service={o.service} />
+                          <StatusBadge status={o.status} service={o.service} waterState={o.waterState} />
                           <span className="faint">{timeAgo(o.lastUpdateAt)}</span>
                           {o.places.length === 0 && <span className="faint">not on the map</span>}
                         </span>
@@ -308,7 +311,7 @@ export default function MapPage() {
               <div className="card card-pad stack" style={{ gap: 14 }}>
                 {back}
                 <div>
-                  <StatusBadge status={selectedOutage.status} service={selectedOutage.service} />
+                  <StatusBadge status={selectedOutage.status} service={selectedOutage.service} waterState={selectedOutage.waterState} />
                   <h2 className="panel-title">{nice(selectedOutage.title)}</h2>
                   <div className="small faint">Updated {timeAgo(selectedOutage.lastUpdateAt)}{selectedOutage.sdc ? ` · ${nice(selectedOutage.sdc)}` : ''}</div>
                 </div>
@@ -342,7 +345,7 @@ export default function MapPage() {
                       <li key={o.id}>
                         <button type="button" className="map-item" onClick={() => pickOutage(o.id)}>
                           <span className="t">{nice(o.title)}</span>
-                          <span className="row small" style={{ gap: 8 }}><StatusBadge status={o.status} service={o.service} /><span className="faint">{timeAgo(o.lastUpdateAt)}</span></span>
+                          <span className="row small" style={{ gap: 8 }}><StatusBadge status={o.status} service={o.service} waterState={o.waterState} /><span className="faint">{timeAgo(o.lastUpdateAt)}</span></span>
                         </button>
                       </li>
                     ))}

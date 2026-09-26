@@ -133,7 +133,7 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
       features: latest.current.points.filter((p) => p.boundary).map((p) => ({
         type: 'Feature',
         geometry: p.boundary,
-        properties: { id: p.id, color: c[p.tone] ?? c.idle, dim: p.dim ? 1 : 0 },
+        properties: { id: p.id, color: c[p.tone] ?? c.idle, dim: p.dim ? 1 : 0, inferred: p.inferred ? 1 : 0 },
       })),
     };
   };
@@ -166,7 +166,7 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
     if (!map || !readyRef.current) return;
     const { layers: l, selectedHub: sel, flow: fl } = latest.current;
     const vis = (ids, on) => ids.forEach((id) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'));
-    vis(['cluster-halo', 'cluster', 'cluster-count', 'dots-halo', 'dots', 'dot-labels', 'suburb-boundary-fill', 'suburb-boundary-outline'], l.outages);
+    vis(['cluster-halo', 'cluster', 'cluster-count', 'dots-halo', 'dots', 'dot-labels', 'suburb-boundary-fill', 'suburb-boundary-outline', 'suburb-boundary-outline-inferred'], l.outages);
     vis(['hubs', 'water-zone-fill', 'water-zone-outline'], l.equipment || sel != null || fl != null);
   };
 
@@ -252,8 +252,11 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
 
       // Real suburb shape (not an estimate, so solid rather than dashed) for suburbs a live outage touches.
       map.addSource('suburb-boundaries', { type: 'geojson', data: boundaryCollection() });
-      map.addLayer({ id: 'suburb-boundary-fill', type: 'fill', source: 'suburb-boundaries', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'dim'], 1], 0.05, 0.22] } });
-      map.addLayer({ id: 'suburb-boundary-outline', type: 'line', source: 'suburb-boundaries', paint: { 'line-color': ['get', 'color'], 'line-width': 1.6, 'line-opacity': ['case', ['==', ['get', 'dim'], 1], 0.25, 0.9] } });
+      // a likely area (the post named no suburb; guessed from the equipment) is drawn faint and dashed, so it never
+      // looks like a suburb the utility actually named
+      map.addLayer({ id: 'suburb-boundary-fill', type: 'fill', source: 'suburb-boundaries', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'dim'], 1], 0.05, ['==', ['get', 'inferred'], 1], 0.07, 0.22] } });
+      map.addLayer({ id: 'suburb-boundary-outline', type: 'line', source: 'suburb-boundaries', filter: ['!=', ['get', 'inferred'], 1], paint: { 'line-color': ['get', 'color'], 'line-width': 1.6, 'line-opacity': ['case', ['==', ['get', 'dim'], 1], 0.25, 0.9] } });
+      map.addLayer({ id: 'suburb-boundary-outline-inferred', type: 'line', source: 'suburb-boundaries', filter: ['==', ['get', 'inferred'], 1], paint: { 'line-color': ['get', 'color'], 'line-width': 1.4, 'line-dasharray': [2, 2], 'line-opacity': ['case', ['==', ['get', 'dim'], 1], 0.25, 0.85] } });
 
       // equipment
       map.addSource('water-zones', { type: 'geojson', data: zoneCollection() });

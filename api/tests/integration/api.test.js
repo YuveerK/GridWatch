@@ -242,6 +242,25 @@ describe('A19: map state per suburb', () => {
   });
 });
 
+describe('/v1/map likely areas', () => {
+  it('a water incident that named no suburb sends the likely suburb\'s outline, still marked inferred, and stays off the power map', async () => {
+    const t = new Date();
+    const square = { type: 'Polygon', coordinates: [[[28, -26], [28.01, -26], [28.01, -26.01], [28, -26.01], [28, -26]]] };
+    await prisma.locality.create({ data: { id: 'lk', canonicalName: 'Kya Sand', normalizedName: 'kya sand', lat: -26.005, lon: 28.005, boundary: square, active: true, sourceLine: 1, sourceLabel: 'test', updatedAt: t } });
+    await prisma.infraNode.create({ data: { id: 'res1', serviceType: 'WATER', type: 'RESERVOIR', name: 'Kya Sand Reservoir', normalizedKey: 'kya sand reservoir', evidenceCount: 3, lastSeenAt: t, firstSeenAt: t } });
+    await prisma.nodeLocality.create({ data: { nodeId: 'res1', localityId: 'lk', evidenceCount: 3, lastSeenAt: t } });
+    await prisma.outage.create({ data: { id: 'w1', title: 'Kya Sand Reservoir', serviceType: 'WATER', waterState: 'RECOVERING', status: 'ACTIVE', startedAt: t, lastUpdateAt: t } });
+    await prisma.outageNode.create({ data: { outageId: 'w1', nodeId: 'res1' } });
+
+    const water = (await (await call('/v1/map?service=WATER')).json()).data;
+    expect(water).toHaveLength(1);
+    expect(water[0].places).toEqual([expect.objectContaining({ id: 'lk', inferred: true, restored: false, boundary: square })]);
+
+    const power = (await (await call('/v1/map')).json()).data;
+    expect(power.some((o) => o.id === 'w1')).toBe(false);
+  });
+});
+
 describe('overview history strips', () => {
   it('reports 14 zero-filled days per service centre', async () => {
     const t = new Date(Date.now() - 2 * 3_600_000);
