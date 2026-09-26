@@ -6,9 +6,9 @@ import RefreshButton from '../components/RefreshButton.jsx';
 import SearchBox from '../components/SearchBox.jsx';
 import SyncStatus from '../components/SyncStatus.jsx';
 import UpdatesFeed, { countNew, useSeenUpdates } from '../components/UpdatesFeed.jsx';
-import { ColumnChart, Sparkline } from '../components/charts.jsx';
-import { Chip, EmptyState, ErrorState, Freshness, Meter, SectionHead, ServiceIdentity, Skeleton, StatusBadge } from '../components/ui.jsx';
-import { nice, plural, prettySdc, statusMeta, timeAgo, useApi } from '../lib/api.js';
+import { Sparkline } from '../components/charts.jsx';
+import { EmptyState, ErrorState, Freshness, Meter, SectionHead, Skeleton, StatusBadge } from '../components/ui.jsx';
+import { nice, placeTone, plural, prettySdc, statusMeta, timeAgo, useApi } from '../lib/api.js';
 import { useDocumentTitle, useMyArea, useTick } from '../lib/hooks.js';
 import { isNewSince } from '../lib/newness.js';
 import { useMunicipality, useUtility, withMunicipality } from '../lib/municipality.jsx';
@@ -16,7 +16,6 @@ import { useRefresh } from '../lib/refresh.js';
 
 const MapView = lazy(() => import('../components/MapView.jsx'));
 const LAYERS = { outages: true, equipment: false };
-const TONE = { ACTIVE: 'live', PARTIALLY_RESTORED: 'partial' };
 const ORDER = { ACTIVE: 0, PARTIALLY_RESTORED: 1 };
 
 /** How long an outage has been running, in the fewest words. */
@@ -27,29 +26,32 @@ function since(startedAt) {
   return `${Math.round(mins / 1440)} d`;
 }
 
-/** ▲ 3 vs yesterday: a number needs something to be compared with. */
-function Delta({ now, before, unit = 'vs yesterday' }) {
+/** "4 new today · ▲ 1 vs yesterday": how many began today, compared with how many began yesterday. It deliberately
+ * names what it counts, because the big number above it is how many are live, which is a different thing. */
+function Delta({ now, before }) {
   if (now == null || before == null) return null;
   const d = now - before;
-  if (d === 0) return <span className="delta same">No change {unit}</span>;
-  return <span className="delta">{d > 0 ? '▲' : '▼'} {Math.abs(d)} {unit}</span>;
+  return <span className={`delta${d === 0 ? ' same' : ''}`}>{now} new today · {d === 0 ? 'same as yesterday' : `${d > 0 ? '▲' : '▼'} ${Math.abs(d)} vs yesterday`}</span>;
 }
 
-function Metric({ label, value, hint, to, tone, spark, delta, loading }) {
+/** A headline number. With `onClick` it filters the list beside it (and shows as pressed); with `to` it opens a page. */
+function Metric({ label, value, hint, to, onClick, pressed, tone, spark, delta, loading }) {
+  const Tag = onClick ? 'button' : Link;
+  const props = onClick ? { type: 'button', onClick, 'aria-pressed': pressed } : { to };
   return (
-    <Link to={to} className={`metric tone-${tone}`}>
+    <Tag {...props} className={`metric tone-${tone}`}>
       <span className="metric-label"><i className="metric-dot" />{label}</span>
       {loading ? <Skeleton h={40} w="55%" /> : <span className="metric-value num">{value ?? '–'}</span>}
       <span className="metric-foot">{delta ?? <span className="delta same">{hint}</span>}</span>
       {spark && <span className="metric-spark"><Sparkline values={spark} w={92} h={34} /></span>}
-    </Link>
+    </Tag>
   );
 }
 
 /** One live outage in the stage list. Selecting it frames it on the map and opens the detail underneath. */
 function StageRow({ o, selected, onSelect }) {
   const { lastBatch } = useRefresh();
-  const m = statusMeta(o.status, o.service);
+  const m = statusMeta(o.status, o.service, o.waterState);
   const fresh = isNewSince(o.latestIngestedAt, lastBatch);
   const areas = o.places.filter((p) => !p.restored).map((p) => nice(p.name));
   return (
@@ -59,7 +61,6 @@ function StageRow({ o, selected, onSelect }) {
         <span className="srow-main">
           <span className="srow-title">{nice(o.title)}{fresh && <em className="new-pill">New</em>}</span>
           <span className="srow-meta">
-            <ServiceIdentity service={o.service} compact />
             <b>{m.label}</b>
             {o.sdc && <span>{prettySdc(o.sdc)}</span>}
             <span className="num">{since(o.startedAt)} so far</span>
@@ -127,12 +128,18 @@ export default function Overview() {
     [map.data],
   );
   const shown = filter === 'all' ? outages : outages.filter((o) => o.status === filter);
+  // the headline numbers filter the list beside them; pressing the active one again shows everything
+  const showOnly = (status) => {
+    setFilter((f) => (f === status ? 'all' : status));
+    setSelectedId(null);
+    setTab('outages');
+  };
   const selected = outages.find((o) => o.id === selectedId) ?? null;
 
   const points = useMemo(() => {
     const pts = shown.flatMap((o) => o.places.map((p) => ({
       id: `${o.id}:${p.id}`, sub: p.id, oid: o.id, name: nice(p.name), lat: p.lat, lon: p.lon,
-      boundary: p.boundary ?? null, inferred: p.inferred, tone: p.restored ? 'good' : TONE[o.status] ?? 'live',
+      boundary: p.boundary ?? null, inferred: p.inferred, tone: placeTone(o, p.restored),
       groups: [o.id], dim: Boolean(selectedId) && o.id !== selectedId, note: nice(o.title),
     })));
     if (areaShape?.lat != null && areaShape.lon != null && !pts.some((p) => p.sub === areaShape.id)) {
@@ -192,8 +199,8 @@ export default function Overview() {
             <p className="dateline"><Freshness lastPostAt={data?.lastPostAt} /></p>
           </div>
           <div className="metrics">
-            <Metric label={water ? 'Supply interruptions now' : 'Outages right now'} value={c?.live} to="/outages" tone="live" spark={daily.map((d) => d.count)} delta={<Delta now={today} before={yesterday} unit="vs yesterday" />} loading={loadingAll} />
-            <Metric label="Being restored" value={c?.partial} to="/outages" tone="partial" hint={water ? 'Supply is returning' : 'Some suburbs are back on'} loading={loadingAll} />
+            <Metric label={water ? 'Supply problems now' : 'Outages right now'} value={c?.live} onClick={() => showOnly('ACTIVE')} pressed={filter === 'ACTIVE'} tone="live" spark={daily.map((d) => d.count)} delta={<Delta now={today} before={yesterday} />} loading={loadingAll} />
+            <Metric label={water ? 'Supply returning' : 'Being restored'} value={c?.partial} onClick={() => showOnly('PARTIALLY_RESTORED')} pressed={filter === 'PARTIALLY_RESTORED'} tone="partial" hint={water ? 'Back in some areas' : 'Some suburbs are back on'} loading={loadingAll} />
             <Metric label="Restored in 24 hours" value={c?.restored24h} to="/outages?status=restored" tone="good" hint={water ? 'Water supply restored' : 'Power is back on'} loading={loadingAll} />
             <Metric label="Planned ahead" value={c?.plannedUpcoming} to="/planned" tone="plan" hint="Scheduled maintenance" loading={loadingAll} />
           </div>
@@ -213,10 +220,10 @@ export default function Overview() {
         <aside className="stage-panel">
           <div className="stage-tools">
             <SearchBox placeholder="Search your suburb, e.g. Fourways" compact />
-            <MyArea banner />
+            <MyArea />
           </div>
           <div className="stage-tabs" role="tablist" aria-label="Show">
-            <button type="button" role="tab" aria-selected={tab === 'outages'} onClick={() => setTab('outages')}>Live outages <span className="num">{shown.length}</span></button>
+            <button type="button" role="tab" aria-selected={tab === 'outages'} onClick={() => setTab('outages')}>{water ? 'Live incidents' : 'Live outages'} <span className="num">{shown.length}</span></button>
             <button type="button" role="tab" aria-selected={tab === 'updates'} onClick={() => setTab('updates')}>Latest updates{newCount > 0 && <span className="tab-badge">{newCount} new</span>}</button>
           </div>
           {tab === 'updates' ? (
@@ -226,7 +233,7 @@ export default function Overview() {
           <div className="stage-head">
             <h2>{water ? 'Where water is interrupted' : 'Where power is out'}</h2>
             <div className="seg" role="group" aria-label="Filter">
-              {[['all', 'All'], ['ACTIVE', 'Out'], ['PARTIALLY_RESTORED', 'Restoring']].map(([id, label]) => (
+              {[['all', 'All'], ['ACTIVE', water ? 'Now' : 'Out'], ['PARTIALLY_RESTORED', water ? 'Returning' : 'Restoring']].map(([id, label]) => (
                 <button key={id} type="button" aria-pressed={filter === id} onClick={() => { setFilter(id); setSelectedId(null); }}>{label}</button>
               ))}
             </div>
@@ -237,9 +244,13 @@ export default function Overview() {
           ) : shown.length ? (
             <ul className="slist">{shown.map((o) => <StageRow key={o.id} o={o} selected={o.id === selectedId} onSelect={setSelectedId} />)}</ul>
           ) : (
-            <EmptyState icon="check" title="No live outages">{Utility} hasn't reported any active outages in the last two days. That's good news.</EmptyState>
+            filter !== 'all' && outages.length ? (
+            <EmptyState icon="check" title="None in this group" action={<button type="button" className="btn small" onClick={() => setFilter('all')}>Show all</button>}>Nothing live matches this filter right now.</EmptyState>
+          ) : (
+            <EmptyState icon="check" title={water ? 'No live water incidents' : 'No live outages'}>{Utility} hasn't reported any active {water ? 'water supply problems' : 'outages'} in the last two days. That's good news.</EmptyState>
+          )
           )}
-          <Link to="/outages" className="stage-more link">All outages, planned and restored <Icon name="arrow" /></Link>
+          <Link to="/outages" className="stage-more link">{water ? 'All water incidents' : 'All outages'}, planned and restored <Icon name="arrow" /></Link>
             </>
           )}
         </aside>
@@ -250,7 +261,7 @@ export default function Overview() {
           {selected && (
             <div className="map-pick">
               <button type="button" className="map-pick-x" aria-label="Clear selection" onClick={() => setSelectedId(null)}><Icon name="close" /></button>
-              <StatusBadge status={selected.status} service={selected.service} />
+              <StatusBadge status={selected.status} service={selected.service} waterState={selected.waterState} />
               <h2>{nice(selected.title)}</h2>
               {selected.latest && <p>{selected.latest}</p>}
               <div className="panel-h">{water ? 'Areas affected' : 'Suburbs affected'}</div>
@@ -263,8 +274,8 @@ export default function Overview() {
           )}
           <div className="map-key" aria-hidden="true">
             {areaShape && <span><i className="key-dot tone-plan" /> Your area</span>}
-            <span><i className="key-dot tone-live" /> {water ? 'Supply interrupted' : 'Power out'}</span>
-            <span><i className="key-dot tone-partial" /> Being restored</span>
+            <span><i className="key-dot tone-live" /> {water ? 'No supply' : 'Power out'}</span>
+            <span><i className="key-dot tone-partial" /> {water ? 'Reduced or recovering' : 'Being restored'}</span>
             <span><i className="key-dot tone-good" /> {water ? 'Supply restored' : 'Back on'}</span>
           </div>
           <Link to="/map" className="map-open btn small">Full map <Icon name="arrow" /></Link>
@@ -302,10 +313,6 @@ export default function Overview() {
           ) : data ? <EmptyState icon="calendar" title="Nothing scheduled">No planned maintenance has been announced.</EmptyState> : <Skeleton h={160} />}
         </section>
 
-        <section className="section" aria-labelledby="daily-h">
-          <SectionHead id="daily-h" title={water ? 'Water interruptions reported per day' : 'Outages reported per day'} sub="Last 10 days, unplanned incidents only" />
-          {data ? <ColumnChart data={data.daily} /> : <Skeleton h={170} />}
-        </section>
       </div>
     </>
   );

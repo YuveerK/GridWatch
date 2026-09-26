@@ -28,7 +28,7 @@ export default function Activity() {
       <header className="page-head">
         <ServiceIdentity service={service} />
         <h1>What changed</h1>
-        <p>Every {service === 'WATER' ? 'water interruption' : 'electricity outage'} GridWatch opened or updated, with the one-line update from each new post. Use it after fetching to see exactly what's new.</p>
+        <p>Every {service === 'WATER' ? 'water incident' : 'electricity outage'} GridWatch opened or updated, with the one-line update from each new post. Use it after fetching to see exactly what's new.</p>
       </header>
       <div className="toolbar">
         <div className="seg" role="group" aria-label="Time period">

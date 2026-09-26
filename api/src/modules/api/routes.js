@@ -325,7 +325,7 @@ router.get('/v1/search', wrap(async (req, res) => {
   res.json({
     suburbs: suburbs.slice(0, 7).map((l) => ({ id: l.id, name: l.canonicalName, region: l.Region?.code ?? null, municipality: l.Region?.Municipality?.name ?? null, lat: l.lat ?? null, lon: l.lon ?? null })),
     equipment: equipment.map((n) => ({ id: n.id, name: n.name, type: n.type })),
-    outages: outages.map((o) => ({ id: o.id, title: o.title, status: o.status, sdc: o.sdcName })),
+    outages: outages.map((o) => ({ id: o.id, title: o.title, status: o.status, sdc: o.sdcName, service: o.serviceType, waterState: o.waterState })),
   });
 }));
 
@@ -343,6 +343,7 @@ router.get('/v1/municipalities', wrap(async (_req, res) => {
       utility: UTILITIES[m.code]?.utility ?? m.name,
       waterUtility: utilityProfile(m.code, 'WATER')?.utility ?? null,
       accounts: m.SourceAccount.filter((a) => a.active && a.serviceType !== 'WATER').map((a) => a.displayName),
+      waterAccounts: m.SourceAccount.filter((a) => a.active && a.serviceType === 'WATER').map((a) => a.displayName),
       services: [...new Set(m.SourceAccount.map((a) => a.serviceType))],
       contact: UTILITIES[m.code]?.contact ?? null,
       waterContact: utilityProfile(m.code, 'WATER')?.contact ?? null,
@@ -366,7 +367,7 @@ router.get('/v1/localities/:id', wrap(async (req, res) => {
   const l = await prisma.locality.findUnique({ where: { id: req.params.id }, include: { Region: { include: { Municipality: true } }, Municipality: true, nodes: { include: { node: true }, orderBy: { evidenceCount: 'desc' }, take: 20 } } });
   if (!l) return res.status(404).json({ error: 'not_found' });
   const m = localityMunicipality(l);
-  res.json({ id: l.id, name: l.canonicalName, region: l.Region?.code ?? null, municipality: m?.name ?? null, municipalityCode: m?.code ?? null, learned: l.sourceLabel === 'learned-from-posts', lat: l.lat, lon: l.lon, boundary: l.boundary ?? null, infrastructure: l.nodes.map((n) => ({ ...n.node, evidenceCount: n.evidenceCount })) });
+  res.json({ id: l.id, name: l.canonicalName, region: l.Region?.code ?? null, municipality: m?.name ?? null, municipalityCode: m?.code ?? null, learned: l.sourceLabel === 'learned-from-posts', electricitySupplier: l.electricitySupplier ?? null, lat: l.lat, lon: l.lon, boundary: l.boundary ?? null, infrastructure: l.nodes.map((n) => ({ ...n.node, evidenceCount: n.evidenceCount })) });
 }));
 
 router.get('/v1/localities/:id/supply', wrap(async (req, res) => {
@@ -480,11 +481,12 @@ router.get('/v1/map', wrap(async (req, res) => {
   if (!parsed) return;
   const rows = await prisma.outage.findMany({ where: { status: { in: LIVE }, ...outageInMunicipality(parsed.municipality), ...outageInService(parsed.service) }, include: outageInclude, orderBy: { lastUpdateAt: 'desc' }, take: 100 });
   const outages = await shapeMany(rows);
-  const boundaries = await boundariesFor([...new Set(outages.flatMap((o) => o.localities.map((l) => l.id)))]);
+  // likely areas get their shape too; the client draws those faint and dashed, and they stay flagged `inferred`
+  const boundaries = await boundariesFor([...new Set(outages.flatMap((o) => [...o.localities, ...o.likelyAreas].map((l) => l.id)))]);
   res.json({
     data: outages.map((o) => {
       const named = o.localities.map((l) => place(l, { restored: l.restored, inferred: false, boundary: boundaries.get(l.id) ?? null }));
-      const all = named.length ? named : o.likelyAreas.map((l) => place({ ...l, canonicalName: l.canonicalName }, { restored: false, inferred: true }));
+      const all = named.length ? named : o.likelyAreas.map((l) => place({ ...l, canonicalName: l.canonicalName }, { restored: false, inferred: true, boundary: boundaries.get(l.id) ?? null }));
       return {
         id: o.id, title: o.title, status: o.status, restorationPercent: o.restorationPercent, sdc: o.sdc, startedAt: o.startedAt, lastUpdateAt: o.lastUpdateAt, latest: o.latest?.summary ?? null, latestIngestedAt: o.latest?.ingestedAt ?? null,
         service: o.service,
@@ -647,7 +649,7 @@ router.get('/v1/changes', wrap(async (req, res) => {
   }
   const rows = await prisma.$queryRaw`
     SELECT ld."outageId" AS "outageId", ld."faultIndex" AS "faultIndex",
-           o."title" AS "title", o."status"::text AS "status", o."sdcName" AS "sdc", o."kind"::text AS "kind", o."serviceType"::text AS "service", o."createdAt" AS "outageCreatedAt",
+           o."title" AS "title", o."status"::text AS "status", o."sdcName" AS "sdc", o."kind"::text AS "kind", o."serviceType"::text AS "service", o."waterState"::text AS "waterState", o."createdAt" AS "outageCreatedAt",
            op."role"::text AS "role", sp."externalId" AS "externalId", sp."sourceAccount" AS "account", sp."publishedAt" AS "postedAt", ps."summary" AS "summary"
     FROM "LinkDecision" ld
     JOIN "Outage" o ON o."id" = ld."outageId"
@@ -662,7 +664,7 @@ router.get('/v1/changes', wrap(async (req, res) => {
 
   const byOutage = new Map();
   for (const r of rows) {
-    const o = byOutage.get(r.outageId) ?? { id: r.outageId, title: r.title, status: r.status, sdc: r.sdc, kind: r.kind, service: r.service, isNew: r.outageCreatedAt >= since, updates: [] };
+    const o = byOutage.get(r.outageId) ?? { id: r.outageId, title: r.title, status: r.status, sdc: r.sdc, kind: r.kind, service: r.service, waterState: r.waterState, isNew: r.outageCreatedAt >= since, updates: [] };
     o.updates.push({ postedAt: r.postedAt, role: r.role, summary: r.summary, url: postUrl(r.account, r.externalId) });
     byOutage.set(r.outageId, o);
   }

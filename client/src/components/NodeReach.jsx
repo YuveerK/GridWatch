@@ -33,7 +33,7 @@ export default function NodeReach({ id, service = 'ELECTRICITY' }) {
           <MapView points={points} flow={flow} layers={LAYERS} height={380} cooperative label={`Map of suburbs served by ${data.node.name}`} />
         </Suspense>
         <div className="map-foot">
-          <Legend items={[['plan', 'Named in past interruptions'], ['live', water ? 'Water interrupted now' : 'Power out now']]} />
+          <Legend items={[['plan', 'Named in past incidents'], ['live', water ? 'Water interrupted now' : 'Power out now']]} />
           <span className="row" style={{ gap: 12 }}>
             <button type="button" className="btn small ghost" onClick={() => setReplay((n) => n + 1)}><Icon name="refresh" /> Replay</button>
             <span className="small faint">{data.unplaced > 0 ? `${plural(data.unplaced, 'suburb')} could not be placed · ` : ''}Map © OpenStreetMap contributors</span>

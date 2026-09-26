@@ -285,9 +285,9 @@ table.data th { color: var(--ink-3); font-weight: 500; }
 /* ---------- tabs / filters ---------- */
 .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 18px; }
 .seg { display: inline-flex; padding: 4px; gap: 2px; background: var(--sunken); border-radius: 999px; overflow-x: auto; max-width: 100%; }
-.seg button { border: 0; background: transparent; padding: 7px 14px; border-radius: 999px; font-weight: 500; font-size: 13.5px; color: var(--ink-2); cursor: pointer; white-space: nowrap; display: inline-flex; gap: 7px; align-items: center; }
-.seg button[aria-pressed='true'] { background: var(--card); color: var(--ink); box-shadow: var(--shadow-1); }
-.seg button .n { font-size: 12px; color: var(--ink-3); font-weight: 500; }
+.seg button, .seg .seg-link { border: 0; background: transparent; padding: 7px 14px; text-decoration: none; border-radius: 999px; font-weight: 500; font-size: 13.5px; color: var(--ink-2); cursor: pointer; white-space: nowrap; display: inline-flex; gap: 7px; align-items: center; }
+.seg button[aria-pressed='true'], .seg .seg-link[aria-current='page'] { background: var(--card); color: var(--ink); box-shadow: var(--shadow-1); }
+.seg button .n, .seg .seg-link .n { font-size: 12px; color: var(--ink-3); font-weight: 500; }
 .field { height: 40px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--card); font: inherit; font-size: 14px; color: var(--ink); }
 .field:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
 input.field { min-width: 220px; }
@@ -526,6 +526,11 @@ a.fname:hover { text-decoration: underline; }
 .answer.slim h2 { font-size: 17px; line-height: 1.25; }
 .answer.slim .kicker { display: inline; margin: 0 6px 0 0; font-size: 11px; }
 .answer.slim p { margin-top: 2px; font-size: 14px; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.area-other { display: inline-flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 13px; color: var(--ink-2); text-decoration: none; }
+.area-other b { color: var(--tone, var(--ink)); font-weight: 600; }
+.area-other:hover b { text-decoration: underline; }
+.answer-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.answer-pair .answer { margin: 0; }
 .slim-actions { flex: none; gap: 8px; }
 .kpis .tile { padding: 14px 18px; }
 .kpis .tile .v { font-size: 34px; }
@@ -679,10 +684,10 @@ html[data-service='WATER'] .wordmark i { background: #2f7d9a; }
 .field { border-radius: var(--radius-sm); background: var(--sunken); box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--ink); height: 38px; }
 select.field { background-color: var(--sunken); }
 .seg { background: var(--sunken); border-radius: var(--radius-sm); padding: 3px; gap: 2px; box-shadow: inset 0 0 0 1px var(--line); }
-.seg button { border-radius: 4px; padding: 5px 12px; font-size: 13px; color: var(--ink-2); }
-.seg button:hover { color: var(--ink); }
-.seg button[aria-pressed='true'] { background: var(--raised); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-strong); }
-.seg button .n { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+.seg button, .seg .seg-link { border-radius: 4px; padding: 5px 12px; font-size: 13px; color: var(--ink-2); }
+.seg button:hover, .seg .seg-link:hover { color: var(--ink); }
+.seg button[aria-pressed='true'], .seg .seg-link[aria-current='page'] { background: var(--raised); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.seg button .n, .seg .seg-link .n { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
 .seg a.seg-link { border: 0; background: transparent; border-radius: 4px; padding: 5px 12px; font-size: 13px; font-weight: 500; color: var(--ink-2); text-decoration: none; display: inline-flex; gap: 7px; align-items: center; white-space: nowrap; }
 .seg a.seg-link:hover { color: var(--ink); }
 .results, .overlay-card { background: var(--raised); border-radius: var(--radius); box-shadow: var(--shadow-2); }
@@ -734,6 +739,8 @@ a.chip:hover, button.chip:hover { background: color-mix(in srgb, var(--raised) 7
 .metric:first-child { border-left: 0; }
 .metric:hover { background: var(--raised); }
 .metric:focus-visible { outline-offset: -3px; }
+button.metric { font: inherit; color: inherit; text-align: left; background: none; border: 0; border-left: 1px solid var(--line); cursor: pointer; }
+.metric[aria-pressed="true"] { background: var(--raised); box-shadow: inset 0 -2px 0 var(--tone); }
 .metric-label { font-size: 12.5px; font-weight: 600; color: var(--ink-2); display: inline-flex; align-items: center; gap: 8px; }
 .metric-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tone); display: inline-block; }
 .metric-value { font-size: 40px; line-height: 1.1; font-weight: 500; letter-spacing: -0.04em; color: var(--ink); margin-top: 4px; }

@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom';
-import { ROLE, fmtDay, fmtTime, nice, plural, prettySdc, timeAgo, useApi } from '../lib/api.js';
+import { ROLE, fmtDay, fmtTime, nice, plural, prettySdc, roleLabel, timeAgo, useApi } from '../lib/api.js';
 import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
 import Icon from './Icon.jsx';
-import { ServiceIdentity, StatusBadge } from './ui.jsx';
+import { StatusBadge } from './ui.jsx';
 
 function OutageChange({ o }) {
   const shown = o.updates.slice(-3);
@@ -11,7 +11,7 @@ function OutageChange({ o }) {
     <li className="chg">
       <div className="row between" style={{ gap: 8, alignItems: 'flex-start' }}>
         <Link to={`/outages/${o.id}`} className="t">{nice(o.title)}</Link>
-        <span className="outage-card-status"><ServiceIdentity service={o.service} compact /><StatusBadge status={o.status} kind={o.kind} service={o.service} /></span>
+        <StatusBadge status={o.status} kind={o.kind} service={o.service} waterState={o.waterState} />
       </div>
       {o.sdc && <div className="small faint">{prettySdc(o.sdc)}</div>}
       <ul className="chg-updates">
@@ -20,7 +20,7 @@ function OutageChange({ o }) {
           <li key={i}>
             <span className={`chg-dot tone-${(ROLE[u.role] ?? ROLE.UPDATE).tone}`} />
             <div>
-              <div className="small faint">{u.role === 'RESTORATION' && o.service === 'WATER' ? 'Water supply restored' : (ROLE[u.role] ?? ROLE.UPDATE).label} · {fmtDay(u.postedAt)}, {fmtTime(u.postedAt)}</div>
+              <div className="small faint">{roleLabel(u.role, o.service)} · {fmtDay(u.postedAt)}, {fmtTime(u.postedAt)}</div>
               <div>{u.summary || 'Update posted.'} <a className="link small" href={u.url} target="_blank" rel="noreferrer">post <Icon name="external" /></a></div>
             </div>
           </li>
@@ -51,7 +51,7 @@ export default function WhatChanged({ since, label }) {
         {c.needsReview > 0 && <> · <b>{c.needsReview}</b> need a human look</>}.
       </p>
       {outages.length === 0 && (
-        <div className="card card-pad muted">No {service === 'WATER' ? 'water interruptions' : 'electricity outages'} were opened or updated in this period.</div>
+        <div className="card card-pad muted">No {service === 'WATER' ? 'water incidents' : 'electricity outages'} were opened or updated in this period.</div>
       )}
       {fresh.length > 0 && (
         <section>

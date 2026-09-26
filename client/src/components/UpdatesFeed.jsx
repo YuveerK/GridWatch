@@ -81,7 +81,7 @@ export default function UpdatesFeed({ all, loading, seenAt, markSeen }) {
                 <div className="urow-main">
                   <div className="urow-meta">
                     <ServiceIdentity service={u.service ?? service} compact />
-                    <b>{water && u.kind === 'restored' ? 'Water supply restored' : water && u.kind === 'opened' ? 'New interruption' : k.label}</b>
+                    <b>{water && u.kind === 'restored' ? 'Water supply restored' : water && u.kind === 'opened' ? 'New incident' : k.label}</b>
                     <span>{timeAgo(u.postedAt)}</span>
                     {u.sdc && <span>{prettySdc(u.sdc)}</span>}
                     {isNew && <em className="new-pill">New</em>}

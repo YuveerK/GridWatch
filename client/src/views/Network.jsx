@@ -88,7 +88,7 @@ export default function Network() {
             <Link key={n.id} to={`/network/${n.id}`} className={`card network-asset ${water ? 'service-water' : 'service-power'}`}>
               <span className="network-asset-icon"><Icon name={water ? 'drop' : 'bolt'} /></span>
               <span className="network-asset-main"><strong>{nice(n.name)}</strong><span>{typeLabel(n.type)} · {plural(n.evidenceCount, 'post')}{n.lifecycle === 'CONFIRMED' ? '' : ' · reported once'}</span></span>
-              {n.live && <span className="badge tone-live"><Icon name="alert" />Live interruption</span>}
+              {n.live && <span className="badge tone-live"><Icon name="alert" />Live incident</span>}
               <Icon name="chevron" />
             </Link>
           )}</div>}

@@ -97,33 +97,4 @@ export function firstSentence(t) {
   return m ? m[0].trim() : clean.length > 200 ? `${clean.slice(0, 200)}…` : clean;
 }
 
-// ───────────── status vocabulary (one place, used everywhere) ─────────────
-export const STATUS = {
-  ACTIVE: { label: 'Outage', long: 'Power is out', tone: 'live', icon: 'alert', order: 0 },
-  PARTIALLY_RESTORED: { label: 'Partly restored', long: 'Some areas are back on', tone: 'partial', icon: 'half', order: 1 },
-  PLANNED: { label: 'Planned', long: 'Planned maintenance', tone: 'plan', icon: 'calendar', order: 2 },
-  RESTORED: { label: 'Restored', long: 'Power is back on', tone: 'good', icon: 'check', order: 3 },
-  STALE: { label: 'No recent update', long: 'No news lately', tone: 'idle', icon: 'clock', order: 4 },
-  CLOSED: { label: 'Closed', long: 'Finished', tone: 'idle', icon: 'archive', order: 5 },
-  CANCELLED: { label: 'Cancelled', long: 'Planned work cancelled', tone: 'idle', icon: 'x', order: 6 },
-};
-export const statusMeta = (status, service = 'ELECTRICITY') => {
-  const base = STATUS[status] ?? { label: status, long: status, tone: 'idle', icon: 'clock', order: 9 };
-  if (service !== 'WATER') return base;
-  const long = {
-    ACTIVE: 'Water supply is interrupted',
-    PARTIALLY_RESTORED: 'Supply is returning in some areas',
-    PLANNED: 'Planned water interruption',
-    RESTORED: 'Water supply is restored',
-  }[status];
-  const label = { ACTIVE: 'Supply interrupted', PARTIALLY_RESTORED: 'Supply returning' }[status];
-  return long ? { ...base, long, label: label ?? base.label } : base;
-};
-export const isLive = (s) => s === 'ACTIVE' || s === 'PARTIALLY_RESTORED';
-
-export const ROLE = {
-  OPENED: { label: 'First report', tone: 'live' },
-  UPDATE: { label: 'Update', tone: 'plan' },
-  RESTORATION: { label: 'Power restored', tone: 'good' },
-};
-
+export { ROLE, STATUS, WATER_STATE, isLive, placeTone, progressStep, roleLabel, statusMeta, waterStateLabel } from './status.js';

@@ -100,7 +100,7 @@ export default function NodeDetail() {
 
       {n.localities.length > 0 && (
         <section className="section">
-          <SectionHead title="Areas affected when it fails" sub={`Suburbs named in ${water ? 'water interruptions' : 'electricity outages'} involving this asset. More reports make this more complete.`} />
+          <SectionHead title="Areas affected when it fails" sub={`Suburbs named in ${water ? 'water incidents' : 'electricity outages'} involving this asset. More reports make this more complete.`} />
           <div className="card card-pad"><div className="chips">{n.localities.map((l) => <Chip key={l.localityId} to={`/suburb/${l.localityId}`} title={`Seen in ${plural(l.evidenceCount, 'post')}`}>{nice(l.locality.canonicalName)} <small>{l.evidenceCount}×</small></Chip>)}</div></div>
         </section>
       )}

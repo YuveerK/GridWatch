@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import { StatusBadge } from '../components/ui.jsx';
 import { useDocumentTitle } from '../lib/hooks.js';
-import { useUtility } from '../lib/municipality.jsx';
+import { WATER_STATE } from '../lib/api.js';
+import { useMunicipality, useUtility } from '../lib/municipality.jsx';
 import { Explainer } from './Network.jsx';
 
 const STATUSES = [
@@ -13,6 +14,27 @@ const STATUSES = [
   ['PLANNED', 'Scheduled maintenance. The date and time come from the utility.'],
   ['STALE', 'The utility has said nothing for two days. It may be fixed, but nobody confirmed it.'],
   ['CLOSED', 'An old outage kept for history.'],
+];
+
+const WATER_STATUSES = [
+  ['ACTIVE', 'Johannesburg Water has reported a supply problem that is not over. The badge says what customers face, from "No water supply" to "Low pressure".'],
+  ['PARTIALLY_RESTORED', 'Supply is back in some areas but not all.'],
+  ['RESTORED', 'Johannesburg Water said customers have water again. Only this closes an incident.'],
+  ['PLANNED', 'Scheduled work. The date and time come from Johannesburg Water.'],
+  ['STALE', 'Nothing has been posted for a while. Quiet is not the same as restored.'],
+  ['CLOSED', 'An old incident kept for history.'],
+];
+
+// the conditions a live water incident is most often in
+const WATER_CONDITIONS = ['NO_SUPPLY', 'LOW_PRESSURE', 'PARTIAL_SUPPLY', 'BYPASS', 'RECOVERING', 'STABLE'];
+
+const WATER_TERMS = [
+  ['Reservoir / tower', 'Stores water and keeps pressure up for the suburbs it supplies. When its level drops, those suburbs lose pressure or supply.'],
+  ['Pump station', 'Lifts water to reservoirs and towers on higher ground. A power failure at a pump station often causes a water problem.'],
+  ['Rand Water', 'The bulk supplier that sells water to Johannesburg Water. A problem upstream at Rand Water can affect many systems at once.'],
+  ['Direct feed', 'Some suburbs are fed straight from a Rand Water connection rather than from a reservoir.'],
+  ['Recovering', 'Pumping or levels are improving, but taps may still be dry or weak. GridWatch keeps the incident open until customer supply is confirmed.'],
+  ['Bypass', 'A temporary route around a problem. It is not the normal supply path.'],
 ];
 
 const TERMS = [
@@ -27,6 +49,8 @@ const TERMS = [
 export default function About() {
   useDocumentTitle('How it works');
   const { utility, Utility, accounts, contacts, single } = useUtility();
+  const { service } = useMunicipality();
+  const water = service === 'WATER';
   const who = single ? utility : 'each city';
   return (
     <div className="container page">
@@ -53,17 +77,31 @@ export default function About() {
       <div className="prose"><h2>What the statuses mean</h2></div>
       <div className="card card-pad">
         <table className="legend-table"><tbody>
-          {STATUSES.map(([s, d]) => <tr key={s}><td><StatusBadge status={s} /></td><td className="muted">{d}</td></tr>)}
+          {(water ? WATER_STATUSES : STATUSES).map(([s, d]) => <tr key={s}><td><StatusBadge status={s} service={service} /></td><td className="muted">{d}</td></tr>)}
         </tbody></table>
       </div>
 
-      <div className="prose"><h2>How the power network fits together</h2></div>
-      <Explainer />
+      {water && (
+        <>
+          <div className="prose">
+            <h2>What a live water incident's condition means</h2>
+            <p>Recovery is not restoration. Red means supply is off; amber means it is reduced, rerouted or recovering, and taps may still be dry or weak.</p>
+          </div>
+          <div className="card card-pad">
+            <table className="legend-table"><tbody>
+              {WATER_CONDITIONS.map((st) => <tr key={st}><td><StatusBadge status="ACTIVE" service="WATER" waterState={st} /></td><td className="muted">{WATER_STATE[st].long}.</td></tr>)}
+            </tbody></table>
+          </div>
+        </>
+      )}
+
+      <div className="prose"><h2>{water ? 'How the water network fits together' : 'How the power network fits together'}</h2></div>
+      <Explainer service={service} />
 
       <div className="prose"><h2>Words you'll see</h2></div>
       <div className="card card-pad">
         <dl className="facts" style={{ gridTemplateColumns: 'minmax(150px, 220px) 1fr', gap: '16px 24px' }}>
-          {TERMS.map(([t, d]) => (<Fragment key={t}><dt style={{ color: 'var(--ink)', fontWeight: 500 }}>{t}</dt><dd className="muted" style={{ fontWeight: 400 }}>{d}</dd></Fragment>))}
+          {(water ? WATER_TERMS : TERMS).map(([t, d]) => (<Fragment key={t}><dt style={{ color: 'var(--ink)', fontWeight: 500 }}>{t}</dt><dd className="muted" style={{ fontWeight: 400 }}>{d}</dd></Fragment>))}
         </dl>
       </div>
 
@@ -75,7 +113,7 @@ export default function About() {
           <li><b>Equipment lists are incomplete.</b> We learn the network only from outages that were reported, so quiet parts of the grid are missing.</li>
           <li><b>Your saved suburb stays in this browser.</b> GridWatch doesn't collect personal data or ask you to sign in.</li>
         </ul>
-        <h2>Is your power out and it isn't listed?</h2>
+        <h2>{water ? "Is your water off and it isn't listed?" : "Is your power out and it isn't listed?"}</h2>
         <p>Report it to {single ? utility : 'your city'} directly:</p>
       </div>
       {contacts.map(({ name, contact }) => (

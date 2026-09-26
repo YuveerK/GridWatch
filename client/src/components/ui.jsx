@@ -6,11 +6,13 @@ import { useUtility } from '../lib/municipality.jsx';
 import Icon from './Icon.jsx';
 import ServiceIdentity from './ServiceIdentity.jsx';
 
-export function StatusBadge({ status, kind, large, service }) {
-  const m = statusMeta(status, service);
+/** Lifecycle status as a badge. For Water, pass `waterState` so a live incident says what customers face ("Low pressure",
+ * "Recovering") instead of a blanket "Supply interrupted". */
+export function StatusBadge({ status, kind, large, service, waterState }) {
+  const m = statusMeta(status, service, waterState);
   const label = kind === 'PLANNED' && status !== 'PLANNED' && status !== 'CANCELLED' ? `Planned · ${m.label.toLowerCase()}` : m.label;
   return (
-    <span className={`badge tone-${m.tone}${large ? ' lg' : ''}`}>
+    <span className={`badge tone-${m.tone}${large ? ' lg' : ''}`} title={m.long}>
       <Icon name={m.icon} />
       {label}
     </span>

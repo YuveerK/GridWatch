@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
+import StatusTabs from '../components/StatusTabs.jsx';
 import { CardSkeleton, EmptyState, ErrorState, ServiceIdentity, StatusBadge } from '../components/ui.jsx';
 import { dayDiff, nice, prettySdc, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
@@ -21,7 +22,6 @@ function Row({ o }) {
         {d ? (<><b className="num">{d.getUTCDate()}</b><span>{d.toLocaleDateString('en-ZA', { timeZone: 'UTC', month: 'short' })}</span></>) : (<><b><Icon name="calendar" /></b><span>TBC</span></>)}
       </div>
       <div className="grow">
-        <ServiceIdentity service={o.service} compact />
         <Link to={`/outages/${o.id}`} className="t">{nice(o.title)}</Link>
         <div className="small muted">
           {d && <b>{d.toLocaleDateString('en-ZA', { timeZone: 'UTC', weekday: 'long' })}{o.scheduled.from ? ` ${o.scheduled.from}–${o.scheduled.to}` : ''}</b>}
@@ -39,6 +39,7 @@ export default function Planned() {
   useDocumentTitle('Planned maintenance');
   const { param: muniParam, name, service } = useMunicipality();
   const { data, error, loading } = useApi(withMunicipality('/v1/outages?status=PLANNED&limit=100&sort=updated', muniParam));
+  const stats = useApi(withMunicipality('/v1/stats', muniParam));
 
   const rows = data?.data ?? [];
   const dated = rows.filter((o) => o.scheduled).map((o) => ({ o, d: dayDiff(o.scheduled.date) }));
@@ -51,6 +52,7 @@ export default function Planned() {
         <h1>Planned maintenance</h1>
         <p>Scheduled {service === 'WATER' ? 'water supply' : 'electricity'} interruptions{name ? ` announced for ${name}` : ' that have been announced'}. Dates and times come from the utility's own posts.</p>
       </header>
+      <div className="toolbar"><StatusTabs active="planned" counts={stats.data?.outagesByStatus ?? null} /></div>
       {error && !data && <ErrorState error={error} />}
       {loading && !data && <CardSkeleton n={3} />}
       {data && rows.length === 0 && <EmptyState icon="calendar" title="Nothing scheduled">No planned maintenance{name ? ` for ${name}` : ''} that we know of.</EmptyState>}

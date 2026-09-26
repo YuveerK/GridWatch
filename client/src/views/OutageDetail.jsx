@@ -1,18 +1,21 @@
+import { useEffect } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import { scheduleLabel } from '../components/OutageCard.jsx';
-import { Chip, Crumbs, ErrorState, Meter, ServiceIdentity, Skeleton, StatusBadge } from '../components/ui.jsx';
-import { ROLE, nice, cleanPostText, duration, firstSentence, fmtDateTime, fmtDay, fmtTime, plural, prettySdc, statusMeta, timeAgo, typeLabel, useApi } from '../lib/api.js';
+import { Chip, Crumbs, ErrorState, InfoTip, Meter, ServiceIdentity, Skeleton, StatusBadge } from '../components/ui.jsx';
+import { ROLE, nice, cleanPostText, duration, firstSentence, fmtDateTime, fmtDay, fmtTime, plural, prettySdc, progressStep, roleLabel, statusMeta, timeAgo, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
 import { useUtility } from '../lib/municipality.jsx';
+import { useRefresh } from '../lib/refresh.js';
+import { useService } from '../lib/service.jsx';
 
-function TimelineItem({ t, last, utility, service }) {
+function TimelineItem({ t, last, utility, service, operator }) {
   const role = ROLE[t.role] ?? ROLE.UPDATE;
   const text = cleanPostText(t.text) || t.text;
   return (
     <li className={`tone-${role.tone}`}>
       <div className="top">
-        <span className="role">{t.role === 'RESTORATION' && service === 'WATER' ? 'Water supply restored' : role.label}</span>
+        <span className="role">{roleLabel(t.role, service)}</span>
         <span className="when">{fmtDay(t.postedAt)}, {fmtTime(t.postedAt)} · {timeAgo(t.postedAt)}</span>
         {last && <span className="badge tone-plan" style={{ padding: '1px 8px', fontSize: 11 }}>Latest</span>}
       </div>
@@ -38,7 +41,7 @@ function TimelineItem({ t, last, utility, service }) {
           )}
           <p className="small" style={{ marginTop: 12 }}>
             <a className="link" href={t.url} target="_blank" rel="noreferrer">Open on X <Icon name="external" /></a>
-            {t.reasons?.length > 0 && <span className="faint"> · linked to this outage because: {t.reasons.join(', ')}</span>}
+            {operator && t.reasons?.length > 0 && <span className="faint"> · linked because: {t.reasons.join(', ')}</span>}
           </p>
         </div>
       </details>
@@ -47,9 +50,11 @@ function TimelineItem({ t, last, utility, service }) {
 }
 
 /** Reported, then being restored, then restored: where this outage is in its life. */
-function Progression({ status }) {
-  const at = status === 'ACTIVE' || status === 'STALE' ? 0 : status === 'PARTIALLY_RESTORED' ? 1 : 2;
-  const steps = [['Reported', 'live'], ['Being restored', 'partial'], ['Restored', 'good']];
+function Progression({ status, service, waterState }) {
+  const at = progressStep(status, service, waterState);
+  const steps = service === 'WATER'
+    ? [['Reported', 'live'], ['Recovering', 'partial'], ['Supply restored', 'good']]
+    : [['Reported', 'live'], ['Being restored', 'partial'], ['Restored', 'good']];
   return (
     <ol className="progress" aria-label="Progress of this outage">
       {steps.map(([label, tone], i) => (
@@ -67,6 +72,13 @@ export default function OutageDetail() {
   const { data: o, error, loading } = useApi(`/v1/outages/${id}`, { refreshMs: 60_000 });
   useDocumentTitle(o?.title);
   const { utility, Utility } = useUtility(o?.municipality?.code, o?.service);
+  const { operator } = useRefresh();
+  const { service, setService } = useService();
+  // a Water incident opened from a shared link or a cross-service page puts the site in Water, so "back to the list"
+  // and the header switch agree with what is on screen
+  useEffect(() => {
+    if (o?.id === id && o.service && o.service !== service) setService(o.service);
+  }, [o, id, service, setService]);
 
   if (error && !o) return <div className="container page"><ErrorState error={error} /></div>;
   if (loading || !o) {
@@ -79,7 +91,8 @@ export default function OutageDetail() {
     );
   }
 
-  const m = statusMeta(o.status, o.service);
+  const water = o.service === 'WATER';
+  const m = statusMeta(o.status, o.service, o.waterState);
   const restored = o.localities.filter((l) => l.restored);
   const affected = o.localities.filter((l) => !l.restored);
   const last = o.timeline.at(-1);
@@ -89,22 +102,22 @@ export default function OutageDetail() {
 
   return (
     <div className="container page">
-      <Crumbs items={[{ label: 'Outages', to: '/outages' }, ...(o.sdcNode ? [{ label: prettySdc(o.sdc), to: `/network/${o.sdcNode.id}` }] : []), { label: nice(o.title) }]} />
+      <Crumbs items={[{ label: water ? 'Incidents' : 'Outages', to: '/outages' }, ...(o.sdcNode ? [{ label: prettySdc(o.sdc), to: `/network/${o.sdcNode.id}` }] : []), { label: nice(o.title) }]} />
 
       <div className={`dhero tone-${m.tone}`}>
         <div className="row between">
           <div className="row" style={{ gap: 10 }}>
             <ServiceIdentity service={o.service} />
-            <StatusBadge status={o.status} kind={o.kind} service={o.service} large />
-            {o.service === 'WATER' && o.waterState && <p className="small" style={{ margin: '8px 0 0' }}>Supply condition: {o.waterState.replaceAll('_', ' ').toLowerCase()}. A recovering system is not the same as supply restored.</p>}
-            {o.service === 'WATER' && o.localities?.some((l) => l.impactBasis === 'INFERRED_TOPOLOGY') && <p className="small faint">Potential downstream impact is based on the known supply network. It is not an official confirmation.</p>}
+            <StatusBadge status={o.status} kind={o.kind} service={o.service} waterState={o.waterState} large />
             <span className="small muted">{m.long}</span>
           </div>
           <span className="small faint">Last update {timeAgo(o.lastUpdateAt)}</span>
         </div>
-        {!isPlanned && ['ACTIVE', 'PARTIALLY_RESTORED', 'RESTORED', 'CLOSED', 'STALE'].includes(o.status) && <Progression status={o.status} />}
+        {water && m.tone === 'partial' && !ended && <p className="small muted" style={{ margin: '10px 0 0' }}>Recovery is not the same as supply restored. This incident stays open until {Utility} confirms customers have water again.</p>}
+        {water && o.localities?.some((l) => l.impactBasis === 'INFERRED_TOPOLOGY') && <p className="small faint" style={{ margin: '6px 0 0' }}>Some areas are estimated from the known supply network. {Utility} has not named them.</p>}
+        {!isPlanned && ['ACTIVE', 'PARTIALLY_RESTORED', 'RESTORED', 'CLOSED', 'STALE'].includes(o.status) && <Progression status={o.status} service={o.service} waterState={o.waterState} />}
         <h1>{nice(o.title)}</h1>
-        {o.sdc && <div className="muted small">Reported by the {prettySdc(o.sdc)} service centre</div>}
+        {o.sdc && <div className="muted small">Reported by the {prettySdc(o.sdc)} service centre <InfoTip label="a service centre">A regional depot whose repair teams handle faults in its part of the city. It is not a piece of equipment.</InfoTip></div>}
 
         <div className="callout" style={{ '--tint': `var(--${m.tone === 'idle' ? 'idle' : m.tone === 'live' ? 'live' : m.tone === 'plan' ? 'plan' : m.tone}-tint)` }}>
           <div className="lab"><Icon name={o.service === 'WATER' ? 'drop' : 'bolt'} /> {ended ? 'How it ended' : 'What is happening now'}</div>
@@ -136,7 +149,7 @@ export default function OutageDetail() {
             </div>
           </div>
           <ol className="tl">
-            {o.timeline.map((t, i) => <TimelineItem key={t.url} t={t} last={i === o.timeline.length - 1} utility={Utility} service={o.service} />)}
+            {o.timeline.map((t, i) => <TimelineItem key={t.url} t={t} last={i === o.timeline.length - 1} utility={Utility} service={o.service} operator={operator} />)}
           </ol>
         </section>
 

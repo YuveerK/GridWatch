@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import PostActivity from '../components/PostActivity.jsx';
-import SuburbSupply from '../components/SuburbSupply.jsx';
 import { EmptyState, ErrorState, SectionHead, ServiceIdentity, Skeleton } from '../components/ui.jsx';
 import { nice, plural, prettySdc, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
@@ -180,8 +179,6 @@ export default function Insights() {
         <h1>{water ? 'Water supply insights' : 'Electricity insights'}{name ? ` · ${name}` : ''}</h1>
         <p>{water ? `What is affecting water supply, which assets, and how long restoration takes. Built from what ${utility} states in its posts.` : `What is causing the outages, where, and how long they take to fix. Built from the causes ${utility} states in its posts.`}</p>
       </header>
-
-      <SuburbSupply />
 
       <div className="toolbar">
         <div className="seg" role="group" aria-label="Time window">

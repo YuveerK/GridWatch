@@ -50,7 +50,10 @@ export default function SearchBox({ autoFocus, placeholder = 'Search your suburb
     const out = [];
     res.suburbs.forEach((s) => out.push({ kind: 'suburb', id: s.id, lat: s.lat, lon: s.lon, title: nice(s.name), sub: s.municipality ? `Suburb · ${s.municipality}` : s.region ? `Suburb · Region ${s.region}` : 'Suburb', icon: 'pin' }));
     if (!suburbsOnly) {
-      res.outages.forEach((o) => out.push({ kind: 'outage', id: o.id, title: nice(o.title), sub: `${statusMeta(o.status).label}${o.sdc ? ` · ${prettySdc(o.sdc)}` : ''}`, icon: statusMeta(o.status).icon }));
+      res.outages.forEach((o) => {
+        const m = statusMeta(o.status, o.service, o.waterState);
+        out.push({ kind: 'outage', id: o.id, title: nice(o.title), sub: `${m.label}${o.sdc ? ` · ${prettySdc(o.sdc)}` : ''}`, icon: m.icon });
+      });
       res.equipment.forEach((n) => out.push({ kind: 'equipment', id: n.id, title: n.name, sub: `Equipment · ${typeLabel(n.type)}`, icon: 'plug' }));
     }
     return out;

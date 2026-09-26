@@ -52,7 +52,7 @@ const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
  * Who the site is quoting: the utility of one municipality, or of the scope picked in the switcher.
  *   `which` (optional) pins it to a thing's own municipality - an outage, a suburb or a piece of equipment - by code, id or
  *   name, so a Tshwane outage says "the City of Tshwane" even while "All of Gauteng" is selected.
- * { utility: "City Power" | "the City of Tshwane" | "the utility", Utility (capitalised), accounts: [X handles],
+ * { utility: "City Power" | "the City of Tshwane" | "the utility", Utility (capitalised), accounts: [X handles of that service],
  *   contacts: [{ name, utility, contact }] (one per municipality in scope), single (true when one municipality is in scope) }
  */
 export function useUtility(which = null, forService = null) {
@@ -65,10 +65,19 @@ export function useUtility(which = null, forService = null) {
   return {
     utility,
     Utility: cap(utility),
-    accounts: inScope.flatMap((m) => m.accounts ?? []),
+    accounts: inScope.flatMap((m) => (water ? m.waterAccounts : m.accounts) ?? []),
     contacts: inScope.filter((m) => (water ? m.waterContact : m.contact)).map((m) => ({ name: m.name, utility: water ? m.waterUtility ?? 'Johannesburg Water' : m.utility, contact: water ? m.waterContact : m.contact })),
     single: Boolean(scoped),
   };
+}
+
+/** The services GridWatch covers in one municipality (by code), Power first: ['ELECTRICITY', 'WATER'] for Johannesburg,
+ * ['ELECTRICITY'] for Tshwane. An unknown municipality gets Power only, the one service every covered city has. */
+export function useServicesFor(code) {
+  const ctx = useContext(MunicipalityContext);
+  const m = code ? ctx?.options.find((x) => x.code === code) : null;
+  const have = m?.services?.length ? m.services : ['ELECTRICITY'];
+  return ['ELECTRICITY', 'WATER'].filter((s) => have.includes(s));
 }
 
 /** Append a municipality filter to a query string that may or may not already have a `?`. */

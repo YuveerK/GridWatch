@@ -9,6 +9,7 @@ import SearchBox from './components/SearchBox.jsx';
 import { EmptyState } from './components/ui.jsx';
 import { useTheme } from './lib/hooks.js';
 import { useMunicipality, useUtility } from './lib/municipality.jsx';
+import { useRefresh } from './lib/refresh.js';
 import About from './views/About.jsx';
 import Activity from './views/Activity.jsx';
 import Insights from './views/Insights.jsx';
@@ -29,6 +30,26 @@ const NAV = [
   ['/insights', 'Insights', 'chart'],
   ['/network', 'Network', 'network'],
 ];
+
+/** A main-menu link. Planned work is a tab of the incident list, so "Outages" stays highlighted on /planned too. */
+function NavItem({ to, label, icon, end, water }) {
+  const { pathname } = useLocation();
+  const alsoActive = to === '/outages' && pathname === '/planned';
+  return (
+    <NavLink to={to} end={end} className={({ isActive }) => (isActive || alsoActive ? 'active' : undefined)}>
+      <Icon name={icon} />{to === '/outages' && water ? 'Incidents' : label}
+    </NavLink>
+  );
+}
+
+/** Visitors never see operator controls. An operator opens any page with ?operator in the address to sign in; once
+ * signed in, the refresh button in the header is their control. */
+function OperatorEntry() {
+  const { operator, signInAvailable } = useRefresh();
+  const { search } = useLocation();
+  if (operator || !signInAvailable || !new URLSearchParams(search).has('operator')) return null;
+  return <OperatorSignIn />;
+}
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -90,7 +111,7 @@ export default function Root() {
             <span className="wordmark">GridWatch<i aria-hidden="true" /></span>
           </Link>
           <nav className="nav" aria-label="Main">
-            {NAV.map(([to, label, icon, end]) => <NavLink key={to} to={to} end={end}><Icon name={icon} />{to === '/outages' && service === 'WATER' ? 'Interruptions' : label}</NavLink>)}
+            {NAV.map(([to, label, icon, end]) => <NavItem key={to} to={to} label={label} icon={icon} end={end} water={service === 'WATER'} />)}
           </nav>
           <div className="header-actions">
             <ServiceSwitcher />
@@ -133,15 +154,13 @@ export default function Root() {
             <Link to="/activity" className="link">What changed</Link>
             <Link to="/about" className="link">How it works</Link>
             {accounts.map((a) => <a key={a} className="link" href={`https://x.com/${a}`} target="_blank" rel="noreferrer">@{a} <Icon name="external" /></a>)}
-            <OperatorSignIn />
+            <OperatorEntry />
           </div>
         </div>
       </footer>
 
       <nav className="mobile-nav" aria-label="Main">
-        {NAV.map(([to, label, icon, end]) => (
-          <NavLink key={to} to={to} end={end}><Icon name={icon} />{to === '/outages' && service === 'WATER' ? 'Interruptions' : label}</NavLink>
-        ))}
+        {NAV.map(([to, label, icon, end]) => <NavItem key={to} to={to} label={label} icon={icon} end={end} water={service === 'WATER'} />)}
       </nav>
 
       {searching && <SearchOverlay onClose={() => setSearching(false)} />}

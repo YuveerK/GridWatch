@@ -1,22 +1,16 @@
 import { useState } from 'react';
-import { Link, Navigate, useSearchParams } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { OutageRow } from '../components/OutageCard.jsx';
+import StatusTabs, { TABS } from '../components/StatusTabs.jsx';
 import { CardSkeleton, EmptyState, ErrorState, ServiceIdentity } from '../components/ui.jsx';
 import { prettySdc, plural, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
 import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
 
-const TABS = [
-  { id: 'live', label: 'Live', status: 'ACTIVE,PARTIALLY_RESTORED', count: (c) => (c.ACTIVE ?? 0) + (c.PARTIALLY_RESTORED ?? 0) },
-  { id: 'planned', label: 'Planned', status: 'PLANNED', count: (c) => c.PLANNED ?? 0 },
-  { id: 'restored', label: 'Restored', status: 'RESTORED,CLOSED', count: (c) => (c.RESTORED ?? 0) + (c.CLOSED ?? 0) },
-  { id: 'stale', label: 'No update', status: 'STALE', count: (c) => c.STALE ?? 0 },
-  { id: 'all', label: 'All', status: 'ACTIVE,PARTIALLY_RESTORED,PLANNED,RESTORED,STALE,CLOSED,CANCELLED', count: (c) => Object.values(c).reduce((a, b) => a + b, 0) },
-];
 const PAGE = 24;
 
 export default function Outages() {
-  useDocumentTitle('Outages');
+  useDocumentTitle('Incidents');
   const [params, setParams] = useSearchParams();
   const tabId = params.get('status') ?? 'live';
   const sdc = params.get('sdc') ?? '';
@@ -35,6 +29,7 @@ export default function Outages() {
 
   const { param: muniParam, name, service } = useMunicipality();
   const water = service === 'WATER';
+  const noun = water ? 'water incident' : 'outage';
   const stats = useApi(withMunicipality('/v1/stats', muniParam));
   const query = withMunicipality(`/v1/outages?status=${tab.status}&sort=${sort}&limit=${PAGE * pages}${!water && sdc ? `&sdc=${encodeURIComponent(sdc)}` : ''}${region ? `&region=${encodeURIComponent(region)}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`, muniParam);
   const { data, error, loading, refreshing } = useApi(query);
@@ -46,21 +41,12 @@ export default function Outages() {
     <div className="container page">
       <header className="page-head">
         <ServiceIdentity service={service} />
-        <h1>{water ? 'Water interruptions' : 'Electricity outages'}</h1>
+        <h1>{water ? 'Water incidents' : 'Electricity outages'}</h1>
         <p>Every {water ? 'water supply incident' : 'electricity outage'} reported{name ? ` for ${name}` : ''}, grouped so each incident appears once with its full history.</p>
       </header>
 
       <div className="toolbar">
-        <div className="seg" role="group" aria-label="Filter by status">
-          {TABS.map((t) => (t.id === 'planned' ? (
-            <Link key={t.id} to="/planned" className="seg-link">{t.label}{stats.data && <span className="n num">{t.count(counts)}</span>}</Link>
-          ) : (
-            <button key={t.id} aria-pressed={t.id === tab.id} onClick={() => set({ status: t.id === 'live' ? '' : t.id })}>
-              {t.label}
-              {stats.data && <span className="n num">{t.count(counts)}</span>}
-            </button>
-          )))}
-        </div>
+        <StatusTabs active={tab.id} counts={stats.data ? counts : null} keep={params.toString()} />
         <div className="filters">
           <input className="field" type="search" placeholder="Filter by suburb or equipment" aria-label="Filter by suburb or equipment" value={q} onChange={(e) => set({ q: e.target.value })} />
           {!water && <select className="field" aria-label="Service centre" value={sdc} onChange={(e) => set({ sdc: e.target.value })}>
@@ -80,12 +66,12 @@ export default function Outages() {
       {data && (
         <div className={refreshing ? 'fading' : undefined}>
           <p className="small muted" style={{ marginBottom: 12 }} aria-live="polite">
-            {data.total === 0 ? 'No outages match' : `Showing ${data.data.length} of ${plural(data.total, 'outage')}`}
+            {data.total === 0 ? `No ${noun}s match` : `Showing ${data.data.length} of ${plural(data.total, noun)}`}
             {!water && sdc ? ` in ${prettySdc(sdc)}` : ''}{region ? ` in Region ${region}` : ''}{q ? ` matching “${q}”` : ''}
           </p>
           {data.data.length === 0 ? (
             <EmptyState icon="search" title="Nothing here" action={<button className="btn" onClick={() => set({ status: '', sdc: '', region: '', q: '' })}>Clear filters</button>}>
-              {tab.id === 'live' ? 'There are no live outages that match. That is good news, or try another filter.' : 'Try a different status or clear the filters.'}
+              {tab.id === 'live' ? `There are no live ${noun}s that match. That is good news, or try another filter.` : 'Try a different status or clear the filters.'}
             </EmptyState>
           ) : (
             <ul className="ledger">{data.data.map((o) => <OutageRow key={o.id} outage={o} />)}</ul>

@@ -33,7 +33,7 @@ It is an operator tool. Settings in `api/.env`:
 
 Anything that spends money or changes data (`POST /v1/refresh`, every `/admin/*` route) fails closed: it is refused unless the caller is an operator.
 
-- Set `OPERATOR_TOKEN` (16+ random characters) in `api/.env`. The refresh button then shows **Operator sign-in**; paste the token once and the server keeps you signed in with an HttpOnly cookie for `OPERATOR_SESSION_HOURS`. The token is never in the web page. Scripts send `Authorization: Bearer <token>`.
+- Set `OPERATOR_TOKEN` (16+ random characters) in `api/.env`. Open any page with `?operator` in the address (for example `/?operator`) to show **Operator sign-in** in the footer (visitors never see it); paste the token once and the server keeps you signed in with an HttpOnly cookie for `OPERATOR_SESSION_HOURS`. The token is never in the web page. Scripts send `Authorization: Bearer <token>`.
 - On your own machine you can instead set `ALLOW_LOCAL_OPERATOR=on`: requests from this computer are trusted. It is ignored in production and for proxied requests.
 - If the client is served from a different origin than the API, list that origin in `CORS_ALLOWED_ORIGINS` (the Vite dev proxy does not need it).
 

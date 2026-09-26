@@ -77,7 +77,7 @@ export default function PostActivity({ days }) {
   if (loading && !data) return <Skeleton h={320} />;
   if (!data) return null;
 
-  const cats = data.categories.map((c) => water && c.id === 'OUTAGE' ? { ...c, label: 'New interruptions' } : water && c.id === 'SUMMARY' ? { ...c, label: 'Supply summaries' } : c);
+  const cats = data.categories.map((c) => water && c.id === 'OUTAGE' ? { ...c, label: 'New incidents' } : water && c.id === 'SUMMARY' ? { ...c, label: 'Supply summaries' } : c);
   const catLabel = Object.fromEntries(cats.map((c) => [c.id, c.label]));
   const totalsByCat = Object.fromEntries(cats.map((c) => [c.id, data.daily.reduce((n, d) => n + d.byCategory[c.id], 0)]));
   const shown = (d) => (type ? d.byCategory[type] : d.total);

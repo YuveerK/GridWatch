@@ -58,7 +58,7 @@ await step('suburb -> save as my area', () => evaluate(`(() => { document.queryS
 await step('go to network', () => click('/network'));
 await step('open a service centre', () => evaluate(`(() => { document.querySelector('a.sdc-card')?.click(); })()`));
 await step('open equipment from it', () => evaluate(`(() => { document.querySelector('a[href^="/network/"].chip')?.click(); })()`));
-await step('outages: filter tab "Planned"', async () => { await click('/outages'); await sleep(1200); await evaluate(`(() => { [...document.querySelectorAll('.seg button')].find((b) => b.textContent.startsWith('Planned'))?.click(); })()`); });
+await step('outages: filter tab "Planned"', async () => { await click('/outages'); await sleep(1200); await evaluate(`(() => { [...document.querySelectorAll('.seg button, .seg a')].find((b) => b.textContent.startsWith('Planned'))?.click(); })()`); });
 await step('planned page row', async () => { await click('/planned'); await sleep(1200); await evaluate(`(() => { document.querySelector('.rows a.t')?.click(); })()`); });
 await step('overview after saving an area', () => click('/'));
 await step('search overlay opens ("/" key)', () => evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }))`));
