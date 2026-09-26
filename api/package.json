@@ -11,6 +11,7 @@
     "db:migrate": "prisma migrate dev",
     "seed:geography": "node scripts/seed-geography.js",
     "import:coj-gis": "node scripts/import-coj-geography.js",
+    "import:coj-service-areas": "node scripts/import-coj-service-areas.js",
     "import:tshwane-gis": "node scripts/import-tshwane-geography.js",
     "seed:source-account": "node scripts/seed-source-account.js",
     "ingest": "node scripts/ingest.js",

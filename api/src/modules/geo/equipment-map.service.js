@@ -6,7 +6,7 @@ import { prisma } from '../../db/prisma.js';
 
 const HUB_TYPES = ['SDC', 'SUBSTATION', 'SWITCHING_STATION', 'DISTRIBUTOR'];
 const WATER_MAP_TYPES = ['RESERVOIR', 'WATER_TOWER', 'PUMP_STATION', 'PRV', 'DIRECT_FEED', 'WATER_SYSTEM', 'TREATMENT_WORKS', 'BOOSTER_STATION'];
-const SUPPLY_TYPES = new Set(['SUBSTATION', 'SWITCHING_STATION', 'DISTRIBUTOR', 'MINI_SUBSTATION', 'FEEDER', 'WATER_PIPELINE', 'BULK_CONNECTION', ...WATER_MAP_TYPES]);
+const SUPPLY_TYPES = new Set(['SUBSTATION', 'SWITCHING_STATION', 'DISTRIBUTOR', 'MINI_SUBSTATION', 'FEEDER', 'WATER_PIPELINE', 'BULK_CONNECTION', 'WATER_OTHER', ...WATER_MAP_TYPES]);
 const LIVE = ['ACTIVE', 'PARTIALLY_RESTORED'];
 
 /** Evidence-weighted centre of some suburbs: [{ lat, lon, w }] -> [lon, lat] or null. */
@@ -66,7 +66,7 @@ export async function equipmentHubs(municipality) {
   const [liveRows, parents, centres, sdcOutages] = await Promise.all([
     prisma.outageNode.findMany({ where: { nodeId: { in: [...byNode.keys()] }, outage: { status: { in: LIVE } } }, select: { nodeId: true } }),
     prisma.infraEdge.findMany({ orderBy: { evidenceCount: 'desc' }, select: { childId: true, parentId: true } }),
-    prisma.infraNode.findMany({ where: { type: 'SDC' }, select: { id: true, name: true, type: true } }),
+    prisma.infraNode.findMany({ where: { type: 'SDC' }, select: { id: true, name: true, type: true, boundary: true, lat: true, lon: true } }),
     prisma.outage.findMany({ where: { status: { in: LIVE }, sdcName: { not: null } }, select: { sdcName: true }, distinct: ['sdcName'] }),
   ]);
   const live = new Set(liveRows.map((r) => r.nodeId));
@@ -84,7 +84,8 @@ export async function equipmentHubs(municipality) {
     .filter(({ pts }) => !code || pts.some((p) => p.municipality === code))
     .map(({ node, pts }) => {
       const c = weightedCentre(pts);
-      return c && { id: node.id, name: node.name, type: node.type, lon: c[0], lat: c[1], served: pts.length, live: live.has(node.id), parentId: parentOf.get(node.id) ?? null };
+      const own = node.lon != null && node.lat != null ? [node.lon, node.lat] : c;
+      return own && { id: node.id, name: node.name, type: node.type, lon: own[0], lat: own[1], boundary: node.boundary ?? null, served: pts.length, live: live.has(node.id), parentId: parentOf.get(node.id) ?? null };
     })
     .filter(Boolean);
 }
@@ -108,21 +109,21 @@ export async function waterMapHubs(municipality) {
   const nodes = await prisma.infraNode.findMany({
     where: {
       serviceType: 'WATER',
-      type: { in: WATER_MAP_TYPES },
+      type: { in: [...WATER_MAP_TYPES, 'WATER_OTHER'] },
       ...(code ? { OR: [{ Municipality: { code } }, { municipalityId: null, localities: { some: { locality: { Region: { Municipality: { code } } } } } }] } : {}),
     },
     select: {
-      id: true, name: true, type: true, lat: true, lon: true, boundary: true,
+      id: true, name: true, type: true, lat: true, lon: true, boundary: true, metadata: true,
       localities: { select: { evidenceCount: true, locality: { select: { lat: true, lon: true } } } },
     },
     orderBy: { name: 'asc' },
-    take: 200,
+    take: 500,
   });
   const liveRows = nodes.length
     ? await prisma.outageNode.findMany({ where: { nodeId: { in: nodes.map((node) => node.id) }, outage: { status: { in: LIVE }, serviceType: 'WATER' } }, select: { nodeId: true } })
     : [];
   const live = new Set(liveRows.map((row) => row.nodeId));
-  return nodes.map((node) => placeWaterHub(node, live.has(node.id))).filter(Boolean);
+  return nodes.filter((node) => node.type !== 'WATER_OTHER' || node.metadata?.role === 'depot').map((node) => placeWaterHub(node, live.has(node.id))).filter(Boolean);
 }
 
 /** Suburb plus the power and water assets posts have tied to it, each placed on the map. */
