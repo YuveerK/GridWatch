@@ -1,3 +1,4 @@
 .env
 api/data/cache/
 api/data/backups/
+api/data/check-checkpoint.json

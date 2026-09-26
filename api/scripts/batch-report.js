@@ -2,30 +2,54 @@
 //   npm run batch            latest batch that brought posts
 //   npm run batch -- --all   also list posts that raised no concern
 //   npm run batch -- --runs=2   cover the last 2 fetches that brought posts
+//   npm run batch -- --since-checkpoint   every post that arrived since the last such check, then move the mark to now
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/db/prisma.js';
 import { readerFor } from '../src/modules/ai/reader-registry.js';
-import { waterFaultItems } from '../src/modules/ai/readers/water.reader.js';
+import { isThrottlingSchedule, statusBoardFaults, waterFaultItems } from '../src/modules/ai/readers/water.reader.js';
 import { faultItems } from '../src/modules/processing/processor.service.js';
 import { awaitingReview, checkPostDispositions, effectReadingMismatch, ingestionProblems, latestNonemptyRuns, stuckProcessing } from '../src/modules/processing/quality.js';
 
 const all = process.argv.includes('--all');
+const sinceCheckpoint = process.argv.includes('--since-checkpoint');
 const RUNS = Number((process.argv.find((a) => a.startsWith('--runs=')) ?? '--runs=1').split('=')[1]);
 const short = (t, n = 150) => (t ?? '').replace(/#\w+/g, '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, n);
+const checkpointFile = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'check-checkpoint.json');
+const SAST = 2 * 3_600_000;
+const startOfTodaySast = (now) => {
+  const shifted = new Date(now.getTime() + SAST);
+  return new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - SAST);
+};
+const readCheckpoint = () => {
+  try {
+    const at = new Date(JSON.parse(readFileSync(checkpointFile, 'utf8')).checkedAt);
+    return Number.isNaN(at.getTime()) ? null : at;
+  } catch {
+    return null;
+  }
+};
 const PRICE = { 'gemini-3.5-flash-lite': [0.3, 2.5], 'gemini-3.1-flash-lite': [0.25, 1.5], 'gemini-3.6-flash': [0.75, 3.75] };
 
-const runs = await prisma.ingestionRun.findMany({ orderBy: { startedAt: 'desc' }, take: 12, include: { SourceAccount: { select: { displayName: true, serviceType: true } } } });
-const withPosts = await latestNonemptyRuns(prisma, RUNS); // found directly: however many empty polls came after them
-const active = await prisma.sourceAccount.findMany({ where: { active: true }, select: { id: true, displayName: true, serviceType: true } });
+const now = new Date();
+const savedCheckpoint = sinceCheckpoint ? readCheckpoint() : null;
+const windowStart = sinceCheckpoint ? (savedCheckpoint ?? startOfTodaySast(now)) : null;
+if (sinceCheckpoint) console.log(`CHECKPOINT  ${savedCheckpoint ? 'since the last check' : 'no earlier check, so since midnight SAST'}  ${windowStart.toISOString()} -> ${now.toISOString()}`);
+
+const runs = sinceCheckpoint ? [] : await prisma.ingestionRun.findMany({ orderBy: { startedAt: 'desc' }, take: 12, include: { SourceAccount: { select: { displayName: true, serviceType: true } } } });
+const withPosts = sinceCheckpoint ? [] : await latestNonemptyRuns(prisma, RUNS); // found directly: however many empty polls came after them
+const active = sinceCheckpoint ? [] : await prisma.sourceAccount.findMany({ where: { active: true }, select: { id: true, displayName: true, serviceType: true } });
 for (const account of active) {
   const latest = await prisma.ingestionRun.findFirst({ where: { sourceAccountId: account.id, postsInserted: { gt: 0 } }, orderBy: { startedAt: 'desc' } });
   if (latest && !withPosts.some((run) => run.id === latest.id)) withPosts.push(latest);
 }
-const batch = withPosts.at(-1);
-console.log('RECENT FETCH RUNS');
+const batch = sinceCheckpoint ? { startedAt: windowStart } : withPosts.at(-1);
+if (!sinceCheckpoint) console.log('RECENT FETCH RUNS');
 for (const r of runs) console.log(`  ${r.startedAt.toISOString().slice(5, 19)}  ${(r.SourceAccount?.displayName ?? '').padEnd(14)} ${r.status.padEnd(10)} fetched ${String(r.postsFetched).padStart(3)}  inserted ${String(r.postsInserted).padStart(3)}${r.errorMessage ? `  ERROR ${r.errorMessage.slice(0, 70)}` : ''}${withPosts.some((w) => w.id === r.id) ? '   <-- audited' : ''}`);
 for (const w of withPosts) if (!runs.some((r) => r.id === w.id)) console.log(`  ${w.startedAt.toISOString().slice(5, 19)}  ${w.status.padEnd(10)} fetched ${String(w.postsFetched).padStart(3)}  inserted ${String(w.postsInserted).padStart(3)}   <-- audited (older than the list above)`);
-if (!batch) {
+if (!sinceCheckpoint && !withPosts.length) {
   console.log('\nNo fetch has ever brought new posts.');
   await prisma.$disconnect();
   process.exit(1); // nothing to audit is not "all fine"
@@ -33,9 +57,9 @@ if (!batch) {
 
 // The exact posts these runs inserted (recorded per run). Runs from before that was recorded fall back to the time window.
 const runIds = withPosts.map((r) => r.id);
-const recorded = await prisma.ingestionRunPost.count({ where: { ingestionRunId: { in: runIds } } });
+const recorded = sinceCheckpoint || !runIds.length ? 0 : await prisma.ingestionRunPost.count({ where: { ingestionRunId: { in: runIds } } });
 const posts = await prisma.sourcePost.findMany({
-  where: recorded ? { IngestionRunPost: { some: { ingestionRunId: { in: runIds } } } } : { createdAt: { gte: batch.startedAt, ...(batch.completedAt ? { lte: batch.completedAt } : {}) } },
+  where: sinceCheckpoint ? { createdAt: { gt: windowStart, lte: now } } : recorded ? { IngestionRunPost: { some: { ingestionRunId: { in: runIds } } } } : { createdAt: { gte: batch.startedAt, ...(batch.completedAt ? { lte: batch.completedAt } : {}) } },
   orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }],
   include: {
     extractions: { orderBy: { createdAt: 'desc' } },
@@ -66,9 +90,12 @@ for (const x of posts) {
     model.add(e.model);
   }
   const text = x.noteTweetText || x.text;
-  const linkable = r && ['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE'].includes(r.relevance);
-  const faults = r?.faults ?? [];
-  const multi = faults.length >= 2 || (faults.length === 1 && r?.relevance === 'SDC_SUMMARY');
+  // a water status board is split in code (statusBoardFaults): its problem assets are what must be linked, whatever the reading said;
+  // the daily throttling schedule is always a notice (isThrottlingSchedule), so it has nothing to link
+  const board = x.serviceType === 'WATER' && r ? (isThrottlingSchedule(r) ? [] : statusBoardFaults(r)) : null;
+  const linkable = board ? board.length > 0 : r && ['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE'].includes(r.relevance);
+  const faults = board ?? r?.faults ?? [];
+  const multi = faults.length >= 2 || (faults.length === 1 && (board || r?.relevance === 'SDC_SUMMARY'));
 
   if (!e || e.status !== 'SUCCEEDED') flag(x, `extraction ${e?.status ?? 'missing'}${e?.error ? `: ${e.error.slice(0, 60)}` : ''}`);
   if (x.processingStatus === 'UNPROCESSED' || x.processingStatus === 'PROCESSING' || x.processingStatus === 'PROCESSING_ERROR') flag(x, `status ${x.processingStatus}`);
@@ -80,9 +107,12 @@ for (const x of posts) {
     const items = (x.serviceType === 'WATER' ? waterFaultItems : faultItems)({ ...e, result: r });
     const verdict = checkPostDispositions({ expectedIndices: items.map((i) => i.faultIndex), decisions: x.linkDecisions, outagePosts: x.outagePosts });
     for (const p of verdict.problems) flag(x, `disposition: ${p}`);
-    for (const d of verdict.excluded) if (linkable) flag(x, `fault ${d.faultIndex} produced no outage (${d.reason})`);
+    // another service's content is set aside on purpose (the quality check agrees: quality.js checkPostDispositions)
+    for (const d of verdict.excluded) if (linkable && !/unsupported service/i.test(d.reason ?? '')) flag(x, `fault ${d.faultIndex} produced no outage (${d.reason})`);
     for (const op of x.outagePosts) if (effectReadingMismatch(op.effect, r)) flag(x, `timeline entry for fault ${op.faultIndex} was built from a different reading than the current one (re-link it)`);
-  }  if (linkable && x.outagePosts.length === 0 && !multi) flag(x, 'outage-type post but linked to no outage');
+  }
+  const offService = x.linkDecisions.some((d) => /unsupported service/i.test(d.reason ?? ''));
+  if (linkable && x.outagePosts.length === 0 && !multi && !offService) flag(x, 'outage-type post but linked to no outage');
   if (linkable || multi) {
     if (!x.summaries.length) flag(x, 'no summary written');
     for (const s of x.summaries) if (s.summary.length < 25 || s.summary.length > 260) flag(x, `odd summary length (${s.summary.length})`);
@@ -129,7 +159,7 @@ const [inP, outP] = PRICE[[...model][0]] ?? [0.3, 2.5];
 const gemini = (inTok * inP + outTok * outP) / 1e6;
 const xCost = posts.length * 0.005;
 
-console.log(`\nBATCH: ${posts.length} posts from ${posts[0]?.publishedAt.toISOString().slice(5, 16)} to ${posts.at(-1)?.publishedAt.toISOString().slice(5, 16)} (UTC)`);
+console.log(posts.length ? `\nBATCH: ${posts.length} posts from ${posts[0].publishedAt.toISOString().slice(5, 16)} to ${posts.at(-1).publishedAt.toISOString().slice(5, 16)} (UTC)` : '\nBATCH: 0 posts');
 const by = (k) => posts.reduce((a, x) => ((a[k(x)] = (a[k(x)] ?? 0) + 1), a), {});
 console.log('  read as   :', JSON.stringify(by((x) => x.extractions[0]?.result?.relevance ?? 'none')));
 console.log('  outcome   :', JSON.stringify(by((x) => x.processingStatus)));
@@ -167,5 +197,19 @@ const stuck = stuckProcessing(await prisma.sourcePost.findMany({ where: { proces
 const degraded = [...ingest, ...(stuck.length ? [`${stuck.length} post(s) stuck in PROCESSING`] : [])];
 for (const d of degraded) console.log(`DEGRADED: ${d}`);
 console.log(`\nRESULT: ${failed > 0 ? `${failed} CHECK(S) FAILED` : degraded.length ? 'DEGRADED' : 'PIPELINE OK'} | ${flagged.size} post(s) flagged for a closer look`);
+if (sinceCheckpoint) {
+  const activeAccounts = await prisma.sourceAccount.findMany({ where: { active: true }, select: { displayName: true, serviceType: true } });
+  // every active account by service, so the report shows each one was covered - not only the ones that stayed quiet
+  console.log('BY SOURCE');
+  for (const a of [...activeAccounts].sort((l, r) => l.serviceType.localeCompare(r.serviceType) || l.displayName.localeCompare(r.displayName))) {
+    const own = posts.filter((p) => p.sourceAccount === a.displayName);
+    const ownFlagged = own.filter((p) => flagged.has(p.externalId)).length;
+    console.log(`  ${a.serviceType.padEnd(11)} ${a.displayName.padEnd(14)} ${own.length ? `${own.length} post(s), ${ownFlagged} flagged` : 'no new posts'}`);
+  }
+  for (const p of posts) if (!activeAccounts.some((a) => a.displayName === p.sourceAccount)) console.log(`  ${p.serviceType.padEnd(11)} ${p.sourceAccount.padEnd(14)} post ${p.externalId} from an account that is not active`);
+  mkdirSync(path.dirname(checkpointFile), { recursive: true });
+  writeFileSync(checkpointFile, `${JSON.stringify({ checkedAt: now.toISOString() }, null, 2)}\n`);
+  console.log(`Checkpoint moved to ${now.toISOString()}`);
+}
 await prisma.$disconnect();
 process.exit(failed ? 1 : degraded.length ? 2 : 0); // 1 = checks failed, 2 = degraded (incomplete, stuck or stale), 0 = fine

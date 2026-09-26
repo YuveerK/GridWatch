@@ -77,14 +77,13 @@ check the latest outages
 
 the request means:
 
-> Check the latest completed ingestion/processing activity for **all active source accounts and both services**, not only City Power.
+> Check every post that has arrived since the last post check, for **all active source accounts and both services**, not only City Power and not only the single newest fetch.
 
-Start with the built-in checks. They encode more than a manual read of a few posts would:
+Start with the checkpoint check. It encodes more than a manual read of a few posts would:
 
 ```bash
-npm run batch                  # latest fetch: every post, reading, link and automatic invariant checks
-npm run batch -- --all         # also list posts that raised no concern
-npm run batch -- --runs=3      # last 3 fetches that brought posts
+npm run batch -- --since-checkpoint   # posts inserted since the last check, all accounts; then move the mark to now
+npm run batch -- --since-checkpoint --all   # also list posts that raised no concern
 
 npm run quality                # did the last cycle COMPLETE? posts/faults/outages/checks
 npm run quality -- --list      # last 20 cycles, one line each
@@ -92,6 +91,14 @@ npm run quality -- --list      # last 20 cycles, one line each
 npm run review                 # suspicious changes, most urgent first; never edits an outage
 npm run audit                  # end-to-end data health
 npm run eval:all               # reading %, coverage %, pairwise F1, corrections, final-state
+```
+
+The plain latest-fetch report is only for a question about one fetch:
+
+```bash
+npm run batch                  # latest fetch only
+npm run batch -- --all         # also list posts that raised no concern
+npm run batch -- --runs=3      # last 3 fetches that brought posts
 ```
 
 For Water-specific current/history diagnostics, also use:
@@ -115,9 +122,17 @@ WATER
   JHBWater
 ```
 
-If one source had no new posts, say so.
+When the user asks to check posts, run `npm run batch -- --since-checkpoint` from `api/`.
 
-A healthy answer should make it clear that **both services were checked**.
+The window is every post inserted after the saved mark, up to the moment the command starts. The command then writes the mark forward, so the next check does not repeat those posts. Do not re-read the whole day, and do not stop at only the newest fetch per account.
+
+The mark is the local file `api/data/check-checkpoint.json` (`checkedAt`, UTC). It is gitignored. It is not a database row and must not be moved into the database. It is a review cursor for the machine where the check is run. The live poller does not read it. Hosted fetching keeps its own progress in the database (`IngestionState`). On a server, the file starts missing: the first check there covers since midnight SAST, then saves a mark on that server's disk. If that disk is wiped, the next check starts from midnight SAST again. Losing the file does not affect outages or the map.
+
+If the file is missing or `checkedAt` is unreadable, the check starts at midnight SAST (UTC+2) and then saves a new mark.
+
+If one source had no new posts in the window, say so.
+
+A healthy answer should make it clear that **both services were checked**, and it should name the window (from the previous mark to now).
 
 If `npm run batch` or another built-in health script does not expose one of the active services correctly, treat that as an **engine/tooling gap** and improve the diagnostic itself rather than permanently falling back to ad-hoc queries.
 
@@ -127,7 +142,7 @@ If `npm run batch` or another built-in health script does not expose one of the 
 
 Anything flagged, or any check that does not say `ok`, is worth opening.
 
-`npm run batch` should be the first answer to "check the latest posts" because it already reads each post's:
+`npm run batch -- --since-checkpoint` should be the first answer to "check the latest posts" because it already reads each post in the window:
 
 - extraction
 - fault segmentation
@@ -1040,7 +1055,7 @@ Do not force Water through Electricity vocabulary such as SDC assumptions.
 The default workflow is:
 
 ```text
-1. Run built-in health checks across active services.
+1. Run `npm run batch -- --since-checkpoint` across active services.
 2. Identify the exact failing post/fault.
 3. Pull stored reading, link decision and effect.
 4. Search for other examples of the same failure shape.
