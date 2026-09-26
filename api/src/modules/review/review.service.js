@@ -27,7 +27,7 @@ export async function detectSuspicious({ prisma, postIds, now = new Date() }) {
       outagePosts: {
         select: {
           faultIndex: true, role: true, effect: true, postedAt: true,
-          outage: { select: { id: true, title: true, kind: true, status: true, startedAt: true, retroactive: true, localities: { select: { localityId: true } }, nodes: { select: { nodeId: true, node: { select: { id: true, name: true, type: true, normalizedKey: true, evidenceCount: true } } } }, posts: { select: { postId: true, faultIndex: true, effect: true } } } },
+          outage: { select: { id: true, title: true, kind: true, status: true, startedAt: true, retroactive: true, serviceType: true, localities: { select: { localityId: true } }, nodes: { select: { nodeId: true, node: { select: { id: true, name: true, type: true, normalizedKey: true, evidenceCount: true } } } }, posts: { select: { postId: true, faultIndex: true, effect: true } } } },
         },
       },
     },
@@ -54,8 +54,15 @@ export async function detectSuspicious({ prisma, postIds, now = new Date() }) {
     if (e?.result) {
       const items = readingFaultItems(x, e, faultItems);
       const verdict = checkPostDispositions({ expectedIndices: items.map((i) => i.faultIndex), decisions: x.linkDecisions, outagePosts: x.outagePosts.map((o) => ({ faultIndex: o.faultIndex, outageId: o.outage.id })) });
-      const linkable = ['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE'].includes(e.result.relevance);
-      if (linkable && !offService) for (const d of verdict.excluded) if (!/unsupported service|system status board/i.test(d.reason ?? '')) add(x.id, d.faultIndex, 'DISCARDED_FAULT', d.reason);
+      const LINKABLE = ['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE'];
+      const linkable = LINKABLE.includes(e.result.relevance);
+      // a fault the engine itself treats as a notice (a water status board with nothing wrong, the daily throttling schedule)
+      // was not discarded: it was never an incident
+      const asNotice = (faultIndex) => {
+        const rel = items.find((i) => i.faultIndex === faultIndex)?.extraction?.relevance;
+        return rel != null && !LINKABLE.includes(rel);
+      };
+      if (linkable && !offService) for (const d of verdict.excluded) if (!asNotice(d.faultIndex) && !/unsupported service|system status board/i.test(d.reason ?? '')) add(x.id, d.faultIndex, 'DISCARDED_FAULT', d.reason);
     }
 
     for (const op of x.outagePosts) {
@@ -66,6 +73,7 @@ export async function detectSuspicious({ prisma, postIds, now = new Date() }) {
         const others = await prisma.outage.findMany({
           where: {
             id: { not: o.id },
+            serviceType: o.serviceType, // a water burst is never "the same incident" as a power fault in the same suburb
             startedAt: { gte: new Date(o.startedAt.getTime() - 72 * HOUR), lte: o.startedAt },
             OR: [...(locIds.length ? [{ localities: { some: { localityId: { in: locIds } } } }] : []), ...(nodeIds.length ? [{ nodes: { some: { nodeId: { in: nodeIds } } } }] : [])],
           },
@@ -86,7 +94,7 @@ export async function detectSuspicious({ prisma, postIds, now = new Date() }) {
       if (op.effect?.status === 'RESTORED' && nodeIds.length && locIds.length >= 2) {
         const older = await prisma.outage.findMany({
           where: {
-            id: { not: o.id }, kind: o.kind, status: { in: ['ACTIVE', 'PARTIALLY_RESTORED', 'STALE'] }, nodes: { none: {} },
+            id: { not: o.id }, kind: o.kind, serviceType: o.serviceType, status: { in: ['ACTIVE', 'PARTIALLY_RESTORED', 'STALE'] }, nodes: { none: {} },
             startedAt: { lte: op.postedAt, gte: new Date(op.postedAt.getTime() - 72 * HOUR) },
             localities: { some: { localityId: { in: locIds } } },
           },

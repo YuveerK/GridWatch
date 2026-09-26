@@ -75,6 +75,8 @@ export function faultItems(extraction) {
 
 /** Everything the post ends up as, from its per-fault decisions: review work is never hidden behind a linked sibling. */
 function finalStatus(items, decisions, extraction) {
+  // a single item carries the post's effective relevance (a water status board with nothing wrong is a notice, whatever the reading said)
+  if (items.length === 1) extraction = items[0].extraction;
   const byIndex = new Map(decisions.map((d) => [d.faultIndex, d]));
   const review = items.filter((it) => byIndex.get(it.faultIndex)?.outcome === 'NEEDS_REVIEW');
   // A status update that names no asset or suburb is a notice. An outage report with no place stays flagged.
@@ -113,7 +115,11 @@ async function processLocked(postId, ctx, { force = false, repairOutageIds = [],
     const municipalityId = account.municipalityId ?? null;
     const serviceType = postRow.serviceType ?? account.serviceType ?? 'ELECTRICITY';
     if (serviceType === 'WATER') await ensureWaterSummaries(postId, extraction.result);
-    const other = unsupportedService({ serviceType, text: postRow.noteTweetText || postRow.text, result: extraction.result });
+    // a reply in a thread is judged with the thread's first post (Tshwane's "1/3 #WaterSupplyUpdate..." then "2/3 ...")
+    const head = postRow.conversationId && postRow.conversationId !== postRow.externalId
+      ? await prisma.sourcePost.findFirst({ where: { externalId: postRow.conversationId, sourceAccount: postRow.sourceAccount }, select: { text: true, noteTweetText: true } })
+      : null;
+    const other = unsupportedService({ serviceType, text: postRow.noteTweetText || postRow.text, result: extraction.result, threadText: head ? head.noteTweetText || head.text : null });
     if (other) {
       await recordDecision(ctx, { id: postId, faultIndex: 0 }, { outcome: 'NEW', reason: `unsupported service: ${other} content on an ${serviceType} account` });
       await setStatus(postId, 'IRRELEVANT');

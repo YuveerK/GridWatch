@@ -184,3 +184,89 @@ describe('a suburb guessed from a station named after it', () => {
     expect(guessed.score).toBeLessThan(0.7);
   });
 });
+
+describe('two distributors under one substation', () => {
+  const nodes = (id, type) => ({ id, type });
+  it('does not auto-link a different distributor that only shares the substation and the suburb (Cottesmore / Standard Bank)', () => {
+    const o = outage({
+      nodeIds: new Set(['khanyisa', 'standard-bank']),
+      localityIds: new Set(['bryanston']),
+      nodes: [nodes('khanyisa', 'SUBSTATION'), nodes('standard-bank', 'DISTRIBUTOR')],
+    });
+    const p = post({
+      nodeIds: new Set(['khanyisa', 'cottesmore']),
+      relatedNodeIds: new Set(['khanyisa']),
+      localityIds: new Set(['bryanston']),
+      nodes: [nodes('khanyisa', 'SUBSTATION'), nodes('cottesmore', 'DISTRIBUTOR')],
+      relevance: 'OUTAGE',
+      postedAt: hoursLater(1),
+    });
+    expect(scoreCandidate(p, o).score).toBeLessThan(0.35);
+  });
+  it('still links when both sides name the same distributor', () => {
+    const o = outage({
+      nodeIds: new Set(['khanyisa', 'cottesmore']),
+      localityIds: new Set(['bryanston']),
+      nodes: [nodes('khanyisa', 'SUBSTATION'), nodes('cottesmore', 'DISTRIBUTOR')],
+    });
+    const p = post({
+      nodeIds: new Set(['khanyisa', 'cottesmore']),
+      localityIds: new Set(['bryanston']),
+      nodes: [nodes('khanyisa', 'SUBSTATION'), nodes('cottesmore', 'DISTRIBUTOR')],
+      postedAt: hoursLater(1),
+    });
+    expect(scoreCandidate(p, o).score).toBeGreaterThanOrEqual(0.7);
+  });
+});
+
+describe('a restoration of a suburb-only outage', () => {
+  it('links even when the restoration was posted under a different service centre (Westfield / Elphin Lodge)', () => {
+    const o = outage({ nodeIds: new Set(), localityIds: new Set(['elphin', 'rand-aid']), sdcName: 'Alexandra' });
+    const p = post({
+      nodeIds: new Set(['westfield']),
+      localityIds: new Set(['elphin', 'rand-aid']),
+      sdcName: 'Midrand',
+      relevance: 'RESTORATION',
+      status: 'RESTORED',
+      postedAt: hoursLater(1.5),
+    });
+    const r = scoreCandidate(p, o);
+    expect(r.reasons).toContain('restoration of the same suburbs');
+    expect(r.score).toBeGreaterThanOrEqual(0.7);
+  });
+});
+
+describe('water: recent news about the same place', () => {
+  // Sundowner, 19-20 Sept: the update on the 500 mm burst named 7 suburbs, 6 of them the incident's; asset read only as a description
+  const incident = outage({ serviceType: 'WATER', nodeIds: new Set(), localityIds: new Set(['s1', 's2', 's3', 's4', 's5', 's6', 's7']) });
+  const update = (h) => post({ serviceType: 'WATER', nodeIds: new Set(), localityIds: new Set(['s1', 's2', 's3', 's4', 's5', 's6', 'x']), postedAt: hoursLater(h) });
+
+  it('an update the same day reaches the tie-break; the same suburbs weeks later do not score more for it', () => {
+    expect(scoreCandidate(update(16), incident).score).toBeGreaterThanOrEqual(0.35);
+    expect(scoreCandidate(update(16), incident).score).toBeGreaterThan(scoreCandidate(update(24 * 20), incident).score);
+    expect(scoreCandidate(update(24 * 20), incident).score).toBeLessThan(0.35);
+  });
+
+  it('recency adds nothing where nothing is shared', () => {
+    expect(scoreCandidate(post({ serviceType: 'WATER', nodeIds: new Set(), localityIds: new Set(['elsewhere']), postedAt: hoursLater(1) }), incident).score).toBe(0);
+  });
+});
+
+describe('water: a deliberate closure on a status board joins the announced planned job', () => {
+  // Sandton meters closed 23 Sept 20:00-04:00 SAST (18:00-02:00 UTC); the 17:45 SAST board: "Illovo Reservoir Overnight closure"
+  const job = outage({ serviceType: 'WATER', kind: 'PLANNED', status: 'PLANNED', nodeIds: new Set(['illovo', 'bryanston']), localityIds: new Set(), scheduledStart: new Date('2026-09-23T18:00:00Z'), scheduledEnd: new Date('2026-09-24T02:00:00Z'), lastUpdateAt: new Date('2026-09-23T08:00:00Z') });
+  const line = (over = {}) => post({ serviceType: 'WATER', kind: 'UNPLANNED', plannedClosure: true, nodeIds: new Set(['illovo']), localityIds: new Set(), postedAt: new Date('2026-09-23T15:47:00Z'), ...over });
+
+  it('same asset, same evening: a candidate (the tie-break decides)', () => {
+    const r = scoreCandidate(line(), job);
+    expect(r.score).toBeGreaterThanOrEqual(0.35);
+    expect(r.reasons).toContain('deliberate closure during the announced planned job');
+  });
+
+  it('planned and unplanned still never mix otherwise', () => {
+    expect(scoreCandidate(line({ plannedClosure: false }), job).score).toBe(0); // "No pumping." is a fault
+    expect(scoreCandidate(line({ nodeIds: new Set(['morningside']) }), job).score).toBe(0); // not an asset of the job
+    expect(scoreCandidate(line({ postedAt: new Date('2026-09-25T15:47:00Z') }), job).score).toBe(0); // two days later
+    expect(scoreCandidate(line(), { ...job, scheduledStart: null, scheduledEnd: null }).score).toBe(0); // no announced window
+  });
+});

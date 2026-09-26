@@ -2,6 +2,23 @@ const HOUR = 3_600_000;
 
 const squash = (s) => s.toLowerCase().replace(/\s+/g, '');
 const intersect = (a, b) => [...a].filter((x) => b.has(x));
+// A distributor, feeder or mini-sub is the piece that failed. The substation above it is context.
+const SPECIFIC = new Set(['DISTRIBUTOR', 'FEEDER', 'MINI_SUBSTATION']);
+const PARENT = new Set(['SUBSTATION', 'SWITCHING_STATION']);
+
+/** Two different distributors (or feeders, or mini-subs) under one substation are not the same fault. */
+function distinctChildren(post, outage) {
+  if (!Array.isArray(post.nodes) || !Array.isArray(outage.nodes)) return null;
+  const specific = (nodes) => nodes.filter((n) => SPECIFIC.has(n.type));
+  const a = specific(post.nodes);
+  const b = specific(outage.nodes);
+  if (!a.length || !b.length || a.some((n) => b.some((m) => m.id === n.id))) return null;
+  const drop = new Set([...post.nodes, ...outage.nodes].filter((n) => PARENT.has(n.type)).map((n) => n.id));
+  return {
+    postIds: new Set([...post.nodeIds].filter((id) => !drop.has(id))),
+    outageIds: new Set([...outage.nodeIds].filter((id) => !drop.has(id))),
+  };
+}
 
 /**
  * Score how likely a post belongs to an existing outage (0..1) with human-readable reasons.
@@ -33,16 +50,19 @@ export function scoreCandidate(post, outage) {
   // Planned and unplanned events are never the same outage.
   if (post.kind !== outage.kind) return { score: 0, reasons: ['planned/unplanned mismatch'] };
 
-  const sharedNodes = intersect(post.nodeIds, outage.nodeIds);
+  const separated = distinctChildren(post, outage);
+  const postNodeIds = separated?.postIds ?? post.nodeIds;
+  const outageNodeIds = separated?.outageIds ?? outage.nodeIds;
+  const sharedNodes = intersect(postNodeIds, outageNodeIds);
   if (sharedNodes.length) {
     // A post naming one node should not glue itself to a sprawling multi-node outage.
-    const jaccard = sharedNodes.length / new Set([...post.nodeIds, ...outage.nodeIds]).size;
+    const jaccard = sharedNodes.length / new Set([...postNodeIds, ...outageNodeIds]).size;
     // A post whose equipment is all inside the outage (e.g. "Central" for a Central-substation fire) is a strong match.
-    const containment = sharedNodes.length / post.nodeIds.size;
+    const containment = sharedNodes.length / postNodeIds.size;
     const overlap = Math.max(jaccard, 0.8 * containment);
     score += 0.5 * (0.4 + 0.6 * overlap);
     reasons.push(`shared node x${sharedNodes.length} (overlap ${overlap.toFixed(2)})`);
-  } else if (intersect(post.relatedNodeIds, outage.nodeIds).length) {
+  } else if (!separated && intersect(post.relatedNodeIds, outage.nodeIds).length) {
     score += 0.3;
     reasons.push('adjacent node in graph');
   }
@@ -51,7 +71,7 @@ export function scoreCandidate(post, outage) {
     const coef = sharedLocalities.length / Math.min(post.localityIds.size, outage.localityIds.size);
     // Same suburb but demonstrably different infrastructure is weak evidence of the same fault.
     // (not when the post's only suburb is one guessed from a station named after it: that says nothing about different infrastructure)
-    const conflicting = post.nodeIds.size && outage.nodeIds.size && !sharedNodes.length && !intersect(post.relatedNodeIds, outage.nodeIds).length && !post.localitiesImplied;
+    const conflicting = post.nodeIds.size && outage.nodeIds.size && !sharedNodes.length && (Boolean(separated) || !intersect(post.relatedNodeIds, outage.nodeIds).length) && !post.localitiesImplied;
     // A post that names TWO OR MORE suburbs, all of which the outage already covers, is very likely the same incident even when it names
     // different equipment (a restoration often reveals which station was to blame). That earns a smaller penalty, which lifts it into
     // the tie-break instead of letting it open a duplicate outage.
@@ -74,23 +94,24 @@ export function scoreCandidate(post, outage) {
     score = Math.min(score, 0.3);
   }
 
+  const ageH = Math.max(0, (post.postedAt - outage.lastUpdateAt) / HOUR);
+  // An update that names no equipment, and whose suburbs are exactly the live incident's suburbs, is that incident
+  // continuing. The reverse is a restoration that names the station for an incident opened with suburbs only.
+  const sameSuburbSet = sharedLocalities.length >= 2 && sharedLocalities.length === post.localityIds.size && sharedLocalities.length === outage.localityIds.size;
+  const differentSdc = post.sdcName && outage.sdcName && squash(post.sdcName) !== squash(outage.sdcName);
+  const restorationOfSameSuburbs = post.relevance === 'RESTORATION' && outage.nodeIds.size === 0 && sameSuburbSet && ageH <= 12;
+
   if (post.sdcName && outage.sdcName && squash(post.sdcName) === squash(outage.sdcName)) score += 0.05;
-  else if (post.sdcName && outage.sdcName && !sharedNodes.length) {
+  else if (differentSdc && !sharedNodes.length && !restorationOfSameSuburbs) {
     score -= 0.3;
     reasons.push('different SDC');
   }
 
-  const ageH = Math.max(0, (post.postedAt - outage.lastUpdateAt) / HOUR);
   score += 0.1 * Math.exp(-ageH / 24);
 
-  // An update that names no equipment, and whose suburbs are exactly the live incident's suburbs, is that incident
-  // continuing. A station named only on the earlier report is not a different fault. A different named asset, a
-  // single shared suburb, or extra suburbs stay out of this rule.
-  const sameSuburbSet = sharedLocalities.length >= 2 && sharedLocalities.length === post.localityIds.size && sharedLocalities.length === outage.localityIds.size;
-  const differentSdc = post.sdcName && outage.sdcName && squash(post.sdcName) !== squash(outage.sdcName);
-  if (sameSuburbSet && post.nodeIds.size === 0 && ageH <= 12 && !differentSdc) {
+  if ((sameSuburbSet && post.nodeIds.size === 0 && ageH <= 12 && !differentSdc) || restorationOfSameSuburbs) {
     score += 0.35;
-    reasons.push('same suburbs, no new equipment');
+    reasons.push(post.nodeIds.size === 0 ? 'same suburbs, no new equipment' : 'restoration of the same suburbs');
   }
 
   if (outage.status === 'CANCELLED' && post.status !== 'CANCELLED') {
@@ -114,16 +135,29 @@ export function scoreCandidate(post, outage) {
   return { score: Math.min(1, Math.max(0, Number(score.toFixed(3)))), reasons };
 }
 
+/** An announced planned job (with a window) whose evening a deliberate-closure board line falls in: from 12 hours before it starts to 6 after it ends. */
+export function plannedJobCovers(post, outage) {
+  if (!post.plannedClosure || outage.kind !== 'PLANNED' || !outage.scheduledStart || !outage.scheduledEnd) return false;
+  const t = new Date(post.postedAt).getTime();
+  return t >= new Date(outage.scheduledStart).getTime() - 12 * HOUR && t <= new Date(outage.scheduledEnd).getTime() + 6 * HOUR;
+}
+
 /** Water incidents do not reuse SDC scoring. Locality overlap alone stays under a confident link when assets differ. */
 export function scoreWaterCandidate(post, outage) {
   const reasons = [];
   let score = 0;
-  if (post.kind !== outage.kind) return { score: 0, reasons: ['planned/unplanned mismatch'] };
+  const sharedNodes = intersect(post.nodeIds, outage.nodeIds);
+  // A status-board line reporting a deliberate closure ("Overnight closure", "demand management") of an asset that an announced
+  // planned job closes that evening IS that job, not a new fault (Sandton meters, 23 Sept 20:00-04:00, and the 17:45 board).
+  // Only with the asset in common and inside the job's own evening: otherwise planned and unplanned never mix.
+  if (post.kind !== outage.kind) {
+    if (!plannedJobCovers(post, outage) || !sharedNodes.length) return { score: 0, reasons: ['planned/unplanned mismatch'] };
+    reasons.push('deliberate closure during the announced planned job');
+  }
   if (post.conversationId && outage.conversationIds.has(post.conversationId)) {
     score += 0.6;
     reasons.push('same thread');
   }
-  const sharedNodes = intersect(post.nodeIds, outage.nodeIds);
   const conflictingAssets = post.nodeIds.size && outage.nodeIds.size && !sharedNodes.length && !intersect(post.relatedNodeIds, outage.nodeIds).length;
   if (sharedNodes.length) {
     score += Math.min(0.55, 0.35 + 0.2 * (sharedNodes.length / post.nodeIds.size));
@@ -149,6 +183,8 @@ export function scoreWaterCandidate(post, outage) {
     reasons.push('multi-system bulletin');
     score = Math.min(score, 0.3);
   }
+  // recent news about the same place is likelier to be the same incident, as for electricity (an update posted the same day)
+  if (score > 0) score += 0.1 * Math.exp(-Math.max(0, (post.postedAt - outage.lastUpdateAt) / HOUR) / 24);
   if (score <= 0) return { score: 0, reasons: reasons.length ? reasons : ['no shared thread/asset/locality'] };
   return { score: Math.min(1, Math.max(0, Number(score.toFixed(3)))), reasons };
 }

@@ -121,12 +121,15 @@ async function loadCandidates(post, repairOutageIds = []) {
     status: o.status,
     sdcName: o.sdcName,
     nodeIds: new Set(o.nodes.map((n) => n.nodeId)),
+    nodes: o.nodes.map((n) => ({ id: n.nodeId, type: n.node.type })),
     digest: o.digest,
     localityIds: new Set([...o.localities.map((l) => l.localityId), ...(o.localities.length ? [] : o.nodes.flatMap((n) => named.get(n.node.normalizedKey) ?? []))]),
     // links made by the post being placed (an earlier fault of the same graphic) are not thread evidence for it
     conversationIds: new Set(o.posts.filter((p) => p.postId !== post.id).flatMap((p) => [p.post.conversationId, p.post.externalId]).filter(Boolean)),
     lastUpdateAt: o.lastUpdateAt,
     restoredAt: o.restoredAt,
+    scheduledStart: o.scheduledStart,
+    scheduledEnd: o.scheduledEnd,
   }));
 }
 
@@ -362,9 +365,11 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     municipalityId: facts.municipalityId ?? null,
     serviceType: facts.serviceType ?? postRow.serviceType ?? 'ELECTRICITY',
     nodeIds: new Set(facts.nodes.map((n) => n.id)),
+    nodes: facts.nodes.map((n) => ({ id: n.id, type: n.type })),
     localityIds: new Set(facts.localityIds),
     // "[AMENDED UPDATE]" / "*Amended*" in the opening words: a correction of an earlier post (not judged for one fault inside a graphic)
     amended: !facts.fromDigest && AMENDED.test((postRow.noteTweetText || postRow.text || '').slice(0, 90)),
+    plannedClosure: Boolean(extraction.result.planned_closure), // a water board line reporting a deliberate closure
     schedule: postKind === 'PLANNED' ? scheduleFor(extraction, postRow, facts) : null, // an unplanned fault has no announced window
   };
   post.relatedNodeIds = await relatedNodeIds(post.nodeIds);
@@ -487,11 +492,17 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
   const HANDFUL_NODES = 8;
   const DIGEST_NODES = 5;
   const freshOutageReport = extraction.relevance === 'OUTAGE';
-  const genuineDigest = (extraction.result.faults?.length ?? 0) >= 2 || (!freshOutageReport && facts.nodes.length >= DIGEST_NODES);
+  // Water: a notice about ONE named supply system is one upstream event with shared effects, however many of that system's
+  // assets it walks through (Commando, 26 Sept: incoming supply lost, Crosby pumping to the Brixton reservoirs stopped, HH1/HH2
+  // interlinks affected - ten assets, one event). Status boards never get here: they are split per asset before linking
+  // (statusBoardFaults). A notice naming two or more systems, or split by the reader, keeps the rules below.
+  const waterSystems = new Set([...(extraction.result.systems ?? []), ...(extraction.result.entities ?? []).filter((e) => e.type === 'WATER_SYSTEM').map((e) => e.name)].map((s) => String(s ?? '').toLowerCase().replace(/s+/g, '')).filter(Boolean));
+  const oneWaterSystem = facts.serviceType === 'WATER' && waterSystems.size === 1 && (extraction.result.faults?.length ?? 0) < 2;
+  const genuineDigest = !oneWaterSystem && ((extraction.result.faults?.length ?? 0) >= 2 || (!freshOutageReport && facts.nodes.length >= DIGEST_NODES));
   if (!manual && !outageId && isDigest(facts) && genuineDigest) {
     return decide({ outcome: 'NEW', topScore: top?.score ?? null, reason: 'digest post covering several faults: no outage created', candidates: summary });
   }
-  if (!manual && !outageId && isDigest(facts) && freshOutageReport && facts.nodes.length > HANDFUL_NODES) {
+  if (!manual && !outageId && isDigest(facts) && freshOutageReport && facts.nodes.length > HANDFUL_NODES && !oneWaterSystem) {
     return decide({ outcome: 'NEEDS_REVIEW', topScore: top?.score ?? null, reason: 'looks like a large digest by equipment count alone, but was not split into separate faults: ambiguous', candidates: summary });
   }
 

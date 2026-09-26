@@ -46,3 +46,24 @@ describe('off-service posts', () => {
     })).toBeNull();
   });
 });
+
+describe('threads on the Tshwane electricity account (26 Sept, Soshanguve pipeline repair)', () => {
+  const head = '1/3 #WaterSupplyUpdate: Soshanguve Pipeline Repair The pipe was successfully installed, and the team proceeded with bolting the coupling.';
+
+  it('a "#Water..." hashtag is water', () => {
+    expect(unsupportedService({ serviceType: 'ELECTRICITY', text: '#WaterSupplyUpdate: Kruisfontein Reservoirs repairs progressing' })).toBe('WATER');
+  });
+
+  it('a continuation that no longer says water follows its thread', () => {
+    expect(unsupportedService({ serviceType: 'ELECTRICITY', text: '2/3 The team then proceeded with the installation of the second seal.', threadText: head })).toBe('WATER');
+  });
+
+  it('without the thread it stays on the electricity path, and a continuation that names power equipment is power', () => {
+    expect(unsupportedService({ serviceType: 'ELECTRICITY', text: '2/3 The team then proceeded with the installation of the second seal.' })).toBeNull();
+    expect(unsupportedService({ serviceType: 'ELECTRICITY', text: '2/3 The substation transformer has been replaced.', threadText: head })).toBeNull();
+  });
+
+  it('a power thread does not make its replies water', () => {
+    expect(unsupportedService({ serviceType: 'ELECTRICITY', text: '2/3 The team is still on site.', threadText: '#PowerOutage Mamelodi 1 Substation: transformer trip' })).toBeNull();
+  });
+});

@@ -80,8 +80,11 @@ describe('water extraction contract', () => {
 
 describe('a water system-status board', () => {
   const asset = (name) => ({ type: 'RESERVOIR', name, parent_name: null });
+  // a status LIST (the parser could not read its layout); a written notice naming as many assets is one event instead
+  const list = 'Illovo Supplying adequately. Bryanston Supplying adequately. Morningside Supplying fairly. Linksfield On bypass.';
   it('does not treat many independently listed assets as one incident', () => {
     expect(isUnsplitWaterBoard({
+      image_text: list,
       entities: ['Illovo', 'Bryanston', 'Morningside', 'Linksfield'].map(asset),
       localities: [],
       faults: [],
@@ -96,6 +99,7 @@ describe('a water system-status board', () => {
   });
   it('still sees a board when every asset is only listed under the system heading', () => {
     expect(isUnsplitWaterBoard({
+      image_text: `Sandton System ${list}`,
       entities: [
         { type: 'WATER_SYSTEM', name: 'Sandton System', parent_name: null },
         ...['Illovo', 'Bryanston', 'Linksfield'].map((name) => ({ type: 'RESERVOIR', name, parent_name: 'Sandton System' })),

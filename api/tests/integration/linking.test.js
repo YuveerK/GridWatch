@@ -953,11 +953,134 @@ describe('electricity and water in the same suburb stay separate', () => {
         entities: ['Illovo Reservoir', 'Bryanston Reservoir', 'Morningside Reservoir', 'Linksfield Reservoir'].map((name) => ({ type: 'RESERVOIR', name, parent_name: null })),
         localities: [],
         faults: [],
+        // a status list the board parser cannot read (no "Reservoir/ Tower" header)
+        image_text: 'Sandton System update. Illovo Reservoir Supplying adequately. Bryanston Reservoir Supplying adequately. Morningside Reservoir Supplying fairly. Linksfield Reservoir On bypass.',
       },
     };
     const id = await addPost(0, 'Sandton System Update', board, { serviceType: 'WATER' });
     expect((await processPost(id)).outcome).toBe('SYSTEM_STATUS_BOARD');
     expect(await prisma.outage.count()).toBe(0);
+  });
+
+  // The daily "Reservoir/ Tower Status" boards (25 Sept): split in code, so the same board gives the same incidents every round.
+  const commando = (time, line) => `SYSTEM UPDATES 25 September 2026 - ${time} Commando System Reservoir/ Tower Status Crosby Reservoir Supplying fairly. Crosby Pump Station Supplying fairly. Brixton 1 Reservoir Supplying fairly. Hursthill 1 Reservoir ${line} Hursthill 2 Reservoir ${line} Indicators Adequate supply Critically low Fair supply On bypass Vikela Amanzi, Protect Our Tomorrow`;
+  const storeReading = (postId, r) => prisma.postExtraction.create({ data: { postId, promptVersion: 'water-2', model: 'm', status: 'SUCCEEDED', relevance: r.relevance, result: r.result } });
+  const boardReading = (relevance, imageText, faults = []) => ({
+    status: 'SUCCEEDED', relevance, inputTokens: 0, outputTokens: 0,
+    result: { ...base, sdc: null, relevance, status: 'INVESTIGATING', water_state: 'CONSTRAINED', customer_supply: null, image_text: imageText, entities: [], localities: [], faults },
+  });
+
+  it('a status board: each problem reservoir is its own incident, and the next round updates the same ones however the AI labelled it', async () => {
+    const morning = await addPost(0, 'Commando System Update', boardReading('UPDATE', commando('13:25', 'On bypass. Improving, but poor pressure to no water may occur in some areas.')), { serviceType: 'WATER' });
+    await processPost(morning);
+    let rows = await prisma.outage.findMany({ include: { nodes: { include: { node: true } } }, orderBy: { title: 'asc' } });
+    expect(rows.map((o) => o.nodes.map((n) => n.node.name))).toEqual([['Hursthill 1 Reservoir'], ['Hursthill 2 Reservoir']]);
+    expect(rows.every((o) => o.serviceType === 'WATER' && o.status === 'ACTIVE' && o.waterState === 'LOW_PRESSURE')).toBe(true);
+
+    // the evening read of the same board came back as a "general notice" with faults of its own: the board still decides
+    const junk = [{ water_state: 'CONSTRAINED', entities: [{ type: 'RESERVOIR', name: 'Crosby Reservoir' }], localities: [] }, { water_state: 'CONSTRAINED', entities: [{ type: 'RESERVOIR', name: 'Brixton 1 Reservoir' }], localities: [] }];
+    const evening = await addPost(360, 'Commando System Update', boardReading('GENERAL_NOTICE', commando('19:20', 'On bypass. Supplying fairly. Poor pressure to no water may occur in some areas.'), junk), { serviceType: 'WATER' });
+    await processPost(evening);
+    rows = await prisma.outage.findMany({ include: { posts: true } });
+    expect(rows).toHaveLength(2);
+    expect(rows.every((o) => o.posts.length === 2)).toBe(true);
+  });
+
+  it('a status board where everything is supplying adequately opens nothing and is a notice', async () => {
+    const quiet = 'SYSTEM UPDATES 25 September 2026 - 19:10 Sandton System Reservoir/ Tower Status Illovo Reservoir Supplying adequately. Bryanston Reservoir Supplying adequately. Dunkeld Reservoir On bypass. Supplying adequately. Indicators Adequate supply Fair supply';
+    const quietReading = boardReading('UPDATE', quiet);
+    const id = await addPost(0, 'Sandton System Update', quietReading, { serviceType: 'WATER' });
+    await storeReading(id, quietReading); // the review reads the stored reading, as it does for real posts
+    await processPost(id);
+    expect(await prisma.outage.count()).toBe(0);
+    expect((await prisma.sourcePost.findUnique({ where: { id } })).processingStatus).toBe('GENERAL_NOTICE');
+    const { detectSuspicious } = await import('../../src/modules/review/review.service.js');
+    expect([...(await detectSuspicious({ prisma, postIds: [id] }))].map((s) => s.reasons ?? s)).toEqual([]); // not a "discarded fault"
+  });
+
+  const systemNotice = (systems) => ({
+    status: 'SUCCEEDED', relevance: 'OUTAGE', inputTokens: 0, outputTokens: 0,
+    result: {
+      ...base, sdc: null, relevance: 'OUTAGE', kind: 'UNPLANNED', status: 'INVESTIGATING', water_state: 'RECOVERING', customer_supply: null, systems,
+      image_text: 'Customer Notice Status update of Commando system. Challenges with incoming supply affected pumping from Crosby Pump Station to the Brixton Reservoirs, including the two interlinks supplying HH1 and HH2.',
+      entities: ['Crosby Pump Station', 'Crosby Reservoir', 'Brixton 1 Reservoir', 'Brixton 1 Tower', 'Brixton 2 Reservoir', 'Brixton 2 Tower', 'Hursthill 1 Reservoir', 'Hursthill 2 Reservoir', 'HH1 interlink', 'HH2 interlink'].map((name) => ({ type: /Tower/.test(name) ? 'WATER_TOWER' : /Pump/.test(name) ? 'PUMP_STATION' : /interlink/.test(name) ? 'WATER_PIPELINE' : 'RESERVOIR', name, parent_name: null })),
+      localities: [], faults: [],
+    },
+  });
+
+  it('Commando, 26 Sept: a notice about ONE water system naming ten of its assets is one incident, not an unsplit digest', async () => {
+    const id = await addPost(0, 'Status Update: Commando System.', systemNotice(['Commando System']), { serviceType: 'WATER' });
+    const r = await processPost(id);
+    expect(r.outcome).toBe('NEW');
+    expect(await prisma.outage.count()).toBe(1);
+  });
+
+  it('a notice naming two water systems keeps the digest guard: it goes to a person', async () => {
+    const id = await addPost(0, 'Status update', systemNotice(['Commando System', 'Central System']), { serviceType: 'WATER' });
+    expect((await processPost(id)).outcome).toBe('NEEDS_REVIEW');
+    expect(await prisma.outage.count()).toBe(0);
+  });
+
+  it('review: a live water burst in Bryanston does not make a new Bryanston power outage look like a duplicate (25 Sept)', async () => {
+    const bryanston = await prisma.locality.create({ data: { id: 'l-bryanston', canonicalName: 'Bryanston', normalizedName: 'bryanston', active: true, sourceLine: 1, sourceLabel: 'test', updatedAt: at(0) } });
+    resetLocalityIndex();
+    const water = await prisma.outage.create({ data: { title: 'Grosvenor Road (Bryanston)', kind: 'UNPLANNED', status: 'ACTIVE', serviceType: 'WATER', startedAt: at(0), lastUpdateAt: at(0) } });
+    await prisma.outageLocality.create({ data: { outageId: water.id, localityId: bryanston.id } });
+    const power = await addPost(60, 'Khanyisa Substation, Cottesmore Distributor: overcurrent trip in Bryanston', reading('OUTAGE', 'INVESTIGATING', ['Khanyisa'], { localities: [{ name: 'Bryanston', state: 'AFFECTED' }] }));
+    await processPost(power);
+    const electricity = await prisma.outage.findFirst({ where: { serviceType: 'ELECTRICITY' }, include: { localities: true } });
+    expect(electricity.localities.map((l) => l.localityId)).toEqual([bryanston.id]); // the power outage really is in Bryanston
+    const { detectSuspicious } = await import('../../src/modules/review/review.service.js');
+    const codes = (await detectSuspicious({ prisma, postIds: [power] })).flatMap((s) => s.reasons.map((r) => r.code));
+    expect(codes).not.toContain('NEW_NEAR_ACTIVE');
+  });
+
+  it('Sandton, 23 Sept: the evening board\'s "Overnight closure" joins the announced meter closure; "No pumping." stays a fault', async () => {
+    const node = await prisma.infraNode.create({ data: { type: 'RESERVOIR', name: 'Illovo Reservoir', normalizedKey: 'illovo reservoir', serviceType: 'WATER', evidenceCount: 3, firstSeenAt: at(0), lastSeenAt: at(0) } });
+    const job = await prisma.outage.create({ data: { title: 'Sandton meters closed', kind: 'PLANNED', status: 'PLANNED', serviceType: 'WATER', startedAt: at(0), lastUpdateAt: at(0), scheduledStart: at(10 * 60), scheduledEnd: at(18 * 60) } });
+    await prisma.outageNode.create({ data: { outageId: job.id, nodeId: node.id } });
+    const text = 'SYSTEM UPDATES 23 September 2026 - 17:45 Sandton System Reservoir/ Tower Status Illovo Reservoir Overnight closure Robertville Reservoir No pumping. Indicators Adequate supply';
+    await processPost(await addPost(8 * 60, 'Sandton Systems Update', boardReading('UPDATE', text), { serviceType: 'WATER' }));
+    const rows = await prisma.outage.findMany({ include: { posts: true, nodes: { include: { node: true } } } });
+    expect(rows.find((o) => o.id === job.id).posts).toHaveLength(1); // the closure line joined the planned job
+    expect(rows.find((o) => o.id === job.id).kind).toBe('PLANNED');
+    const fault = rows.find((o) => o.id !== job.id);
+    expect(fault.nodes.map((n) => n.node.name)).toEqual(['Robertville Reservoir']); // the unexplained stop is its own incident
+    expect(fault.kind).toBe('UNPLANNED');
+  });
+
+  const burst = (pipe, suburb) => ({
+    status: 'SUCCEEDED', relevance: 'OUTAGE', inputTokens: 0, outputTokens: 0,
+    result: { ...base, sdc: null, relevance: 'OUTAGE', kind: 'UNPLANNED', status: 'INVESTIGATING', water_state: 'NO_SUPPLY', customer_supply: null, entities: [{ type: 'WATER_PIPELINE', name: pipe, parent_name: null }], localities: [{ name: suburb, state: 'AFFECTED', impact: 'NO_SUPPLY' }], faults: [] },
+  });
+
+  it('Bryanston (24-25 Sept): the same burst notice, read once as "burst water pipe" and on its repost as "Grosvenor Road", is one incident', async () => {
+    const first = await addPost(0, 'Unplanned Water Interruption - Bryanston: burst water pipe on Grosvenor Road', burst('burst water pipe', 'Bryanston'), { serviceType: 'WATER' });
+    await processPost(first);
+    const repost = await addPost(14 * 60, 'Greetings, kindly find the attached update for more information.', burst('Grosvenor Road', 'Bryanston'), { serviceType: 'WATER' });
+    await processPost(repost);
+    expect(await prisma.outage.count()).toBe(1);
+    expect(await prisma.infraNode.count({ where: { name: 'burst water pipe' } })).toBe(0); // a description is never stored as an asset
+  });
+
+  it('two unrelated bursts described only as "burst water pipe" stay two incidents', async () => {
+    await processPost(await addPost(0, 'Burst in Bryanston', burst('burst water pipe', 'Bryanston'), { serviceType: 'WATER' }));
+    await processPost(await addPost(60, 'Burst in Orlando East', burst('burst water pipe', 'Orlando East'), { serviceType: 'WATER' }));
+    expect(await prisma.outage.count()).toBe(2);
+  });
+
+  it('the daily throttling schedule (25 Sept), read as planned work with faults, opens nothing and raises no review item', async () => {
+    const text = 'JOBURG WATER MANAGEMENT OF SYSTEMS Throttling is scheduled to commence at around 18:00 on 25 September 2026 and will conclude at around 05:00am on 26 September 2026. Reservoirs and towers subjected to throttling daily Orange Farm High Level Reservoir, Lenasia High Level Reservoir, Lenasia Hospital Hill Reservoir.';
+    const assets = ['Orange Farm High Level Reservoir', 'Lenasia High Level Reservoir', 'Lenasia Hospital Hill Reservoir'].map((name) => ({ type: 'RESERVOIR', name, parent_name: null }));
+    const faults = assets.map((e) => ({ water_state: 'THROTTLED', cause: null, eta_text: null, restoration_percent: null, summary: null, entities: [e], localities: [], systems: [] }));
+    const r = { status: 'SUCCEEDED', relevance: 'PLANNED_OUTAGE', inputTokens: 0, outputTokens: 0, result: { ...base, sdc: null, relevance: 'PLANNED_OUTAGE', status: 'PLANNED', water_state: 'THROTTLED', customer_supply: null, image_text: text, entities: assets, localities: [], faults } };
+    const id = await addPost(0, '#JoburgUpdates #ManagementOfSystems.', r, { serviceType: 'WATER' });
+    await storeReading(id, r);
+    await processPost(id);
+    expect(await prisma.outage.count()).toBe(0);
+    expect((await prisma.sourcePost.findUnique({ where: { id } })).processingStatus).toBe('GENERAL_NOTICE');
+    const { detectSuspicious } = await import('../../src/modules/review/review.service.js');
+    expect([...(await detectSuspicious({ prisma, postIds: [id] }))]).toEqual([]);
   });
 });
 
