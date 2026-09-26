@@ -430,6 +430,126 @@
       "fb": 0,
       "same": true,
       "why": "morning Line D report is the start of the new Tshepisong switching-station trip, not the 18 September Eskom-side outage"
+    },
+    {
+      "a": "2103384944504418553",
+      "fa": 0,
+      "b": "2103430239988629965",
+      "fb": 0,
+      "same": true,
+      "why": "Cottesmore distributor is not the Standard Bank No 2 distributor; they only share Khanyisa."
+    },
+    {
+      "a": "2103448629159546907",
+      "fa": 0,
+      "b": "2102407629871964315",
+      "fb": 0,
+      "same": true,
+      "why": "Sebenza isolation: the 25 Sept notice of the postponement to 11 Oct is the same planned job announced on 22 Sept (the tie-break split it on the changed date)"
+    },
+    {
+      "a": "2103482646751797435",
+      "fa": 0,
+      "b": "2102407629871964315",
+      "fb": 0,
+      "same": true,
+      "why": "Sebenza isolation: the 25 Sept notice of the postponement to 11 Oct is the same planned job announced on 22 Sept (the tie-break split it on the changed date)"
+    },
+    {
+      "a": "2102763814240268353",
+      "fa": 0,
+      "b": "2102719398247022691",
+      "fb": 0,
+      "same": true,
+      "why": "Ferndale 23 Sept: the Hurley/Surrey full restoration repeats the Bond Street/Pine Avenue third-party cable damage report (one suburb shared; the report named no equipment)"
+    },
+    {
+      "a": "2102380026398204016",
+      "fa": 0,
+      "b": "2102343670745690302",
+      "fb": 0,
+      "same": true,
+      "why": "Booysens Reserve 22 Sept: the Robertsham/Frampton Standby restoration closes the 10:26 investigation of the Booysens Reserve outage (same SDC, 2.5 h later; Ophirton is a different fault)"
+    },
+    {
+      "a": "2096605397134061722",
+      "fa": 0,
+      "b": "2096492360561512802",
+      "fb": 0,
+      "same": true,
+      "why": "Strathavon/Bryanston 4-6 Sept: every Pongola Crescent notice says the burst pipeline supplies the Bryanston and Morningside Reservoirs; the 6 Sept notice reports that same 600mm pipeline repaired (reservoirs still recovering, not restored)"
+    },
+    {
+      "a": "2102506970725122543",
+      "fa": 0,
+      "b": "2102459452276281839",
+      "fb": 0,
+      "same": true,
+      "why": "Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same"
+    },
+    {
+      "a": "2102522746466877563",
+      "fa": 0,
+      "b": "2102459452276281839",
+      "fb": 0,
+      "same": true,
+      "why": "Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same"
+    },
+    {
+      "a": "2102635716744196342",
+      "fa": 0,
+      "b": "2102459452276281839",
+      "fb": 0,
+      "same": true,
+      "why": "Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same"
+    },
+    {
+      "a": "2102712799956746544",
+      "fa": 0,
+      "b": "2102459452276281839",
+      "fb": 0,
+      "same": true,
+      "why": "Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same"
+    },
+    {
+      "a": "2102761580723056710",
+      "fa": 0,
+      "b": "2102459452276281839",
+      "fb": 0,
+      "same": true,
+      "why": "Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same"
+    },
+    {
+      "a": "2102763655339114882",
+      "fa": 0,
+      "b": "2102459452276281839",
+      "fb": 0,
+      "same": true,
+      "why": "Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same"
+    },
+    {
+      "a": "2102770757256585580",
+      "fa": 0,
+      "b": "2102459452276281839",
+      "fb": 0,
+      "same": true,
+      "why": "Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same"
+    },
+    {
+      "a": "2078737661099982985",
+      "fa": 0,
+      "b": "2078548554180698338",
+      "fb": 0,
+      "same": true,
+      "why": "Lynnwood, 18-19 July: one medium-voltage cable fault on Alpine Way (a Lynnwood street, per OpenStreetMap): the 18 July alert, the 19 July 'remain off until the faults are fixed' and the cable-jointing update"
+    },
+    {
+      "a": "2078860857790877887",
+      "fa": 0,
+      "b": "2078548554180698338",
+      "fb": 0,
+      "same": true,
+      "why": "Lynnwood, 18-19 July: one medium-voltage cable fault on Alpine Way (a Lynnwood street, per OpenStreetMap): the 18 July alert, the 19 July 'remain off until the faults are fixed' and the cable-jointing update"
     }
   ]
 }
