@@ -3,6 +3,7 @@
 // graph come out exactly as if the name had always been read as the kept one. Stored readings are reused; no post is re-read.
 //   node scripts/merge-nodes.js --keep karzene --drop kazerne            report only
 //   node scripts/merge-nodes.js --keep karzene --drop kazerne --apply    do it
+//   --municipality JOHANNESBURG   when the same name exists in two municipalities (Orchards in Johannesburg and in Tshwane)
 // The re-linking may ask the AI small "same fault or not?" questions (tie-breaks only). Cap them with GRIDWATCH_AI_MAX_CALLS (default 10 here).
 process.env.GRIDWATCH_AI_ONLY ??= 'tiebreak';
 process.env.GRIDWATCH_AI_MAX_CALLS ??= '10';
@@ -20,9 +21,12 @@ if (!keepKey || !dropKey || keepKey === dropKey) {
   process.exit(1);
 }
 const STATIONS = ['SUBSTATION', 'SWITCHING_STATION'];
+const muniCode = arg('municipality');
+const muni = muniCode ? await prisma.municipality.findUnique({ where: { code: muniCode.toUpperCase() } }) : null;
+if (muniCode && !muni) throw new Error(`no municipality with code ${muniCode}`);
 const find = async (key) => {
-  const nodes = await prisma.infraNode.findMany({ where: { normalizedKey: key, type: { in: STATIONS } } });
-  if (nodes.length !== 1) throw new Error(`expected exactly one station named "${key}", found ${nodes.length}`);
+  const nodes = await prisma.infraNode.findMany({ where: { normalizedKey: key, type: { in: STATIONS }, ...(muni ? { municipalityId: muni.id } : {}) } });
+  if (nodes.length !== 1) throw new Error(`expected exactly one station named "${key}"${muni ? ` in ${muni.code}` : ''}, found ${nodes.length}${muni ? '' : ' (add --municipality CODE when the name exists in several)'}`);
   return nodes[0];
 };
 const keep = await find(keepKey);

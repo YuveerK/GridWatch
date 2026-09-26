@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../../db/prisma.js';
 import { assertLeaseInTx } from '../coordination/lease.js';
-import { differsByLabel, infraKey, isNotSuburbName, likelyTypo, localityKey, similarity, tailPlace, oneEditApart } from '../../lib/normalize.js';
+import { differsByLabel, infraKey, isBareVoltage, isGenericWaterAsset, isNotSuburbName, labelledEquipmentName, likelyTypo, localityKey, namedAfter, similarity, tailPlace, oneEditApart } from '../../lib/normalize.js';
 import { decodeEdgeEvidenceRef, edgeEvidenceRef } from '../../lib/evidence-edge.js';
 
 const FUZZY_NODE = 0.9;
@@ -36,10 +36,12 @@ async function shouldCount(db, source, kind, refA, refB = '', mode = 'count') {
   return count === 1 && mode !== 'record-only';
 }
 
-/** Take back everything one source taught the graph (before it is learned again, or when it is removed). */
-export async function removeContributions(postId, faultIndex = null, { ctx } = {}) {
-  const where = { postId, ...(faultIndex == null ? {} : { faultIndex }) };
-  const rows = await prisma.evidenceContribution.findMany({ where });
+/** Take back everything one source taught the graph (before it is learned again, or when it is removed).
+ * `kinds` (e.g. ['NODE_LOCALITY']) limits it to those facts and `match(record)` to particular records; the rest of what the
+ * source taught is left alone. */
+export async function removeContributions(postId, faultIndex = null, { ctx, kinds = null, match = null } = {}) {
+  const where = { postId, ...(faultIndex == null ? {} : { faultIndex }), ...(kinds ? { kind: { in: kinds } } : {}) };
+  const rows = (await prisma.evidenceContribution.findMany({ where })).filter((r) => !match || match(r));
   if (!rows.length) return { removed: 0 };
   await prisma.$transaction(async (tx) => {
     await assertLeaseInTx(tx, ctx);
@@ -61,13 +63,18 @@ export async function removeContributions(postId, faultIndex = null, { ctx } = {
       } else if (r.kind === 'NODE_LOCALITY') {
         const key = { nodeId_localityId: { nodeId: r.refA, localityId: r.refB } };
         const l = await tx.nodeLocality.findUnique({ where: key });
-        if (l) {
+        // an official supply link (SERVES, from the Johannesburg Water network import) stands on its own source: taking back a
+        // post that also mentioned it never deletes it
+        if (l && l.relationType === 'SERVES') {
+          if (l.evidenceCount > 1) await tx.nodeLocality.update({ where: key, data: { evidenceCount: { decrement: 1 } } });
+        } else if (l) {
           if (l.evidenceCount <= 1) await tx.nodeLocality.delete({ where: key });
           else await tx.nodeLocality.update({ where: key, data: { evidenceCount: { decrement: 1 } } });
         }
       }
     }
-    await tx.evidenceContribution.deleteMany({ where });
+    if (match) for (const r of rows) await tx.evidenceContribution.delete({ where: { postId_faultIndex_kind_refA_refB: { postId: r.postId, faultIndex: r.faultIndex, kind: r.kind, refA: r.refA, refB: r.refB } } });
+    else await tx.evidenceContribution.deleteMany({ where });
   });
   return { removed: rows.length };
 }
@@ -167,6 +174,10 @@ const JUNK_NAME = /^(affected|unspecified|unspecific|unnamed|tbc|unknown|custome
 
 export async function resolveNode({ type, name, at, source = null, mode = 'count', ctx, municipalityId = null, serviceType = 'ELECTRICITY' }) {
   if (!name || JUNK_NAME.test(name.trim())) return null;
+  // "burst water pipe" describes an asset without naming one: as a node it tied every burst in the city together
+  if (serviceType === 'WATER' && isGenericWaterAsset(name)) return null;
+  // "275kV" or "132 kV" is a voltage class: as a node it tied every 275kV cable (and its 40 suburbs) together
+  if (serviceType !== 'WATER' && isBareVoltage(name)) return null;
   // "Inner City", "InnerCity" and "InnerCitySDC" are one service delivery centre
   const key = type === 'SDC' ? infraKey(name).replace(/\s+/g, '').replace(/sdc$/, '') : infraKey(name);
   if (!key) return null;
@@ -294,6 +305,34 @@ export function pickParent(node, candidates) {
 }
 
 /**
+ * Which assets of a reading a suburb it names is learned against. Normally every leaf: the post lists the areas its asset
+ * (chain) supplies. A reading naming several unrelated assets does not say which of them supplies which suburb, and
+ * linking every suburb to every asset invented topology:
+ *   - Johannesburg Water's daily throttling notice (Lenasia HL, Orange Farm HL, President Park, Yeoville PS...) made the
+ *     Lenasia reservoir "supply" Yeoville and President Park, the suburbs there being the assets' own names echoed back
+ *   - Tshwane's "PD line Schuverburg, AE line Elandsfontein" linked each line to the other's area, and "transformer R at
+ *     Villieria... Jacaranda secondary" linked the Villieria transformer to Jacaranda
+ * So in such a reading a suburb whose name an asset carries is learned only against that asset, or the leaves under it in
+ * this reading (Mamelodi 2 local areas -> the Mamelodi 2 transformer that tripped). When most of the suburbs are such
+ * echoes (3+), the reading is a roll-call of assets and a suburb matching none is an asset the reader left out (11 Sept:
+ * "President Park" without its outlet): it teaches nothing. A real area list (its suburbs are not asset names, e.g.
+ * Florida North and Maraisburg sharing one list) keeps the normal rule. The same for both services.
+ * `parentOf` is this reading's child id -> parent id.
+ */
+export function localityTargets({ rootCount, nodes, leaves, parentOf = new Map() }, localityName, allLocalityNames = [localityName]) {
+  if (rootCount <= 1) return leaves;
+  const namesakes = new Set(nodes.filter((n) => namedAfter(n.name, localityName)).map((n) => n.id));
+  if (namesakes.size) {
+    const under = (id, seen = new Set()) => namesakes.has(id) || (parentOf.has(id) && !seen.has(id) && under(parentOf.get(id), seen.add(id)));
+    const chain = leaves.filter((n) => under(n.id));
+    return chain.length ? chain : nodes.filter((n) => namesakes.has(n.id));
+  }
+  // a roll-call is a real list (3+) that is mostly echoes; "supply zones Hursthill and Brixton" with a Hursthill valve is not
+  const echoes = allLocalityNames.filter((name) => nodes.some((n) => namedAfter(n.name, name))).length;
+  return allLocalityNames.length >= 3 && echoes * 2 > allLocalityNames.length ? [] : leaves;
+}
+
+/**
  * Learn from one extraction. Returns the facts the linker needs:
  * { sdcNode, nodes: [InfraNode] (non-SDC, most specific last), localityIds: [], restoredLocalityIds: [], unmatched: [] }
  */
@@ -303,15 +342,20 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
   const sdcName = result.sdc ?? listed.find((e) => e.type === 'SDC')?.name ?? null;
   const sdcNode = sdcName && serviceType !== 'WATER' ? await resolveNode({ type: 'SDC', name: sdcName, at, source, mode, ctx, municipalityId, serviceType }) : null;
 
-  // A bare line/feeder label ("A", "D", "1B") is only meaningful with its station: "Tshepisong A".
+  // A bare line/feeder label ("A", "D", "1B", "Line D") is only meaningful with its station: "Tshepisong D". Without one it is
+  // not stored at all (labelledEquipmentName).
   const stationNames = listed.filter((e) => ['SUBSTATION', 'SWITCHING_STATION'].includes(e.type)).map((e) => e.name);
   const entities = listed
     .filter((e) => e.type !== 'SDC')
     .map((e) => {
-      if (!/^([A-Za-z0-9]{1,2}|(no\.?\s*)?\d+[a-z]?)$/i.test(e.name.trim())) return e;
+      if (serviceType === 'WATER') return e;
       const station = e.parent_name ?? (stationNames.length === 1 ? stationNames[0] : null);
-      return station ? { ...e, name: `${station} ${e.name.trim()}`, parent_name: e.parent_name ?? station } : e;
-    });
+      const label = labelledEquipmentName(e.name, station, e.type, result.image_text ?? '');
+      if (!label) return null;
+      if (label.name === e.name.trim()) return e;
+      return { ...e, name: label.name, parent_name: label.bare ? e.parent_name ?? station : e.parent_name };
+    })
+    .filter(Boolean);
   // Identity is the node itself (type + name), not just the name: a "Central" substation and a "Central" distributor are two nodes.
   const resolved = new Map(); // node.id → { node, entities: [entity] }
   const byName = new Map(); // infraKey(name) → [{ node }]  (every node that name could mean)
@@ -330,6 +374,7 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
 
   const children = new Set();
   const hasParent = new Set();
+  const parentOf = new Map();
   for (const { node, entities: es } of resolved.values()) {
     const named = es.find((x) => x.parent_name);
     const parent = named ? pickParent(node, byName.get(infraKey(named.parent_name)) ?? []) : null;
@@ -337,6 +382,7 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
       await bumpEdge(parent.node.id, node.id, at, source, mode, ctx, serviceType === 'WATER' ? named.relationType ?? 'SUPPLIES' : 'LEGACY_PARENT');
       children.add(parent.node.id);
       hasParent.add(node.id);
+      parentOf.set(node.id, parent.node.id);
     } else if (sdcNode) {
       // no parent named, or a named parent that could not be resolved unambiguously: attach to the service centre rather than guess
       await bumpEdge(sdcNode.id, node.id, at, source, mode, ctx);
@@ -352,6 +398,8 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
     const known = await prisma.nodeLocality.findMany({ where: { nodeId: n.id }, select: { localityId: true } });
     known.forEach((k) => preferIds.add(k.localityId));
   }
+  // Independent branches: a normal substation → distributor chain is 1; a multi-fault digest image is 3+.
+  const rootCount = nodes.filter((n) => !hasParent.has(n.id)).length;
   const localityIds = [];
   const restoredLocalityIds = [];
   const unmatched = [];
@@ -364,9 +412,7 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
     }
     if (!localityIds.includes(loc.id)) localityIds.push(loc.id);
     if (l.state === 'RESTORED') restoredLocalityIds.push(loc.id);
-    for (const leaf of leaves) await bumpNodeLocality(leaf.id, loc.id, at, source, mode, ctx);
+    for (const node of localityTargets({ rootCount, nodes, leaves, parentOf }, l.name, result.localities.map((x) => x.name))) await bumpNodeLocality(node.id, loc.id, at, source, mode, ctx);
   }
-  // Independent branches: a normal substation → distributor chain is 1; a multi-fault digest image is 3+.
-  const rootCount = nodes.filter((n) => !hasParent.has(n.id)).length;
   return { sdcNode, nodes, rootCount, localityIds, restoredLocalityIds, unmatched, municipalityId, serviceType };
 }
