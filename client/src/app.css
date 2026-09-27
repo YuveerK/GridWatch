@@ -1122,16 +1122,87 @@ html[data-service='WATER'] .network-page, html[data-service='WATER'] .insights-h
 .network-asset.is-selected { outline: 2px solid var(--utility); outline-offset: 1px; }
 .asset-symbol { display: inline-grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--utility); background: color-mix(in srgb, var(--utility) 12%, var(--card)); color: var(--ink); font-weight: 750; }
 .network-name { color: var(--ink); font: inherit; font-weight: 650; text-align: left; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
-.connection-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, .65fr) minmax(0, 1fr); gap: 18px; align-items: start; margin-top: 24px; }
-.connection-columns h3 { font-size: 16px; }
-.connection-current { text-align: center; border-top: 3px solid var(--utility); }
-.connection-current .asset-symbol { display: grid; margin: 16px auto; }
-.connection-items { list-style: none; padding: 0; margin: 10px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 10px; }
-.connection-card { border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: 16px; min-width: 0; overflow-wrap: anywhere; }
-.connection-card > .row { gap: 10px; }
-.connection-card .link { display: block; margin-top: 12px; }
-.connection-card p { margin: 12px 0; }
-.connection-unknown { border: 1px dashed var(--line-strong); border-radius: 8px; padding: 18px; color: var(--ink-3); }
+.diagram-lede { max-width: 68ch; margin: 0 0 14px; }
+.diagram-stage {
+  position: relative;
+  padding: 22px 16px 20px;
+  border: 1px solid color-mix(in srgb, var(--utility) 32%, var(--line));
+  border-radius: 16px;
+  background:
+    radial-gradient(80% 42% at 50% 0%, color-mix(in srgb, var(--utility) 16%, transparent), transparent 68%),
+    var(--sunken);
+}
+.diagram-tier { position: relative; z-index: 1; }
+.diagram-above { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; gap: 14px 18px; }
+.diagram-above .diagram-tier-h { flex: 1 0 100%; margin-bottom: 0; }
+.diagram-above .diagram-band { margin-top: 0; }
+.diagram-tier-h { display: flex; align-items: baseline; justify-content: center; flex-wrap: wrap; gap: 10px; max-width: 100%; margin: 0 0 12px; }
+.diagram-tier-h h3, .diagram-focus h3 { margin: 0; }
+.diagram-tier-h h3 { font-size: 13px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-2); }
+.diagram-step { font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: .08em; color: var(--utility); }
+.diagram-band { margin-top: 14px; }
+.diagram-band h4 { margin: 0 0 8px; text-align: center; font-size: 11px; font-weight: 650; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); }
+.diagram-tier .connection-items { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin: 0; list-style: none; padding: 0; }
+.diagram-gap { margin: 0 auto; max-width: 42ch; text-align: center; color: var(--ink-3); font-size: 13.5px; padding: 8px 12px; border: 1px dashed var(--line-strong); border-radius: 10px; }
+.diagram-stem { width: 1px; height: 28px; margin: 8px auto; background: color-mix(in srgb, var(--utility) 75%, transparent); }
+.diagram-stem.is-fan { width: min(68%, 520px); height: 16px; background: none; border: 1px solid color-mix(in srgb, var(--utility) 70%, transparent); border-top: 0; border-radius: 0 0 16px 16px; position: relative; }
+.diagram-stem.is-fan::after { content: ""; position: absolute; left: 50%; top: 100%; width: 1px; height: 14px; background: color-mix(in srgb, var(--utility) 75%, transparent); }
+.diagram-stem.up { margin-bottom: 0; }
+.diagram-focus {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(420px, 100%);
+  margin: 0 auto;
+  padding: 18px 20px 16px;
+  text-align: center;
+  border: 1px solid color-mix(in srgb, var(--utility) 55%, var(--line));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--utility) 9%, var(--card));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--utility) 18%, transparent), var(--shadow-2);
+}
+.diagram-focus .diagram-step { display: block; margin-bottom: 6px; }
+.diagram-focus .asset-symbol { display: grid; width: 42px; height: 42px; margin: 10px auto; border-radius: 12px; font-size: 16px; }
+.diagram-focus h3 { max-width: 100%; font-size: 26px; letter-spacing: -0.02em; line-height: 1.15; overflow-wrap: anywhere; }
+.diagram-focus-type { margin: 6px 0 0; color: var(--ink-2); font-size: 13.5px; }
+.diagram-focus .diagram-live { display: flex; justify-content: center; width: 100%; margin: 10px 0 0; }
+.diagram-focus .btn { margin-top: 10px; max-width: 100%; white-space: normal; }
+.diagram-suburb-focus h3 { display: inline-flex; align-items: center; gap: 8px; }
+.diagram-suburb-focus h3 .icon { width: 18px; height: 18px; color: var(--utility); }
+.supply-node {
+  flex: 1 1 220px;
+  width: auto;
+  min-width: min(100%, 200px);
+  max-width: 280px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px 12px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow-2);
+  text-align: left;
+}
+.supply-node-top { display: flex; align-items: center; gap: 10px; min-width: 0; width: 100%; }
+.supply-node-id { display: flex; flex-direction: column; min-width: 0; }
+.supply-node .asset-symbol { width: 32px; height: 32px; flex-basis: 32px; border-radius: 9px; font-size: 13px; }
+.supply-node-type { color: var(--ink-3); font-size: 12px; }
+.supply-node-rel { color: var(--utility); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.supply-node .network-name, .suburb-node .network-name { white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
+.diagram-stage .link, .supply-node .link, .suburb-node .link { white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
+.supply-node .link { margin-top: 2px; }
+.diagram-live { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; color: var(--ink-2); font-size: 12px; }
+.suburb-node { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex: 1 1 200px; width: auto; min-width: min(100%, 180px); max-width: 260px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--card) 88%, var(--utility)); }
+.suburb-node .network-name { display: inline-flex; align-items: flex-start; gap: 6px; }
+.suburb-node .icon { width: 14px; height: 14px; color: var(--utility); }
+.diagram-suburbs .connection-items { gap: 8px; }
+.diagram-admin { margin-top: 22px; padding: 16px 16px 8px; border-left: 3px solid var(--line-strong); }
+.diagram-admin h3 { margin: 0 0 6px; font-size: 15px; }
+.diagram-admin .connection-items { list-style: none; padding: 0; margin: 12px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 10px; }
+.connection-card { min-width: 0; overflow-wrap: anywhere; }
+.connection-items { list-style: none; padding: 0; margin: 10px 0; }
 .network-evidence { margin-top: 24px; }
 .network-evidence .seg { flex-wrap: wrap; }
 .network-sources { list-style: none; margin: 16px 0; padding: 0; }
@@ -1142,8 +1213,23 @@ html[data-service='WATER'] .network-page, html[data-service='WATER'] .insights-h
 .network-toolbar label { display: grid; gap: 6px; font-size: 14px; }
 .network-toolbar label .field { flex: none; }
 @media (max-width: 760px) {
-  .connection-columns { grid-template-columns: 1fr; }
-  .connection-current { grid-row: 1; }
+  .diagram-lede { display: none; }
+  .diagram-stage { padding: 12px 10px; }
+  .diagram-above { display: flex; flex-wrap: wrap; justify-content: center; align-items: stretch; gap: 8px; }
+  .diagram-above .diagram-tier-h { flex: 1 0 100%; margin: 0; }
+  .diagram-above .diagram-band, .diagram-above .connection-items { display: contents; }
+  .diagram-above .diagram-band h4 { display: none; }
+  .diagram-above .supply-node { flex: 1 1 140px; width: auto; min-width: 0; max-width: 100%; padding: 8px 10px; gap: 2px; }
+  .diagram-focus { padding: 8px 12px; }
+  .diagram-focus h3 { font-size: 18px; line-height: 1.15; }
+  .diagram-focus .asset-symbol { width: 28px; height: 28px; margin: 4px auto; font-size: 13px; }
+  .diagram-focus .diagram-step { margin-bottom: 2px; }
+  .diagram-focus-type { margin: 2px 0 0; }
+  .diagram-focus .diagram-live { margin: 4px 0 0; }
+  .diagram-focus .btn { margin-top: 6px; }
+  .diagram-stem { height: 16px; margin: 6px auto; }
+  .supply-node, .suburb-node { flex-basis: calc(50% - 10px); width: auto; min-width: 0; max-width: 100%; }
+  .diagram-stem.is-fan { width: min(92%, 520px); }
   .network-selection { align-items: flex-start; }
   .network-assets { grid-template-columns: 1fr; }
   .network-asset { flex-wrap: wrap; }
@@ -1258,6 +1344,4 @@ html[data-service='WATER'] .network-page, html[data-service='WATER'] .insights-h
   .network-page .network-selection .btn { white-space: nowrap; }
   .network-page:has(.network-connections) .network-selection { display: none; }
   .network-connections > .small { margin: 0 0 8px; }
-  .connection-current.card { padding: 12px 14px; }
-  .connection-current .asset-symbol { margin: 8px auto; }
 }

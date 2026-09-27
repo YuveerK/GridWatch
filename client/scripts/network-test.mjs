@@ -99,7 +99,7 @@ try {
   };
   const wait = async (expression, label) => {
     for (let i = 0; i < 80; i++) { if (await evaluate(expression)) return; await sleep(100); }
-    throw new Error(`Timed out: ${label}`);
+    throw new Error(`Timed out: ${label}\n${errors.join('\n')}\n${await evaluate('document.body?.innerText?.slice(0, 1800) ?? ""')}`);
   };
   const click = (selector, text) => evaluate(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find((e) => e.textContent.trim() === ${JSON.stringify(text)}); if (!el) throw new Error('Missing button: ' + ${JSON.stringify(text)}); el.click(); })()`);
   const shot = async (name) => { await mkdir(screenshots, { recursive: true }); const r = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }); await writeFile(path.join(screenshots, name), Buffer.from(r.data, 'base64')); };
@@ -107,10 +107,10 @@ try {
   console.log('Browser connected; checking network explorer.');
   await send('Fetch.enable', { patterns: [{ urlPattern: '*openfreemap.org/styles/*' }] });
   await send('Page.navigate', { url: `${base}/network?service=water&asset=root&view=connections` });
-  await wait("document.body.innerText.includes('Incoming supply connections (2)') && document.body.innerText.includes('Supply report 1')", 'two parents and source documents');
-  assert.equal(await evaluate("document.querySelectorAll('.connection-columns > section:first-child .connection-card').length"), 2);
+  await wait("document.body.innerText.includes('FEEDS THIS ASSET (2)') && document.body.innerText.includes('Supply report 1')", 'two parents and source documents');
+  assert.equal(await evaluate("document.querySelectorAll('.diagram-above .connection-card').length"), 2);
   await click('.network-connections button', 'Show 2 more (12 total)');
-  assert.equal(await evaluate("document.querySelectorAll('.connection-columns > section:last-child .connection-card').length"), 12);
+  assert.equal(await evaluate("document.querySelectorAll('.diagram-below .connection-card').length"), 12);
   await click('.network-evidence button', 'Next sources');
   await wait("document.body.innerText.includes('Supply report 11')", 'source pagination');
   await click('.network-evidence button', 'Social posts (1)');
@@ -132,8 +132,8 @@ try {
   assert.ok((await evaluate('location.search')).includes('asset=root'));
   await evaluate('history.back()');
   await wait("!location.search.includes('offset=30') && document.querySelectorAll('.network-assets button').length === 30", 'Back restores pagination');
-  await click('.network-tabs button', 'Connections');
-  await click('.connection-card .network-name', 'Northern works');
+  await click('.network-tabs button', 'Hierarchy');
+  await click('.diagram-above .network-name', 'Northern works');
   await wait("document.querySelector('.network-selection h2')?.textContent === 'Northern works'", 'expand upstream');
   await evaluate('history.back()');
   await wait("document.querySelector('.network-selection h2')?.textContent === 'Central reservoir'", 'Back restores selected asset');
@@ -143,7 +143,7 @@ try {
   const placement = await evaluate(`(() => { const card = document.querySelector('.connection-current'); const nav = document.querySelector('.mobile-nav'); const c = card.getBoundingClientRect(); const n = nav.getBoundingClientRect(); return { top: Math.round(c.top), bottom: Math.round(c.bottom), nav: Math.round(n.top) }; })()`);
   assert.equal(placement.top >= 64 && placement.bottom <= placement.nav + 1, true, `selected asset is not fully above the mobile navigation: ${JSON.stringify(placement)}`);
   await shot('network-connections-mobile.png');
-  await click('.connection-card .network-name', 'Garden suburb');
+  await click('.diagram-suburbs .network-name', 'Garden suburb');
   await wait("document.body.innerText.includes('Assets linked to Garden suburb')", 'suburb selection');
   await click('.network-tabs button', 'Map');
   await wait("document.querySelector('.maplibregl-canvas')", 'suburb map');

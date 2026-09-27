@@ -1,14 +1,14 @@
 import { lazy, Suspense, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
-import FeedFlow from '../components/FeedFlow.jsx';
+import FeedFlow, { SuburbDiagram } from '../components/FeedFlow.jsx';
 import NetworkEvidence from '../components/NetworkEvidence.jsx';
 import SearchBox from '../components/SearchBox.jsx';
-import { assetSymbol, hasPosition, networkParams, positionLabel, RELATION, SYMBOLS } from '../lib/network.js';
+import { assetSymbol, hasPosition, networkParams, SYMBOLS } from '../lib/network.js';
 const MapView = lazy(() => import('../components/MapView.jsx'));
 const MAP_LAYERS = { outages: true, equipment: true };
 import { CardSkeleton, EmptyState, ErrorState, SectionHead, ServiceIdentity, Skeleton } from '../components/ui.jsx';
-import { nice, plural, prettySdc, typeLabel, useApi } from '../lib/api.js';
+import { nice, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
 import { useMunicipality, withMunicipality } from '../lib/municipality.jsx';
 import { inService } from '../lib/service.jsx';
@@ -83,14 +83,14 @@ export default function Network() {
   return <div className="container page network-page">
     <header className="page-head network-head"><ServiceIdentity service={service} /><h1>{service === 'WATER' ? 'Water network explorer' : 'Electricity network explorer'}</h1><p>Find a suburb or asset, follow its connections, and inspect the sources{ name ? ` for ${name}` : ''}.</p></header>
     <SearchBox placeholder="Find a suburb or network asset" onPickItem={(item) => item.kind === 'equipment' ? select(item.id) : item.kind === 'suburb' ? selectSuburb(item.id) : navigate(inService(`/outages/${item.id}`, service))} />
-    <nav className="seg network-tabs" aria-label="Network view">{['connections', 'map', 'list'].map((v) => <button key={v} aria-pressed={view === v} onClick={() => go({ view: v })}>{v[0].toUpperCase() + v.slice(1)}</button>)}</nav>
+    <nav className="seg network-tabs" aria-label="Network view">{[['connections', 'Hierarchy'], ['map', 'Map'], ['list', 'List']].map(([v, label]) => <button key={v} aria-pressed={view === v} onClick={() => go({ view: v })}>{label}</button>)}</nav>
     {(assetId || suburbId) && <div className="card card-pad network-selection"><div><span className="eyebrow">Current selection</span><h2>{nice(selectedName) || (waiting ? 'Loading selection...' : 'Selection unavailable')}</h2>{node && <p className="small muted">{typeLabel(node.type)} | {node.live ? 'Live incident linked to this asset' : 'No linked live incident reported'}</p>}</div><button className="btn small" onClick={() => go({ asset: null, suburb: null })}>Clear selection</button></div>}
     {detail.data && !node && <p role="status">This asset belongs to another service. <Link to={inService(`/network?asset=${assetId}&view=${view}`, detail.data.serviceType)}>Open its service</Link> or clear the selection.</p>}
     {(detail.error || supply.error) && <ErrorState error={detail.error || supply.error} />}
     {waiting && <Skeleton h={220} />}
     {view === 'connections' && <>
       {node && <FeedFlow key={node.id} node={node} onSelect={select} onSuburb={selectSuburb} />}
-      {supply.data && <section className="section"><h3>Assets linked to {nice(supply.data.locality.name)} ({assets.length})</h3><p className="small muted">Serves indicates a recorded service relationship. Associations from notices do not establish the supply route. Select an asset to inspect all its upstream and downstream connections.</p><div className="network-assets">{assets.map((a) => <button key={a.id} className="card network-asset" onClick={() => select(a.id)}><span className="asset-symbol">{assetSymbol(a.type)}</span><span className="network-asset-main"><strong>{nice(a.name)}</strong><span>{typeLabel(a.type)} | {RELATION[a.relationType]} | {positionLabel(a)}</span></span>{a.live && <span className="badge tone-live">Live incident</span>}</button>)}</div>{!assets.length && <EmptyState title="No linked assets recorded">The upstream supply for this suburb is unknown.</EmptyState>}</section>}
+      {supply.data && <section className="section"><h3>Assets linked to {nice(supply.data.locality.name)} ({assets.length})</h3>{assets.length ? <SuburbDiagram name={supply.data.locality.name} assets={assets} service={service} onSelect={select} /> : <EmptyState title="No linked assets recorded">The upstream supply for this suburb is unknown.</EmptyState>}</section>}
       {!assetId && !suburbId && <EmptyState icon="network" title="Start with a suburb or asset">Use the search above, or choose an asset in Map or List. Each selection reveals all recorded neighbouring connections.</EmptyState>}
     </>}
     {view === 'map' && <section className="section"><p className="small muted">Asset letters identify type. Red marks a linked live incident; it does not measure source confidence. Dashed marker rings indicate estimated positions. Lines show relationships, not pipe or cable routes. Assets without coordinates remain available in Connections and List.</p>

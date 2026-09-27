@@ -234,7 +234,7 @@ export default function MapPage() {
   return (
     <div className="container page map-page">
       <h1 className="sr">{heading}</h1>
-      {mode === 'infrastructure' && <Link className="btn" to={inService(`/network?view=map${hubId ? `&asset=${hubId}` : ''}`, service)}>Open network explorer: Connections, Map and List</Link>}
+      {mode === 'infrastructure' && <Link className="btn" to={inService(`/network?view=map${hubId ? `&asset=${hubId}` : ''}`, service)}>Open network explorer: Hierarchy, Map and List</Link>}
       {mode === 'infrastructure' && hubsApi.error && <ErrorState error={hubsApi.error} />}
       {error && <ErrorState error={live.error} />}
       {!error && (

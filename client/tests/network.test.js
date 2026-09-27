@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assetSymbol, networkParams, positionLabel, safeSourceUrl } from '../src/lib/network.js';
+import { assetSymbol, groupByBand, isAdministrativeEdge, linkLabel, networkParams, positionLabel, safeSourceUrl } from '../src/lib/network.js';
 
 test('view changes preserve selection, service and directory paging in shareable URLs', () => {
   const initial = new URLSearchParams('service=water&asset=reservoir&view=connections&offset=30');
@@ -29,4 +29,34 @@ test('source links accept web URLs only', () => {
 
 test('major equipment roles are distinguishable without colour', () => {
   assert.equal(new Set(['SDC', 'RESERVOIR', 'WATER_TOWER', 'PUMP_STATION', 'SUBSTATION', 'FEEDER'].map(assetSymbol)).size, 6);
+});
+
+test('electricity groups from substations down to street equipment', () => {
+  const groups = groupByBand([
+    { type: 'TRANSFORMER', name: 'street' },
+    { type: 'SUBSTATION', name: 'station' },
+    { type: 'FEEDER', name: 'circuit' },
+  ], 'ELECTRICITY');
+  assert.deepEqual(groups.map((group) => group.id), ['station', 'circuit', 'street']);
+  assert.deepEqual(groups.map((group) => group.items[0].name), ['station', 'circuit', 'street']);
+});
+
+test('water groups from bulk supply down to local routes', () => {
+  const groups = groupByBand([
+    { type: 'PUMP_STATION' },
+    { type: 'RESERVOIR' },
+    { type: 'TREATMENT_WORKS' },
+    { type: 'DIRECT_FEED' },
+  ], 'WATER');
+  assert.deepEqual(groups.map((group) => group.id), ['bulk', 'storage', 'pump', 'route']);
+});
+
+test('service centres stay off the supply path and recorded equipment links stay on it', () => {
+  assert.equal(isAdministrativeEdge({ asset: { type: 'SDC' }, relationType: 'LEGACY_PARENT' }), true);
+  assert.equal(isAdministrativeEdge({ asset: { type: 'WATER_TOWER' }, relationType: 'PART_OF' }), true);
+  assert.equal(isAdministrativeEdge({ asset: { type: 'DISTRIBUTOR' }, relationType: 'LEGACY_PARENT' }), false);
+  assert.equal(isAdministrativeEdge({ asset: { type: 'RESERVOIR' }, relationType: 'SUPPLIES' }), false);
+  assert.equal(linkLabel('LEGACY_PARENT'), 'Recorded link');
+  assert.equal(linkLabel('SUPPLIES'), 'Supplies');
+  assert.equal(linkLabel('PART_OF'), 'Not a supply route');
 });
