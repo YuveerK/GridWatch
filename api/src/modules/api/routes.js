@@ -11,6 +11,7 @@ import { scheduleState } from '../processing/schedule-state.js';
 import { processPending, reprocessPost } from '../processing/processor.service.js';
 import { authorize, checkToken, isSameOrigin, allowedOrigins, loginAllowed, recordLoginFailure, requireOperator, resetLoginFailures, sessionCookie } from './operator-auth.js';
 import { equipmentFlow, equipmentHubs, localitySupply, waterMapHubs } from '../geo/equipment-map.service.js';
+import { networkEvidence } from './network-evidence.js';
 import { insights } from './insights.service.js';
 import { CATEGORY_IDS, dailyPostCounts, listPosts } from './post-activity.service.js';
 import { listReviewItems, resolveReviewItem } from '../review/review.service.js';
@@ -455,10 +456,10 @@ router.get('/v1/network/sdcs', wrap(async (req, res) => {
 const place = (l, extra = {}) => ({ id: l.id, name: l.canonicalName, lat: l.lat, lon: l.lon, municipality: l.Region?.Municipality?.name ?? null, ...extra });
 
 /** localityId -> 'out' | 'restored' for suburbs named by currently live outages. Suburbs no live outage mentions are absent. */
-async function localityStates(localityIds, service) {
+async function localityStates(localityIds, service, nodeIds = null) {
   const out = new Map();
   if (!localityIds.length) return out;
-  const rows = await prisma.outageLocality.findMany({ where: { localityId: { in: localityIds }, outage: { status: { in: LIVE }, serviceType: service } }, select: { localityId: true, restored: true } });
+  const rows = await prisma.outageLocality.findMany({ where: { localityId: { in: localityIds }, outage: { status: { in: LIVE }, serviceType: service, ...(nodeIds ? { nodes: { some: { nodeId: { in: nodeIds } } } } : {}) } }, select: { localityId: true, restored: true } });
   for (const r of rows) {
     if (!r.restored) out.set(r.localityId, 'out');
     else if (!out.has(r.localityId)) out.set(r.localityId, 'restored');
@@ -530,21 +531,35 @@ router.get('/v1/map/node/:id', wrap(async (req, res) => {
   const placedRows = all.filter((l) => l.lat != null && l.lon != null);
   // Per suburb, not per outage: a suburb is "out" while ANY live outage (this equipment's or another's) still lists it as
   // not restored; it is "restored" when live outages mention it but all say it is back; otherwise nothing is reported.
-  const [states, boundaries] = await Promise.all([
+  const [states, linkedStates, boundaries] = await Promise.all([
     localityStates(placedRows.map((l) => l.id), root.serviceType),
+    localityStates(placedRows.map((l) => l.id), root.serviceType, [...ids]),
     boundariesFor(placedRows.map((l) => l.id)),
   ]);
-  const placed = placedRows.map((l) => place(l, { evidence: l.evidence, live: states.get(l.id) === 'out', state: states.get(l.id) ?? 'none', boundary: boundaries.get(l.id) ?? null }));
-  const flow = await equipmentFlow(root.id, placed);
+  const placed = placedRows.map((l) => place(l, { evidence: l.evidence, linkedState: linkedStates.get(l.id) ?? 'none', live: states.get(l.id) === 'out', state: states.get(l.id) ?? 'none', boundary: boundaries.get(l.id) ?? null }));
+  const flow = await equipmentFlow(root.id, placed, root.serviceType);
   res.json({
-    node: root,
+    node: { ...root, live: flow.live },
     places: placed,
     origin: flow.origin,
-    children: flow.children.map((c) => ({ id: c.id, name: c.name, type: c.type, lon: c.lon, lat: c.lat, live: c.live, served: c.served, near: c.near })),
+    derived: flow.derived,
+    unmappedConnections: flow.unmappedConnections,
+    coverageDepth: 4,
+    children: flow.children,
+    parents: flow.parents,
     edges: flow.edges,
     unplaced: all.filter((l) => l.lat == null || l.lon == null).length,
     total: all.length,
   });
+}));
+
+router.get('/v1/infrastructure/:id/evidence', wrap(async (req, res) => {
+  if (!id.safeParse(req.params.id).success) return res.status(400).json({ error: 'invalid_request' });
+  const query = parse(z.object({ parentId: id.optional(), childId: id.optional(), localityId: id.optional(), relationType: z.enum(['LEGACY_PARENT', 'SUPPLIES', 'PUMPS_TO', 'DIRECTLY_SUPPLIES', 'FEEDS', 'PART_OF', 'UPSTREAM_OF', 'BYPASSES', 'BACKFEEDS']).optional(), kind: z.enum(['documents', 'posts']).default('documents'), offset: intParam(0, 1000000, 0), limit: intParam(1, 100, 20) }), req.query, res);
+  if (!query) return;
+  if (Boolean(query.parentId) !== Boolean(query.childId) || (query.parentId && ![query.parentId, query.childId].includes(req.params.id)) || (query.localityId && query.parentId)) return res.status(400).json({ error: 'invalid_request' });
+  if (!await prisma.infraNode.findUnique({ where: { id: req.params.id }, select: { id: true } })) return res.status(404).json({ error: 'not_found' });
+  res.json(await networkEvidence(req.params.id, query));
 }));
 
 router.get('/v1/infrastructure/:id', wrap(async (req, res) => {
@@ -554,22 +569,24 @@ router.get('/v1/infrastructure/:id', wrap(async (req, res) => {
     include: {
       parents: { include: { parent: true } },
       children: { include: { child: true }, orderBy: { evidenceCount: 'desc' } },
-      localities: { include: { locality: true }, orderBy: { evidenceCount: 'desc' }, take: 50 },
+      localities: { include: { locality: true }, orderBy: [{ evidenceCount: 'desc' }, { localityId: 'asc' }] },
       aliases: true,
     },
   });
   if (!node) return res.status(404).json({ error: 'not_found' });
 
   const chain = [];
+  const visited = new Set([node.id]);
   let cur = node;
   for (let i = 0; i < 4; i++) {
     const e = await prisma.infraEdge.findFirst({ where: { childId: cur.id }, orderBy: { evidenceCount: 'desc' }, include: { parent: true } });
-    if (!e) break;
-    chain.unshift(e.parent);
+    if (!e || visited.has(e.parentId)) break;
+    visited.add(e.parentId);
+    chain.unshift({ ...e.parent, relationType: e.relationType, evidenceCount: e.evidenceCount });
     cur = e.parent;
   }
-  const childIds = node.children.map((c) => c.childId);
-  const liveRows = childIds.length ? await prisma.outageNode.findMany({ where: { nodeId: { in: childIds }, outage: { status: { in: LIVE }, serviceType: node.serviceType } }, select: { nodeId: true } }) : [];
+  const relatedIds = [node.id, ...node.children.map((c) => c.childId), ...node.parents.map((p) => p.parentId)];
+  const liveRows = await prisma.outageNode.findMany({ where: { nodeId: { in: relatedIds }, outage: { status: { in: LIVE }, serviceType: node.serviceType } }, select: { nodeId: true } });
   const liveIds = new Set(liveRows.map((r) => r.nodeId));
   // an SDC is not stored on outages as equipment; its outages are the ones reported under its name
   const recent = await prisma.outage.findMany({
@@ -580,24 +597,28 @@ router.get('/v1/infrastructure/:id', wrap(async (req, res) => {
   });
   res.json({
     ...node,
+    live: node.type === 'SDC' ? Boolean(await prisma.outage.count({ where: { sdcName: node.name, serviceType: node.serviceType, status: { in: LIVE } } })) : liveIds.has(node.id),
     chain,
+    parents: node.parents.map((p) => ({ ...p, parent: { ...p.parent, live: liveIds.has(p.parentId) } })),
     children: node.children.map((c) => ({ ...c, child: { ...c.child, live: liveIds.has(c.childId) } })),
     recentOutages: await shapeMany(recent),
   });
 }));
 
 router.get('/v1/infrastructure', wrap(async (req, res) => {
-  const query = parse(z.object({ type: z.string().trim().toUpperCase().pipe(z.enum(['SDC', 'SUBSTATION', 'FEEDER', 'DISTRIBUTOR', 'TRANSFORMER', 'MINI_SUBSTATION', 'CABLE', 'SWITCHING_STATION', 'KIOSK', 'OTHER', ...WATER_ASSET_TYPES])).optional(), q: text(80).optional(), municipality: text(20).optional(), service: text(20).optional() }), req.query, res);
+  const query = parse(z.object({ type: z.string().trim().toUpperCase().pipe(z.enum(['SDC', 'SUBSTATION', 'FEEDER', 'DISTRIBUTOR', 'TRANSFORMER', 'MINI_SUBSTATION', 'CABLE', 'SWITCHING_STATION', 'KIOSK', 'OTHER', ...WATER_ASSET_TYPES])).optional(), q: text(80).optional(), municipality: text(20).optional(), service: text(20).optional(), limit: intParam(1, 100, 50), offset: intParam(0, 1000000, 0) }), req.query, res);
   if (!query) return;
-  const { type, q, municipality, service } = query;
+  const { type, q, municipality, service, limit, offset } = query;
+  const where = { serviceType: serviceOf(service), ...(type ? { type } : {}), ...(q ? { normalizedKey: { contains: localityKey(q) } } : {}), ...nodeInMunicipality(municipality) };
+  const total = await prisma.infraNode.count({ where });
   const nodes = await prisma.infraNode.findMany({
-    where: { serviceType: serviceOf(service), type: type ?? { not: 'SDC' }, ...(q ? { normalizedKey: { contains: localityKey(q) } } : {}), ...nodeInMunicipality(municipality) },
+    where,
     orderBy: [{ evidenceCount: 'desc' }, { id: 'asc' }],
-    take: 100,
+    take: limit, skip: offset,
   });
   const liveRows = nodes.length ? await prisma.outageNode.findMany({ where: { nodeId: { in: nodes.map((n) => n.id) }, outage: { status: { in: LIVE }, serviceType: serviceOf(service) } }, select: { nodeId: true } }) : [];
   const liveIds = new Set(liveRows.map((r) => r.nodeId));
-  res.json({ data: nodes.map((n) => ({ ...n, live: liveIds.has(n.id) })) });
+  res.json({ total, offset, limit, hasMore: offset + nodes.length < total, data: nodes.map((n) => ({ ...n, live: liveIds.has(n.id) })) });
 }));
 
 // ───────────── manual refresh (fetch latest posts, read them, update outages) ─────────────

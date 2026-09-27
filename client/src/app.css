@@ -1089,6 +1089,12 @@ main > * { animation: settle 0.28s ease-out both; }
 html[data-service='WATER'] .network-page, html[data-service='WATER'] .insights-head, .insights-body.service-water { --utility: var(--utility-water); }
 .network-head h1, .insights-head h1 { margin-top: 12px; }
 .network-head p, .insights-head p { max-width: 75ch; }
+.network-jumps { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 22px; }
+.network-jumps a { display: inline-flex; align-items: center; min-height: 40px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--ink-2); font-size: 14px; font-weight: 550; text-decoration: none; }
+.network-jumps a:hover, .network-jumps a:focus-visible { border-color: var(--utility); color: var(--ink); background: color-mix(in srgb, var(--utility) 8%, var(--card)); }
+.network-guide { margin: 14px 0 24px; }
+.network-guide summary { width: fit-content; padding: 8px 0; color: var(--ink-2); font-size: 14px; cursor: pointer; }
+.network-guide[open] .network-explainer { margin-top: 8px; }
 .network-explainer { border-top: 3px solid var(--utility); }
 .network-explainer .flow { gap: 8px; }
 .network-explainer .step { border: 1px solid var(--line); border-radius: 6px; padding: 16px; min-height: 150px; }
@@ -1101,6 +1107,7 @@ html[data-service='WATER'] .network-page, html[data-service='WATER'] .insights-h
 .network-toolbar .field { flex: 0 1 260px; }
 .network-count { margin: 16px 0 8px; }
 .network-assets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.fflow .chip small { display: block; color: var(--ink-3); font-size: 11px; }
 .network-asset { display: flex; align-items: center; gap: 12px; padding: 14px 16px; min-width: 0; border-left: 3px solid var(--utility); }
 .network-asset:hover { background: var(--raised); box-shadow: inset 0 0 0 1px var(--line-strong); }
 .network-asset-icon { color: var(--utility); display: inline-flex; }
@@ -1108,6 +1115,40 @@ html[data-service='WATER'] .network-page, html[data-service='WATER'] .insights-h
 .network-asset-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .network-asset-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .network-asset-main span { color: var(--ink-3); font-size: 12px; }
+.network-tabs { margin: 22px 0; }
+.network-selection { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: 18px 0; }
+.network-selection h2 { margin: 6px 0; }
+.network-assets button { text-align: left; color: var(--ink); font: inherit; cursor: pointer; }
+.network-asset.is-selected { outline: 2px solid var(--utility); outline-offset: 1px; }
+.asset-symbol { display: inline-grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--utility); background: color-mix(in srgb, var(--utility) 12%, var(--card)); color: var(--ink); font-weight: 750; }
+.network-name { color: var(--ink); font: inherit; font-weight: 650; text-align: left; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.connection-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, .65fr) minmax(0, 1fr); gap: 18px; align-items: start; margin-top: 24px; }
+.connection-columns h3 { font-size: 16px; }
+.connection-current { text-align: center; border-top: 3px solid var(--utility); }
+.connection-current .asset-symbol { display: grid; margin: 16px auto; }
+.connection-items { list-style: none; padding: 0; margin: 10px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 10px; }
+.connection-card { border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: 16px; min-width: 0; overflow-wrap: anywhere; }
+.connection-card > .row { gap: 10px; }
+.connection-card .link { display: block; margin-top: 12px; }
+.connection-card p { margin: 12px 0; }
+.connection-unknown { border: 1px dashed var(--line-strong); border-radius: 8px; padding: 18px; color: var(--ink-3); }
+.network-evidence { margin-top: 24px; }
+.network-evidence .seg { flex-wrap: wrap; }
+.network-sources { list-style: none; margin: 16px 0; padding: 0; }
+.network-sources li { padding: 14px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.network-sources a { color: var(--brand); text-decoration: underline; }
+.source-text { white-space: pre-wrap; max-width: 85ch; }
+.network-pagination { margin-top: 18px; gap: 12px; }
+.network-toolbar label { display: grid; gap: 6px; font-size: 14px; }
+.network-toolbar label .field { flex: none; }
+@media (max-width: 760px) {
+  .connection-columns { grid-template-columns: 1fr; }
+  .connection-current { grid-row: 1; }
+  .network-selection { align-items: flex-start; }
+  .network-assets { grid-template-columns: 1fr; }
+  .network-asset { flex-wrap: wrap; }
+  .network-asset-main strong { white-space: normal; }
+}
 .suburb-supply-search { display: flex; align-items: flex-start; gap: 10px; max-width: 640px; margin-bottom: 14px; }
 .suburb-supply-search .search { flex: 1; min-width: 0; }
 .suburb-supply-lists { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; margin-top: 16px; }
@@ -1207,4 +1248,16 @@ html[data-service='WATER'] .network-page, html[data-service='WATER'] .insights-h
 @media (max-width: 760px) {
   .map-page.container.page { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
   .map-page .map-stage { height: min(420px, 46dvh); }
+  .container.page { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+  .network-page .network-head { padding: 14px 16px; }
+  .network-page .network-head h1 { margin-top: 8px; font-size: 26px; }
+  .network-page .network-head p { display: none; }
+  .network-page .page-head { margin-bottom: 12px; }
+  .network-page .network-tabs { margin: 12px 0; }
+  .network-page .network-selection { margin: 10px 0; }
+  .network-page .network-selection .btn { white-space: nowrap; }
+  .network-page:has(.network-connections) .network-selection { display: none; }
+  .network-connections > .small { margin: 0 0 8px; }
+  .connection-current.card { padding: 12px 14px; }
+  .connection-current .asset-symbol { margin: 8px auto; }
 }

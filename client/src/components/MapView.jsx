@@ -2,6 +2,7 @@ import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-csp-worker.js?url';
 import { useEffect, useRef, useState } from 'react';
+import { assetSymbol, SYMBOLS } from '../lib/network.js';
 
 // serve the map's background worker as its own file: the inline version stalls under Vite's dev server
 maplibregl.setWorkerUrl(workerUrl);
@@ -49,23 +50,28 @@ const colors = () => ({
 });
 
 /** A small diamond marker for equipment, drawn once per colour. */
-function hubImage(fill, ring, size = 44) {
+function hubImage(fill, ring, size = 44, symbol = 'A', estimated = false) {
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const g = c.getContext('2d');
   const m = size / 2;
-  const r = size * 0.3;
+  const r = size * 0.38;
   g.beginPath();
-  g.moveTo(m, m - r);
-  g.lineTo(m + r, m);
-  g.lineTo(m, m + r);
-  g.lineTo(m - r, m);
+  if (['R', 'P', 'T'].includes(symbol)) g.arc(m, m, r, 0, Math.PI * 2);
+  else g.rect(m - r, m - r, r * 2, r * 2);
   g.closePath();
   g.fillStyle = fill;
   g.fill();
   g.lineWidth = size * 0.09;
   g.strokeStyle = ring;
+  if (estimated) g.setLineDash([4, 3]);
   g.stroke();
+  g.setLineDash([]);
+  g.fillStyle = '#fff';
+  g.font = `bold ${size * 0.43}px sans-serif`;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(symbol, m, m + 1);
   return g.getImageData(0, 0, size, size);
 }
 
@@ -97,7 +103,7 @@ const at = (pts, u) => {
  *  points    one dot per suburb: { id, name, lat, lon, tone, groups[], dim, inferred, note, boundary? }
  *            boundary (a GeoJSON Polygon/MultiPolygon, when known) draws the suburb's real shape under its dot
  *  hubs      equipment at its inferred position: { id, name, type, lon, lat, live, served }
- *  flow      { key, origin, edges[{from,to,kind,live}] } -> animated "power flow"; null for none
+ *  flow      { key, origin, edges[{from,to,kind,live,relationship}], animated? } -> reported connections
  *  focus     { key, bounds } -> fly to these bounds
  *  layers    { outages, equipment }
  * Suburb positions are their centres, and equipment positions are inferred; the page says so in words.
@@ -150,7 +156,7 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
     features: latest.current.hubs.filter((h) => h.lon != null && h.lat != null).map((h) => ({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [h.lon, h.lat] },
-        properties: { id: h.id, name: h.name, type: h.type, service: h.service ?? '', live: h.live ? 1 : 0, served: h.served ?? 0, selected: h.id === latest.current.selectedHub ? 1 : 0 },
+        properties: { id: h.id, name: h.name, type: h.type, marker: `hub-${assetSymbol(h.type)}-${h.live ? 'live' : h.service === 'WATER' ? 'water' : 'idle'}-${h.derived === true ? 'estimated' : 'recorded'}`, service: h.service ?? '', live: h.live ? 1 : 0, served: h.served ?? 0, evidence: h.evidence ?? 0, derived: h.derived === true ? 1 : h.derived === false ? 0 : -1, associationLabel: h.associationLabel ?? '', selected: h.id === latest.current.selectedHub ? 1 : 0 },
     })),
   });
 
@@ -240,10 +246,9 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
 
     map.on('load', () => {
       const c = colors();
-      map.addImage('hub-idle', hubImage(c.plan, c.card));
-      map.addImage('hub-water', hubImage('#2f7d9a', c.card));
-      map.addImage('hub-live', hubImage(c.live, c.card));
-      map.addImage('hub-sel', hubImage(c.ink, c.card, 56));
+      for (const symbol of Object.keys(SYMBOLS)) for (const [state, fill] of Object.entries({ idle: '#466781', water: '#267389', live: c.live })) for (const provenance of ['estimated', 'recorded']) {
+        map.addImage(`hub-${symbol}-${state}-${provenance}`, hubImage(fill, c.card, 48, symbol, provenance === 'estimated'));
+      }
 
       // Estimated coverage sits below markers and connection lines.
       map.addSource('coverage', { type: 'geojson', data: latest.current.coverage?.data ?? EMPTY });
@@ -266,10 +271,10 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
       map.addLayer({
         id: 'hubs', type: 'symbol', source: 'hubs',
         layout: {
-          'icon-image': ['case', ['==', ['get', 'selected'], 1], 'hub-sel', ['==', ['get', 'service'], 'WATER'], 'hub-water', ['==', ['get', 'live'], 1], 'hub-live', 'hub-idle'],
-          'icon-size': ['interpolate', ['linear'], ['zoom'], 9, ['+', 0.4, ['*', 0.012, ['min', ['get', 'served'], 20]]], 13, ['+', 0.65, ['*', 0.02, ['min', ['get', 'served'], 20]]]],
+          'icon-image': ['get', 'marker'],
+          'icon-size': ['interpolate', ['linear'], ['zoom'], 9, ['+', 0.4, ['*', 0.012, ['min', ['coalesce', ['get', 'served'], 0], 20]]], 13, ['+', 0.65, ['*', 0.02, ['min', ['coalesce', ['get', 'served'], 0], 20]]]],
           'icon-allow-overlap': true,
-          'text-field': ['step', ['zoom'], '', 12, ['get', 'name']], 'text-font': FONT, 'text-size': 11, 'text-offset': [0, 1.3], 'text-anchor': 'top', 'text-optional': true,
+          'text-field': ['step', ['zoom'], ['case', ['==', ['get', 'selected'], 1], ['get', 'name'], ''], 12, ['get', 'name']], 'text-font': FONT, 'text-size': 11, 'text-offset': [0, 1.8], 'text-anchor': 'top', 'text-optional': true,
         },
         paint: { 'text-color': c.ink, 'text-halo-color': c.card, 'text-halo-width': 1.4 },
       });
@@ -280,9 +285,10 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
         clusterProperties: {
           live: ['+', ['case', ['==', ['get', 'tone'], 'live'], 1, 0]],
           partial: ['+', ['case', ['==', ['get', 'tone'], 'partial'], 1, 0]],
+          neutral: ['+', ['case', ['in', ['get', 'tone'], ['literal', ['plan', 'idle']]], 1, 0]],
         },
       });
-      const clusterColor = ['case', ['>', ['get', 'live'], 0], c.live, ['>', ['get', 'partial'], 0], c.partial, c.good];
+      const clusterColor = ['case', ['>', ['get', 'live'], 0], c.live, ['>', ['get', 'partial'], 0], c.partial, ['>', ['get', 'neutral'], 0], c.plan, c.good];
       map.addLayer({ id: 'cluster-halo', type: 'circle', source: 'pts', filter: ['has', 'point_count'], paint: { 'circle-color': clusterColor, 'circle-opacity': 0.2, 'circle-radius': ['step', ['get', 'point_count'], 24, 5, 30, 15, 38] } });
       map.addLayer({ id: 'cluster', type: 'circle', source: 'pts', filter: ['has', 'point_count'], paint: { 'circle-color': clusterColor, 'circle-radius': ['step', ['get', 'point_count'], 14, 5, 18, 15, 24], 'circle-stroke-color': c.card, 'circle-stroke-width': 2 } });
       map.addLayer({ id: 'cluster-count', type: 'symbol', source: 'pts', filter: ['has', 'point_count'], layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': FONT_BOLD, 'text-size': 13, 'text-allow-overlap': true }, paint: { 'text-color': '#ffffff' } });
@@ -304,11 +310,11 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
         paint: { 'text-color': c.ink, 'text-halo-color': c.card, 'text-halo-width': 1.5, 'text-opacity': ['case', ['==', ['get', 'dim'], 1], 0.35, 1] },
       });
 
-      // animated power flow (drawn by the loop further down)
+      // reported connections (drawn by the loop further down)
       map.addSource('flow-lines', { type: 'geojson', data: EMPTY });
       map.addSource('flow-pulses', { type: 'geojson', data: EMPTY });
-      map.addLayer({ id: 'flow-glow', type: 'line', source: 'flow-lines', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': ['case', ['==', ['get', 'kind'], 'equipment'], 9, 6], 'line-opacity': 0.12, 'line-blur': 3 } });
-      map.addLayer({ id: 'flow-lines', type: 'line', source: 'flow-lines', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': ['case', ['==', ['get', 'kind'], 'equipment'], 3, 1.7], 'line-opacity': 0.75 } });
+      map.addLayer({ id: 'flow-glow', type: 'line', source: 'flow-lines', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': ['case', ['==', ['get', 'kind'], 'association'], 3, ['==', ['get', 'kind'], 'equipment'], 9, 6], 'line-opacity': 0.1, 'line-blur': 3 } });
+      map.addLayer({ id: 'flow-lines', type: 'line', source: 'flow-lines', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': ['case', ['==', ['get', 'kind'], 'association'], 1.4, ['==', ['get', 'kind'], 'equipment'], 3, 1.7], 'line-opacity': 0.78 } });
       map.addLayer({ id: 'flow-pulses-glow', type: 'circle', source: 'flow-pulses', paint: { 'circle-color': ['get', 'color'], 'circle-radius': ['*', ['get', 'r'], 2.4], 'circle-opacity': ['*', ['get', 'o'], 0.22], 'circle-blur': 0.8 } });
       map.addLayer({ id: 'flow-pulses', type: 'circle', source: 'flow-pulses', paint: { 'circle-color': ['get', 'color'], 'circle-radius': ['get', 'r'], 'circle-opacity': ['get', 'o'], 'circle-stroke-color': '#ffffff', 'circle-stroke-width': ['case', ['==', ['get', 'origin'], 1], 2, 0.8], 'circle-stroke-opacity': ['get', 'o'] } });
 
@@ -328,7 +334,11 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
       map.getCanvas().style.cursor = hub || dot || cluster ? 'pointer' : '';
       if (hub) {
         const p = hub.properties;
-        return pop(hub.geometry.coordinates, `<b>${esc(p.name)}</b><div style="margin-top:2px;opacity:.75">${p.type === 'SDC' ? 'Service delivery centre' : esc(String(p.type).toLowerCase().replaceAll('_', ' '))} · serves ${p.served} suburb${p.served === 1 ? '' : 's'}${p.live ? ' · outage now' : ''}</div><div style="margin-top:3px;opacity:.6;font-size:11.5px">Position inferred from associated suburbs</div>`);
+        const placeNote = p.associationLabel
+          ? `${esc(p.associationLabel)}${p.evidence ? ` · ${p.evidence} legacy evidence record${p.evidence === 1 ? '' : 's'}` : ''}`
+          : `Associated with ${p.served} suburb${p.served === 1 ? '' : 's'}`;
+        const positionNote = p.derived === 1 ? 'Position estimated from associated suburbs' : p.derived === 0 ? 'Recorded asset coordinates' : 'Position source unknown';
+        return pop(hub.geometry.coordinates, `<b>${esc(p.name)}</b><div style="margin-top:2px;opacity:.75">${p.type === 'SDC' ? 'Service delivery centre' : esc(String(p.type).toLowerCase().replaceAll('_', ' '))} · ${placeNote}${p.live ? ' · incident linked to this asset' : ''}</div><div style="margin-top:3px;opacity:.6;font-size:11.5px">${positionNote}</div>`);
       }
       if (dot) {
         const p = dot.properties;
@@ -414,9 +424,11 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
     }
     const c = colors();
     const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const animated = flow.animated !== false;
     const paths = flow.edges.map((e, i) => {
       const dist = Math.hypot(e.to[0] - e.from[0], e.to[1] - e.from[1]);
-      return { pts: curve(e.from, e.to, (i % 2 ? 1 : -1) * 0.16), color: e.color || (e.live ? c.live : c.brand), delay: Math.min(700, dist * 9000), phase: (i * 0.37) % 1, kind: e.kind };
+      const association = ['ASSOCIATED', 'LEGACY_PARENT', 'ADMINISTRATIVE', 'PART_OF'].includes(e.relationship) || e.kind === 'association';
+      return { pts: curve(e.from, e.to, (i % 2 ? 1 : -1) * 0.16), color: e.color || (association ? c.idle : e.live ? c.live : c.brand), delay: Math.min(700, dist * 9000), phase: (i * 0.37) % 1, kind: association ? 'association' : e.kind };
     });
     const bounds = new maplibregl.LngLatBounds();
     paths.forEach((p) => p.pts.forEach((pt) => bounds.extend(pt)));
@@ -426,18 +438,18 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
     let last = 0;
     const frame = (now) => {
       const t = now - t0;
-      if (now - last > 32 || reduce) {
+      if (now - last > 32 || reduce || !animated) {
         last = now;
         const lines = [];
         const pulses = [];
         for (const p of paths) {
-          const grow = reduce ? 1 : ease(Math.max(0, Math.min(1, (t - p.delay) / 700)));
+          const grow = reduce || !animated ? 1 : ease(Math.max(0, Math.min(1, (t - p.delay) / 700)));
           if (grow <= 0) continue;
           const n = Math.max(1, Math.round(grow * (p.pts.length - 1)));
           const seg = p.pts.slice(0, n + 1);
           if (grow < 1) seg[seg.length - 1] = at(p.pts, grow);
           lines.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: seg }, properties: { color: p.color, kind: p.kind } });
-          if (!reduce && t > 1300) {
+          if (animated && !reduce && t > 1300) {
             const u = ((t - 1300) * 0.00042 + p.phase) % 1;
             [0, 0.045, 0.09].forEach((lag, k) => {
               const uu = u - lag;
@@ -445,16 +457,16 @@ export default function MapView({ points = [], hubs = [], flow = null, coverage 
             });
           }
         }
-        const ring = reduce ? 0 : (Math.sin(t * 0.004) + 1) / 2;
+        const ring = reduce || !animated ? 0 : (Math.sin(t * 0.004) + 1) / 2;
         pulses.push({ type: 'Feature', geometry: { type: 'Point', coordinates: flow.origin }, properties: { color: c.brand, r: 7 + ring * 4, o: 1, origin: 1 } });
         setData('flow-lines', { type: 'FeatureCollection', features: lines });
         setData('flow-pulses', { type: 'FeatureCollection', features: pulses });
       }
-      if (!reduce) raf.current = requestAnimationFrame(frame);
+      if (!reduce && animated) raf.current = requestAnimationFrame(frame);
     };
     raf.current = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf.current);
-  }, [flow?.key, ready]);
+  }, [flow, ready]);
 
   return <div ref={box} className="map" style={{ height }} role="img" aria-label={label} />;
 }

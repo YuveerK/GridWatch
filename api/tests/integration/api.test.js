@@ -239,6 +239,71 @@ describe('A19: map state per suburb', () => {
     await prisma.outage.create({ data: { id: 'o2', title: 'Other', status: 'ACTIVE', startedAt: t, lastUpdateAt: t } });
     await prisma.outageLocality.create({ data: { outageId: 'o2', localityId: 'la', restored: false } });
     expect(await state()).toEqual({ la: 'out', lb: 'out' });
+    const result = await (await call('/v1/map/node/n1')).json();
+    expect(result.places.find((p) => p.id === 'la')).toMatchObject({ state: 'out', linkedState: 'restored' });
+    expect(result.derived).toBe(true);
+  });
+});
+
+describe('network explorer regressions', () => {
+  const t = new Date('2026-09-20T10:00:00Z');
+  const node = (id, extra = {}) => ({ id, name: id, normalizedKey: id, type: 'RESERVOIR', serviceType: 'WATER', firstSeenAt: t, lastSeenAt: t, ...extra });
+
+  it('retains distant explicit edges, all children, unknown positions and multiple parents', async () => {
+    const children = Array.from({ length: 42 }, (_, i) => node(`water-child-${i}`, { lat: -26, lon: 28 + i * .001 }));
+    children.push(node('far-water', { lat: -27, lon: 29 }), node('unknown-water'));
+    await prisma.infraNode.createMany({ data: [node('water-root', { lat: -26, lon: 28 }), node('parent-a'), node('parent-b'), ...children] });
+    await prisma.infraEdge.createMany({ data: [...children.map((c) => ({ parentId: 'water-root', childId: c.id, relationType: 'SUPPLIES', lastSeenAt: t })), ...['parent-a', 'parent-b'].map((parentId) => ({ parentId, childId: 'water-root', relationType: 'FEEDS', lastSeenAt: t }))] });
+    const map = await (await call('/v1/map/node/water-root')).json();
+    expect(map.origin).toEqual([28, -26]);
+    expect(map.derived).toBe(false);
+    expect(map.children).toHaveLength(44);
+    expect(map.edges).toContainEqual(expect.objectContaining({ toId: 'far-water', relationship: 'SUPPLIES' }));
+    expect(map.unmappedConnections).toBe(3);
+    expect(map.children.find((c) => c.id === 'unknown-water')).toMatchObject({ lat: null, lon: null, derived: null });
+    const detail = await (await call('/v1/infrastructure/water-root')).json();
+    expect(detail.parents.map((p) => p.parentId).sort()).toEqual(['parent-a', 'parent-b']);
+  });
+
+  it('keeps all linked suburbs, including assets whose position is unknown', async () => {
+    await prisma.infraNode.create({ data: node('unknown-asset') });
+    await prisma.locality.createMany({ data: Array.from({ length: 55 }, (_, i) => ({ id: `area-${i}`, canonicalName: `Area ${i}`, normalizedName: `area ${i}`, active: true, sourceLine: i, sourceLabel: 'test', updatedAt: t })) });
+    await prisma.nodeLocality.createMany({ data: Array.from({ length: 55 }, (_, i) => ({ nodeId: 'unknown-asset', localityId: `area-${i}`, relationType: 'SERVES', lastSeenAt: t })) });
+    expect((await (await call('/v1/infrastructure/unknown-asset')).json()).localities).toHaveLength(55);
+    const supply = await (await call('/v1/localities/area-0/supply')).json();
+    expect(supply.assets).toContainEqual(expect.objectContaining({ id: 'unknown-asset', relationType: 'SERVES', lat: null, lon: null }));
+  });
+
+  it('paginates beyond 100 with stable service-scoped results and validates limits', async () => {
+    await prisma.infraNode.createMany({ data: [...Array.from({ length: 105 }, (_, i) => node(`page-${String(i).padStart(3, '0')}`)), node('power-only', { serviceType: 'ELECTRICITY', type: 'SUBSTATION' })] });
+    const first = await (await call('/v1/infrastructure?service=water&limit=100')).json();
+    const second = await (await call('/v1/infrastructure?service=water&limit=100&offset=100')).json();
+    expect(first).toMatchObject({ total: 105, hasMore: true });
+    expect(first.data).toHaveLength(100);
+    expect(second).toMatchObject({ total: 105, hasMore: false });
+    expect(second.data).toHaveLength(5);
+    expect(new Set([...first.data, ...second.data].map((n) => n.id)).size).toBe(105);
+    expect((await call('/v1/infrastructure?limit=101')).status).toBe(400);
+    expect((await call('/v1/infrastructure?offset=-1')).status).toBe(400);
+  });
+
+  it('returns actual official documents and distinct posts for the exact typed connection', async () => {
+    await prisma.infraNode.createMany({ data: [node('evidence-parent'), node('evidence-child')] });
+    await prisma.infraEdge.create({ data: { parentId: 'evidence-parent', childId: 'evidence-child', relationType: 'SUPPLIES', lastSeenAt: t } });
+    const source = await prisma.knowledgeSource.create({ data: { sourceType: 'OFFICIAL_DOCUMENT', url: 'https://example.org/network.pdf', title: 'Official network document' } });
+    await prisma.infrastructureEvidence.createMany({ data: [0, 1].map(() => ({ sourceId: source.id, parentId: 'evidence-parent', childId: 'evidence-child', relationType: 'SUPPLIES', evidenceKind: 'RELATIONSHIP' })) });
+    const path = '/v1/infrastructure/evidence-parent/evidence?parentId=evidence-parent&childId=evidence-child&relationType=SUPPLIES';
+    const official = await (await call(path)).json();
+    expect(official).toMatchObject({ documents: 1, posts: 0, total: 1 });
+    expect(official.data[0]).toMatchObject({ sourceType: 'OFFICIAL_DOCUMENT', url: source.url });
+    await prisma.sourcePost.create({ data: { id: 'source-post', sourceAccount: 'Utility', externalId: '1234', text: 'A supplies B', publishedAt: t, updatedAt: t } });
+    await prisma.evidenceContribution.createMany({ data: [0, 1].map((faultIndex) => ({ postId: 'source-post', faultIndex, kind: 'EDGE', refA: 'evidence-parent', refB: 'SUPPLIES:evidence-child' })) });
+    const social = await (await call(`${path}&kind=posts`)).json();
+    expect(social).toMatchObject({ documents: 1, posts: 1, total: 1 });
+    expect(social.data[0]).toMatchObject({ sourceType: 'SOCIAL_POST', url: 'https://x.com/Utility/status/1234' });
+    expect((await (await call(path.replace('SUPPLIES', 'BACKFEEDS'))).json()).total).toBe(0);
+    expect((await call('/v1/infrastructure/evidence-parent/evidence?parentId=unrelated&childId=another')).status).toBe(400);
+    await prisma.knowledgeSource.delete({ where: { id: source.id } });
   });
 });
 

@@ -4,9 +4,9 @@ import { prisma } from '../../db/prisma.js';
 // drawn at the centre of the suburbs it is known to serve (weighted by how often posts tied them together).
 // That is an inference, and the map says so. The connections (which suburbs it feeds) are real, learned from City Power's own posts.
 
-const HUB_TYPES = ['SDC', 'SUBSTATION', 'SWITCHING_STATION', 'DISTRIBUTOR'];
-const WATER_MAP_TYPES = ['RESERVOIR', 'WATER_TOWER', 'PUMP_STATION', 'PRV', 'DIRECT_FEED', 'WATER_SYSTEM', 'TREATMENT_WORKS', 'BOOSTER_STATION'];
-const SUPPLY_TYPES = new Set(['SUBSTATION', 'SWITCHING_STATION', 'DISTRIBUTOR', 'MINI_SUBSTATION', 'FEEDER', 'WATER_PIPELINE', 'BULK_CONNECTION', 'WATER_OTHER', ...WATER_MAP_TYPES]);
+const HUB_TYPES = ['SDC', 'SUBSTATION', 'SWITCHING_STATION', 'DISTRIBUTOR', 'MINI_SUBSTATION', 'FEEDER', 'TRANSFORMER', 'CABLE', 'KIOSK', 'OTHER'];
+const WATER_MAP_TYPES = ['RESERVOIR', 'WATER_TOWER', 'PUMP_STATION', 'PRV', 'DIRECT_FEED', 'WATER_SYSTEM', 'TREATMENT_WORKS', 'BOOSTER_STATION', 'WATER_PIPELINE', 'BULK_CONNECTION', 'BULK_METER'];
+const SUPPLY_TYPES = new Set([...HUB_TYPES.filter((t) => t !== 'SDC'), 'WATER_OTHER', ...WATER_MAP_TYPES]);
 const LIVE = ['ACTIVE', 'PARTIALLY_RESTORED'];
 
 /** Evidence-weighted centre of some suburbs: [{ lat, lon, w }] -> [lon, lat] or null. */
@@ -54,8 +54,8 @@ export function serviceCentrePlaces(rootId, byNode, edges) {
  * it serves, not recomputed from just that municipality's share. */
 export async function equipmentHubs(municipality) {
   const rows = await prisma.nodeLocality.findMany({
-    where: { locality: { lat: { not: null }, lon: { not: null } } },
-    select: { nodeId: true, evidenceCount: true, locality: { select: { id: true, lat: true, lon: true, Region: { select: { Municipality: { select: { code: true } } } } } }, node: { select: { id: true, name: true, type: true } } },
+    where: { node: { serviceType: 'ELECTRICITY' }, locality: { lat: { not: null }, lon: { not: null } } },
+    select: { nodeId: true, evidenceCount: true, locality: { select: { id: true, lat: true, lon: true, Region: { select: { Municipality: { select: { code: true } } } } } }, node: { select: { id: true, name: true, type: true, lat: true, lon: true, geoSource: true } } },
   });
   const byNode = new Map();
   for (const r of rows) {
@@ -64,14 +64,14 @@ export async function equipmentHubs(municipality) {
     byNode.set(r.nodeId, cur);
   }
   const [liveRows, parents, centres, sdcOutages] = await Promise.all([
-    prisma.outageNode.findMany({ where: { nodeId: { in: [...byNode.keys()] }, outage: { status: { in: LIVE } } }, select: { nodeId: true } }),
+    prisma.outageNode.findMany({ where: { outage: { status: { in: LIVE }, serviceType: 'ELECTRICITY' } }, select: { nodeId: true } }),
     prisma.infraEdge.findMany({ orderBy: { evidenceCount: 'desc' }, select: { childId: true, parentId: true } }),
-    prisma.infraNode.findMany({ where: { type: 'SDC' }, select: { id: true, name: true, type: true, boundary: true, lat: true, lon: true } }),
+    prisma.infraNode.findMany({ where: { serviceType: 'ELECTRICITY', OR: [{ type: 'SDC' }, { lat: { not: null }, lon: { not: null } }] }, select: { id: true, name: true, type: true, boundary: true, lat: true, lon: true, geoSource: true, Municipality: { select: { code: true } } } }),
     prisma.outage.findMany({ where: { status: { in: LIVE }, sdcName: { not: null } }, select: { sdcName: true }, distinct: ['sdcName'] }),
   ]);
   const live = new Set(liveRows.map((r) => r.nodeId));
   const liveSdcs = new Set(sdcOutages.map((r) => r.sdcName));
-  const centreHubs = centres.map((node) => ({ node, pts: serviceCentrePlaces(node.id, byNode, parents) }));
+  const centreHubs = centres.map((node) => ({ node, pts: node.type === 'SDC' ? serviceCentrePlaces(node.id, byNode, parents) : byNode.get(node.id)?.pts ?? [] }));
   for (const hub of centreHubs) {
     byNode.set(hub.node.id, hub);
     if (liveSdcs.has(hub.node.name)) live.add(hub.node.id);
@@ -81,11 +81,11 @@ export async function equipmentHubs(municipality) {
   const code = municipality?.toUpperCase();
   return [...byNode.values()]
     .filter(({ node }) => HUB_TYPES.includes(node.type))
-    .filter(({ pts }) => !code || pts.some((p) => p.municipality === code))
+    .filter(({ node, pts }) => !code || node.Municipality?.code === code || pts.some((p) => p.municipality === code))
     .map(({ node, pts }) => {
       const c = weightedCentre(pts);
       const own = node.lon != null && node.lat != null ? [node.lon, node.lat] : c;
-      return own && { id: node.id, name: node.name, type: node.type, lon: own[0], lat: own[1], boundary: node.boundary ?? null, served: pts.length, live: live.has(node.id), parentId: parentOf.get(node.id) ?? null };
+      return own && { id: node.id, name: node.name, type: node.type, service: 'ELECTRICITY', lon: own[0], lat: own[1], derived: node.lat == null || node.lon == null || node.geoSource === 'derived-from-localities', boundary: node.boundary ?? null, served: pts.length, live: live.has(node.id), parentId: parentOf.get(node.id) ?? null };
     })
     .filter(Boolean);
 }
@@ -99,7 +99,7 @@ export function placeWaterHub(node, live = false) {
   if (!centre) return null;
   return {
     id: node.id, name: node.name, type: node.type, lon: centre[0], lat: centre[1], served: pts.length, live: Boolean(live),
-    boundary: node.boundary ?? null, derived: node.lat == null || node.lon == null,
+    service: node.serviceType ?? 'WATER', boundary: node.boundary ?? null, derived: node.lat == null || node.lon == null || node.geoSource === 'derived-from-localities',
   };
 }
 
@@ -113,17 +113,16 @@ export async function waterMapHubs(municipality) {
       ...(code ? { OR: [{ Municipality: { code } }, { municipalityId: null, localities: { some: { locality: { Region: { Municipality: { code } } } } } }] } : {}),
     },
     select: {
-      id: true, name: true, type: true, lat: true, lon: true, boundary: true, metadata: true,
+      id: true, name: true, type: true, lat: true, lon: true, boundary: true, metadata: true, geoSource: true,
       localities: { select: { evidenceCount: true, locality: { select: { lat: true, lon: true } } } },
     },
     orderBy: { name: 'asc' },
-    take: 500,
   });
   const liveRows = nodes.length
     ? await prisma.outageNode.findMany({ where: { nodeId: { in: nodes.map((node) => node.id) }, outage: { status: { in: LIVE }, serviceType: 'WATER' } }, select: { nodeId: true } })
     : [];
   const live = new Set(liveRows.map((row) => row.nodeId));
-  return nodes.filter((node) => node.type !== 'WATER_OTHER' || node.metadata?.role === 'depot').map((node) => placeWaterHub(node, live.has(node.id))).filter(Boolean);
+  return nodes.map((node) => placeWaterHub(node, live.has(node.id))).filter(Boolean);
 }
 
 /** Suburb plus the power and water assets posts have tied to it, each placed on the map. */
@@ -133,10 +132,11 @@ export function supplyView(locality, links, pointsByNode, liveIds) {
     const node = link.node;
     if (!node || !SUPPLY_TYPES.has(node.type)) continue;
     const centre = node.lat != null && node.lon != null ? [node.lon, node.lat] : weightedCentre(pointsByNode.get(node.id) ?? []);
-    if (!centre) continue;
     assets.push({
       id: node.id, name: node.name, type: node.type, service: node.serviceType,
-      lon: centre[0], lat: centre[1], evidence: link.evidenceCount ?? 0, live: liveIds.has(node.id),
+      lon: centre?.[0] ?? null, lat: centre?.[1] ?? null, derived: centre ? node.lat == null || node.lon == null || node.geoSource === 'derived-from-localities' : null,
+      relationType: link.relationType ?? 'ASSOCIATED',
+      evidence: link.evidenceCount ?? 0, live: liveIds.has(node.id),
     });
   }
   assets.sort((a, b) => b.evidence - a.evidence || String(a.name).localeCompare(String(b.name)));
@@ -151,7 +151,7 @@ export async function localitySupply(localityId) {
     where: { id: localityId },
     select: {
       id: true, canonicalName: true, lat: true, lon: true, boundary: true,
-      nodes: { orderBy: { evidenceCount: 'desc' }, select: { evidenceCount: true, node: { select: { id: true, name: true, type: true, serviceType: true, lat: true, lon: true } } } },
+      nodes: { orderBy: { evidenceCount: 'desc' }, select: { evidenceCount: true, relationType: true, node: { select: { id: true, name: true, type: true, serviceType: true, lat: true, lon: true, geoSource: true } } } },
     },
   });
   if (!locality) return null;
@@ -173,33 +173,33 @@ export async function localitySupply(localityId) {
  * The connections to animate for one piece of equipment: equipment -> the distributors under it -> the suburbs they serve
  * (a suburb hangs off the downstream piece that names it most often, otherwise straight off the equipment itself).
  */
-export async function equipmentFlow(rootId, places) {
-  const hubs = await equipmentHubs();
-  const hubById = new Map(hubs.map((h) => [h.id, h]));
-  const root = hubById.get(rootId);
-  const rootPts = places.map((p) => ({ lat: p.lat, lon: p.lon, w: p.evidence || 1 }));
-  const origin = root ? [root.lon, root.lat] : weightedCentre(rootPts);
-  if (!origin) return { origin: null, children: [], edges: [] };
-
-  const kids = await prisma.infraEdge.findMany({ where: { parentId: rootId }, orderBy: { evidenceCount: 'desc' }, take: 40, select: { childId: true } });
-  const allKids = kids.map((k) => hubById.get(k.childId)).filter(Boolean);
-  // a circuit whose inferred position is far from its parent is drawn from the parent instead (its own centre is skewed by a far-off suburb)
-  const nearIds = new Set(withoutOutliers(allKids, origin).map((c) => c.id));
-  const children = allKids.map((c) => ({ ...c, near: nearIds.has(c.id) }));
-  const childIds = children.filter((c) => c.near).map((c) => c.id);
-  const served = childIds.length
-    ? await prisma.nodeLocality.findMany({ where: { nodeId: { in: childIds } }, select: { nodeId: true, localityId: true, evidenceCount: true } })
-    : [];
-  const best = new Map(); // suburb -> the child that names it most
-  for (const s of served) if (!best.has(s.localityId) || s.evidenceCount > best.get(s.localityId).evidenceCount) best.set(s.localityId, s);
-
-  const edges = children.filter((c) => c.near).map((c) => ({ from: origin, to: [c.lon, c.lat], toId: c.id, kind: 'equipment', live: c.live }));
-  // draw the well-supported connections: a suburb named once in a big multi-area graphic is weak evidence (and stretches the map)
-  const strong = places.filter((p) => (p.evidence ?? 1) >= 2);
-  for (const p of withoutOutliers(strong.length >= 3 ? strong : places, origin).slice(0, 150)) {
-    const via = best.get(p.id);
-    const child = via && hubById.get(via.nodeId);
-    edges.push({ from: child ? [child.lon, child.lat] : origin, to: [p.lon, p.lat], toId: p.id, kind: 'suburb', live: Boolean(p.live) });
+export async function equipmentFlow(rootId, places, serviceType = 'ELECTRICITY') {
+  const [rootNode, links, incoming] = await Promise.all([
+    prisma.infraNode.findUnique({ where: { id: rootId }, include: { localities: { include: { locality: true } } } }),
+    prisma.infraEdge.findMany({ where: { parentId: rootId, child: { serviceType } }, orderBy: [{ evidenceCount: 'desc' }, { childId: 'asc' }], include: { child: { include: { localities: { include: { locality: true } } } } } }),
+    prisma.infraEdge.findMany({ where: { childId: rootId, parent: { serviceType } }, orderBy: [{ evidenceCount: 'desc' }, { parentId: 'asc' }], include: { parent: { include: { localities: { include: { locality: true } } } } } }),
+  ]);
+  const root = rootNode && placeWaterHub(rootNode);
+  const origin = root ? [root.lon, root.lat] : weightedCentre(places.map((p) => ({ lat: p.lat, lon: p.lon, w: p.evidence || 1 })));
+  const liveRows = await prisma.outageNode.findMany({ where: { nodeId: { in: [rootId, ...links.map((e) => e.childId), ...incoming.map((e) => e.parentId)] }, outage: { status: { in: LIVE }, serviceType } }, select: { nodeId: true } });
+  const live = new Set(liveRows.map((r) => r.nodeId));
+  const children = links.map((e) => ({
+    ...(placeWaterHub(e.child, live.has(e.childId)) ?? { id: e.childId, name: e.child.name, type: e.child.type, service: serviceType, lon: null, lat: null, derived: null, live: live.has(e.childId) }),
+    relationType: e.relationType, evidence: e.evidenceCount, near: true,
+  }));
+  const parents = incoming.map((e) => ({
+    ...(placeWaterHub(e.parent, live.has(e.parentId)) ?? { id: e.parentId, name: e.parent.name, type: e.parent.type, service: serviceType, lon: null, lat: null, derived: null, live: live.has(e.parentId) }),
+    relationType: e.relationType, evidence: e.evidenceCount,
+  }));
+  // Explicit relationships survive regardless of distance or report count. No physical route is inferred between suburbs.
+  const edges = origin ? children.filter((c) => c.lon != null && c.lat != null).map((c) => ({
+    from: origin, to: [c.lon, c.lat], toId: c.id, kind: 'equipment',
+    relationship: rootNode?.type === 'SDC' || c.type === 'SDC' ? 'ADMINISTRATIVE' : c.relationType,
+    evidence: c.evidence, live: c.live,
+  })) : [];
+  if (origin) for (const p of parents.filter((p) => p.lon != null && p.lat != null)) edges.push({ from: [p.lon, p.lat], to: origin, toId: rootId, fromId: p.id, kind: 'equipment', relationship: p.type === 'SDC' || rootNode?.type === 'SDC' ? 'ADMINISTRATIVE' : p.relationType, live: p.live });
+  if (origin) for (const p of places) {
+    edges.push({ from: origin, to: [p.lon, p.lat], toId: p.id, kind: 'suburb', relationship: 'ASSOCIATED', live: Boolean(p.live) });
   }
-  return { origin, children, edges };
+  return { origin, derived: root?.derived ?? (origin ? true : null), live: live.has(rootId), parents, children, edges, unmappedConnections: [...children, ...parents].filter((c) => !origin || c.lon == null || c.lat == null).length };
 }

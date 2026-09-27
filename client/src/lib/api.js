@@ -12,7 +12,7 @@ export async function get(path) {
  * { data, error, loading, refreshing } for a GET path (null path = skip).
  * While a new path loads, the previous data is kept so the layout never jumps.
  */
-export function useApi(path, { refreshMs } = {}) {
+export function useApi(path, { refreshMs, keepPrevious = true } = {}) {
   const [state, setState] = useState({ data: null, error: null, loading: Boolean(path), refreshing: false });
   const alive = useRef(true);
   useEffect(() => {
@@ -27,8 +27,8 @@ export function useApi(path, { refreshMs } = {}) {
     const load = (initial) => {
       setState((s) => ({ ...s, loading: initial && !s.data, refreshing: Boolean(s.data), error: null }));
       get(path)
-        .then((data) => !cancelled && setState({ data, error: null, loading: false, refreshing: false }))
-        .catch((error) => !cancelled && setState((s) => ({ ...s, error, loading: false, refreshing: false })));
+        .then((data) => !cancelled && setState({ data, dataPath: path, error: null, loading: false, refreshing: false }))
+        .catch((error) => !cancelled && setState((s) => ({ ...s, error, errorPath: path, loading: false, refreshing: false })));
     };
     load(true);
     const timer = refreshMs ? setInterval(() => load(false), refreshMs) : null;
@@ -40,6 +40,7 @@ export function useApi(path, { refreshMs } = {}) {
       window.removeEventListener('gridwatch:refreshed', onRefreshed);
     };
   }, [path, refreshMs]);
+  if (!keepPrevious && state.dataPath !== path) return { ...state, data: null, error: state.errorPath === path ? state.error : null, loading: Boolean(path) && state.errorPath !== path };
   return state;
 }
 

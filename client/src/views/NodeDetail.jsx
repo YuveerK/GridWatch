@@ -6,6 +6,7 @@ import OutageCard from '../components/OutageCard.jsx';
 import { Chip, Crumbs, ErrorState, SectionHead, ServiceIdentity, Skeleton } from '../components/ui.jsx';
 import { fmtDay, nice, plural, prettySdc, typeLabel, useApi } from '../lib/api.js';
 import { useDocumentTitle } from '../lib/hooks.js';
+import { inService } from '../lib/service.jsx';
 import { useUtility } from '../lib/municipality.jsx';
 
 const ABOUT = {
@@ -28,7 +29,7 @@ const ABOUT = {
 
 export default function NodeDetail() {
   const { id } = useParams();
-  const { data: n, error, loading } = useApi(`/v1/infrastructure/${id}`);
+  const { data: n, error, loading } = useApi(`/v1/infrastructure/${id}`, { keepPrevious: false });
   useDocumentTitle(n?.name);
   const { utility } = useUtility(n?.municipalityId, n?.serviceType);
 
@@ -38,14 +39,11 @@ export default function NodeDetail() {
   const live = n.recentOutages.filter((o) => o.status === 'ACTIVE' || o.status === 'PARTIALLY_RESTORED');
   const water = n.serviceType === 'WATER';
   const past = n.recentOutages.filter((o) => !live.includes(o));
-  const grouped = n.children.reduce((acc, c) => {
-    (acc[c.child.type] ??= []).push(c);
-    return acc;
-  }, {});
+
 
   return (
     <div className="container page">
-      <Crumbs items={[{ label: 'Network', to: '/network' }, ...n.chain.map((c) => ({ label: c.type === 'SDC' ? prettySdc(c.name) : c.name, to: `/network/${c.id}` })), { label: n.type === 'SDC' ? prettySdc(n.name) : n.name }]} />
+      <Crumbs items={[{ label: 'Network', to: inService('/network', n.serviceType) }, { label: n.type === 'SDC' ? prettySdc(n.name) : n.name }]} />
 
       <header className="page-head">
         <div className="row" style={{ gap: 10, marginBottom: 8 }}>
@@ -58,14 +56,15 @@ export default function NodeDetail() {
       </header>
 
       <div className="cols-3" style={{ marginBottom: 8 }}>
-        <div className="card card-pad"><div className="small muted">Mentioned in</div><div style={{ fontSize: 28, fontWeight: 600 }} className="num">{plural(n.evidenceCount, 'post')}</div><div className="small faint">{n.lifecycle === 'CONFIRMED' ? 'Confirmed by several posts' : 'Seen only once so far'}</div></div>
+        <div className="card card-pad"><div className="small muted">Connection evidence</div><p>Inspect source documents and individual posts below. The available network is incomplete.</p></div>
         <div className="card card-pad"><div className="small muted">First seen</div><div style={{ fontSize: 22, fontWeight: 600 }}>{fmtDay(n.firstSeenAt)}</div></div>
         <div className="card card-pad"><div className="small muted">Last seen</div><div style={{ fontSize: 22, fontWeight: 600 }}>{fmtDay(n.lastSeenAt)}</div></div>
       </div>
 
       <section className="section" aria-labelledby="flow-h">
-        <SectionHead id="flow-h" title={water ? 'Known supply connections' : 'How power flows here'} sub={`Connections inferred from ${utility}'s posts; this may not show the complete route`} />
-        <FeedFlow node={n} />
+        <SectionHead id="flow-h" title={water ? 'Reported water connections' : 'Reported electricity connections'} sub="Known connections and their source evidence. Unknown links are shown explicitly." />
+        <Link className="btn" to={inService(`/network?asset=${n.id}&view=connections`, n.serviceType)}>Open in network explorer</Link>
+        <FeedFlow key={n.id} node={n} />
       </section>
 
       {live.length > 0 && (
@@ -75,35 +74,7 @@ export default function NodeDetail() {
         </section>
       )}
 
-      {n.children.length > 0 && (
-        <section className="section">
-          <SectionHead title={n.type === 'SDC' ? 'Equipment it looks after' : 'What it feeds'} sub={`Equipment seen downstream of this one in ${utility}'s posts`} />
-          <div className="stack" style={{ gap: 14 }}>
-            {Object.entries(grouped).map(([type, list]) => (
-              <div key={type} className="card card-pad">
-                <div className="small muted" style={{ marginBottom: 10, fontWeight: 500 }}>{typeLabel(type)}s · {list.length}</div>
-                <div className="chips">
-                  {list.map((c) => (
-                    <Link key={c.childId} to={`/network/${c.childId}`} className="chip">
-                      {c.child.live && <span className="dot live" style={{ width: 7, height: 7 }} title="Outage in progress" />}
-                      {nice(c.child.name)}
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
       <NodeReach id={n.id} service={n.serviceType} />
-
-      {n.localities.length > 0 && (
-        <section className="section">
-          <SectionHead title="Areas affected when it fails" sub={`Suburbs named in ${water ? 'water incidents' : 'electricity outages'} involving this asset. More reports make this more complete.`} />
-          <div className="card card-pad"><div className="chips">{n.localities.map((l) => <Chip key={l.localityId} to={`/suburb/${l.localityId}`} title={`Seen in ${plural(l.evidenceCount, 'post')}`}>{nice(l.locality.canonicalName)} <small>{l.evidenceCount}×</small></Chip>)}</div></div>
-        </section>
-      )}
 
       {past.length > 0 && (
         <section className="section">
