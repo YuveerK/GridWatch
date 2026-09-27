@@ -550,6 +550,22 @@
       "fb": 0,
       "same": true,
       "why": "Lynnwood, 18-19 July: one medium-voltage cable fault on Alpine Way (a Lynnwood street, per OpenStreetMap): the 18 July alert, the 19 July 'remain off until the faults are fixed' and the cable-jointing update"
+    },
+    {
+      "a": "2104106713880076300",
+      "fa": 0,
+      "b": "2104097042834317546",
+      "fb": 1,
+      "same": true,
+      "why": "same Noordwyk investigation, named more precisely in the follow-up"
+    },
+    {
+      "a": "2104134805168247164",
+      "fa": 0,
+      "b": "2104097042834317546",
+      "fb": 1,
+      "same": true,
+      "why": "restoration of the same Noordwyk investigation"
     }
   ]
 }

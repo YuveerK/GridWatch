@@ -1,6 +1,6 @@
 // Correct where one post belongs. The correction is stored, so every later re-link or rebuild applies it again.
 //   node scripts/correct-link.js <post> --split --from <post> [--note "why"]  make it its own new outage (--from: the post it was wrongly joined with)
-//   node scripts/correct-link.js <post> --join <anchorPost> [--note ".."]  put it in the outage the anchor post is in
+//   node scripts/correct-link.js <post> --join <anchorPost> [--anchor-fault N] [--note ".."]  put it in the outage the anchor post is in (fault 0 unless --anchor-fault says which fault of a multi-fault graphic)
 //   node scripts/correct-link.js <post> --clear                            drop the correction (normal rules decide again)
 //   node scripts/correct-link.js --list                                    show every stored correction
 // <post> is a database id or the X post id. Add --fault N for a graphic with several faults. Without --apply it only reports.
@@ -12,7 +12,7 @@ const { reprocessPost } = await import('../src/modules/processing/processor.serv
 
 const args = process.argv.slice(2);
 const flag = (n) => (args.includes(n) ? args[args.indexOf(n) + 1] : null);
-const valueFlags = new Set(['--join', '--note', '--fault', '--from']);
+const valueFlags = new Set(['--join', '--note', '--fault', '--from', '--anchor-fault']);
 const positional = args.filter((a, i) => !a.startsWith('--') && !valueFlags.has(args[i - 1]));
 const apply = args.includes('--apply');
 const find = (ref) => prisma.sourcePost.findFirst({ where: { OR: [{ id: ref }, { externalId: ref }] }, select: { id: true, externalId: true, publishedAt: true, text: true, noteTweetText: true } });
@@ -46,15 +46,18 @@ if (mode === 'SPLIT' && flag('--from')) {
   if (!contrast) fail(`The post to keep it apart from was not found: ${flag('--from')}`);
 }
 let anchor = null;
+const anchorFaultIndex = Number(flag('--anchor-fault') ?? 0);
 if (mode === 'JOIN') {
   anchor = await find(flag('--join'));
   if (!anchor) fail(`Anchor post not found: ${flag('--join')}`);
-  if (!(await prisma.outagePost.count({ where: { postId: anchor.id } }))) fail('The anchor post is not part of any outage yet.');
+  if (!Number.isInteger(anchorFaultIndex) || anchorFaultIndex < 0) fail('--anchor-fault must be a fault number.');
+  if (!(await prisma.outagePost.count({ where: { postId: anchor.id, faultIndex: anchorFaultIndex } }))) fail(`The anchor post has no fault ${anchorFaultIndex}.`);
 }
 
 console.log(`${post.externalId}  ${post.publishedAt.toISOString().slice(0, 16)}Z\n  "${(post.noteTweetText || post.text).replace(/\s+/g, ' ').slice(0, 160)}"`);
 console.log('Now in:', (await where(post.id)).join('\n        ') || 'no outage');
-console.log(mode === 'SPLIT' ? 'Will become: its own new outage' : mode === 'JOIN' ? `Will join: ${(await where(anchor.id)).join(' | ')}` : 'Will: go back to the normal rules');
+const anchorWhere = mode === 'JOIN' ? await prisma.outagePost.findMany({ where: { postId: anchor.id, faultIndex: anchorFaultIndex }, select: { outage: { select: { id: true, title: true, status: true, startedAt: true, _count: { select: { posts: true } } } } } }) : [];
+console.log(mode === 'SPLIT' ? 'Will become: its own new outage' : mode === 'JOIN' ? `Will join fault ${anchorFaultIndex}: ${anchorWhere.map((l) => `${l.outage.title} [${l.outage.status}] started ${l.outage.startedAt.toISOString().slice(0, 16)}, ${l.outage._count.posts} posts (${l.outage.id})`).join(' | ')}` : 'Will: go back to the normal rules');
 if (!apply) {
   console.log('\nReport only. Add --apply to do it (a snapshot is saved first, so it can be undone).');
   await prisma.$disconnect();
@@ -67,7 +70,7 @@ const { saveSnapshotFile } = await import('../src/modules/processing/repair-file
 const snapshotFile = saveSnapshotFile(await snapshotForPosts(prisma, [post.id]), 'correction');
 console.log(`Snapshot saved: ${snapshotFile}   (undo: node scripts/restore-repair.js ${snapshotFile} --apply)`);
 if (mode === 'CLEAR') await clearOverride(post.id, faultIndex);
-else await setOverride({ postId: post.id, faultIndex, action: mode, anchorPostId: anchor?.id ?? null, note: flag('--note'), contrastPostId: contrast?.id ?? null });
+else await setOverride({ postId: post.id, faultIndex, action: mode, anchorPostId: anchor?.id ?? null, anchorFaultIndex, note: flag('--note'), contrastPostId: contrast?.id ?? null });
 const res = await reprocessPost(post.id);
 if (res.outcome === 'BUSY') fail('The pipeline is busy (a fetch is running). The correction is stored; re-run the same command in a minute to apply it.');
 console.log('Re-linked:', res);
