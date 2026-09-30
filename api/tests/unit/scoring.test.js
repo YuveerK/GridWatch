@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyRevivalRule, scoreCandidate } from '../../src/modules/outages/scoring.js';
+import { applyRevivalRule, boardLineOnLiveAssets, sameDayWaterUpdate, scoreCandidate, soleHashtagIncident } from '../../src/modules/outages/scoring.js';
 
 const t0 = new Date('2026-09-16T08:00:00Z');
 const hoursLater = (h) => new Date(t0.getTime() + h * 3_600_000);
@@ -133,6 +133,23 @@ describe('a suburb-only update of the same area', () => {
     expect(scoreCandidate(post({ ...update, kind: 'PLANNED', relevance: 'PLANNED_OUTAGE' }), area).score).toBe(0);
   });
 
+  it('links an overnight suburb-only update of the same single suburb (Fontainebleau, 28 Sept)', () => {
+    const open = outage({ nodeIds: new Set(), localityIds: new Set(['fontainebleau']), sdcName: 'Randburg' });
+    const update = post({
+      nodeIds: new Set(),
+      localityIds: new Set(['fontainebleau']),
+      sdcName: 'Randburg',
+      relevance: 'OUTAGE',
+      status: 'REPAIRING',
+      postedAt: hoursLater(10),
+    });
+    const scored = scoreCandidate(update, open);
+    expect(scored.reasons).toContain('same suburbs, no new equipment');
+    expect(scored.score).toBeGreaterThanOrEqual(0.7);
+    expect(scoreCandidate(post({ ...update, postedAt: hoursLater(18) }), open).score).toBeLessThan(0.7);
+    expect(scoreCandidate(update, outage({ nodeIds: new Set(['station']), localityIds: new Set(['fontainebleau']) })).reasons).not.toContain('same suburbs, no new equipment');
+  });
+
   it('does not apply the electricity suburb rule to a water post', () => {
     const r = scoreCandidate(post({ ...update, serviceType: 'WATER' }), { ...area, serviceType: 'WATER' });
     expect(r.reasons ?? []).not.toContain('same suburbs, no new equipment');
@@ -203,6 +220,29 @@ describe('two distributors under one substation', () => {
     });
     expect(scoreCandidate(p, o).score).toBeLessThan(0.35);
   });
+  it('links a same-morning restoration of another distributor at that substation (Bloubosrand, 28 Sept)', () => {
+    const o = outage({
+      status: 'RESTORED',
+      restoredAt: hoursLater(1),
+      lastUpdateAt: hoursLater(1),
+      nodeIds: new Set(['houtkoppen', 'incomer-2', 'bellairs']),
+      localityIds: new Set(['bloubosrand', 'northriding', 'cedar']),
+      nodes: [nodes('houtkoppen', 'SUBSTATION'), nodes('incomer-2', 'OTHER'), nodes('bellairs', 'DISTRIBUTOR')],
+      sdcName: 'Randburg',
+    });
+    const p = post({
+      relevance: 'RESTORATION',
+      status: 'RESTORED',
+      nodeIds: new Set(['houtkoppen', 'bloubosrand-dist']),
+      localityIds: new Set(['bloubosrand', 'waterford']),
+      nodes: [nodes('houtkoppen', 'SUBSTATION'), nodes('bloubosrand-dist', 'DISTRIBUTOR')],
+      sdcName: 'Randburg',
+      postedAt: hoursLater(4),
+    });
+    const scored = scoreCandidate(p, o);
+    expect(scored.reasons).toContain('restoration under the same substation');
+    expect(scored.score).toBeGreaterThanOrEqual(0.7);
+  });
   it('still links when both sides name the same distributor', () => {
     const o = outage({
       nodeIds: new Set(['khanyisa', 'cottesmore']),
@@ -220,6 +260,20 @@ describe('two distributors under one substation', () => {
 });
 
 describe('a restoration of a suburb-only outage', () => {
+  it('joins a same-day report that named only one suburb (Eagle Canyon, 27 Sept)', () => {
+    const open = outage({ nodeIds: new Set(), localityIds: new Set(['eagle']), status: 'ACTIVE' });
+    const restoration = post({
+      relevance: 'RESTORATION',
+      status: 'RESTORED',
+      nodeIds: new Set(['sub', 'dist']),
+      localityIds: new Set(['eagle']),
+      postedAt: hoursLater(4),
+    });
+    const scored = scoreCandidate(restoration, open);
+    expect(scored.reasons).toContain('restoration of the same suburbs');
+    expect(scored.score).toBeGreaterThanOrEqual(0.7);
+  });
+
   it('links even when the restoration was posted under a different service centre (Westfield / Elphin Lodge)', () => {
     const o = outage({ nodeIds: new Set(), localityIds: new Set(['elphin', 'rand-aid']), sdcName: 'Alexandra' });
     const p = post({
@@ -233,6 +287,28 @@ describe('a restoration of a suburb-only outage', () => {
     const r = scoreCandidate(p, o);
     expect(r.reasons).toContain('restoration of the same suburbs');
     expect(r.score).toBeGreaterThanOrEqual(0.7);
+  });
+});
+
+describe('a same-day water notice that names a live reservoir', () => {
+  const postAt = hoursLater(8);
+  const live = {
+    score: 0.44,
+    status: 'ACTIVE',
+    digest: false,
+    nodeIds: new Set(['crosby']),
+    nodes: [{ id: 'crosby', type: 'RESERVOIR' }],
+    raw: { startedAt: t0 },
+  };
+  const notice = { serviceType: 'WATER', nodeIds: new Set(['crosby', 'brixton', 'hursthill']), postedAt: postAt };
+
+  it('updates that reservoir (Crosby on the Commando notice, 28 Sept)', () => {
+    expect(sameDayWaterUpdate(notice, live)).toBe(true);
+  });
+  it('does not attach a notice to a weeks-old reservoir or to an upstream pump alone', () => {
+    expect(sameDayWaterUpdate(notice, { ...live, raw: { startedAt: hoursLater(-200) } })).toBe(false);
+    expect(sameDayWaterUpdate(notice, { ...live, nodeIds: new Set(['eikenhof']), nodes: [{ id: 'eikenhof', type: 'PUMP_STATION' }] })).toBe(false);
+    expect(sameDayWaterUpdate(notice, { ...live, digest: true })).toBe(false);
   });
 });
 
@@ -252,6 +328,16 @@ describe('water: recent news about the same place', () => {
   });
 });
 
+describe('water: an update of exactly the same assets', () => {
+  it('joins that incident without a tie-break (Florida North Tower, 27 Sept)', () => {
+    const tower = outage({ serviceType: 'WATER', nodeIds: new Set(['florida']), localityIds: new Set(), lastUpdateAt: t0 });
+    const update = post({ serviceType: 'WATER', nodeIds: new Set(['florida']), localityIds: new Set(), postedAt: hoursLater(21) });
+    const scored = scoreCandidate(update, tower);
+    expect(scored.reasons).toContain('same water assets');
+    expect(scored.score).toBeGreaterThanOrEqual(0.7);
+  });
+});
+
 describe('water: a deliberate closure on a status board joins the announced planned job', () => {
   // Sandton meters closed 23 Sept 20:00-04:00 SAST (18:00-02:00 UTC); the 17:45 SAST board: "Illovo Reservoir Overnight closure"
   const job = outage({ serviceType: 'WATER', kind: 'PLANNED', status: 'PLANNED', nodeIds: new Set(['illovo', 'bryanston']), localityIds: new Set(), scheduledStart: new Date('2026-09-23T18:00:00Z'), scheduledEnd: new Date('2026-09-24T02:00:00Z'), lastUpdateAt: new Date('2026-09-23T08:00:00Z') });
@@ -268,5 +354,117 @@ describe('water: a deliberate closure on a status board joins the announced plan
     expect(scoreCandidate(line({ nodeIds: new Set(['morningside']) }), job).score).toBe(0); // not an asset of the job
     expect(scoreCandidate(line({ postedAt: new Date('2026-09-25T15:47:00Z') }), job).score).toBe(0); // two days later
     expect(scoreCandidate(line(), { ...job, scheduledStart: null, scheduledEnd: null }).score).toBe(0); // no announced window
+  });
+});
+
+describe('a later notice that adds a suburb to a suburb-only incident', () => {
+  it('links Commercia Extension 09 when the follow-up also names Rabie Ridge (29 Sept)', () => {
+    const open = outage({ nodeIds: new Set(), localityIds: new Set(['commercia']), sdcName: 'Midrand' });
+    const update = post({
+      nodeIds: new Set(),
+      localityIds: new Set(['commercia', 'rabie']),
+      relevance: 'OUTAGE',
+      sdcName: 'Midrand',
+      postedAt: hoursLater(2),
+    });
+    const scored = scoreCandidate(update, open);
+    expect(scored.reasons).toContain('same suburbs, no new equipment');
+    expect(scored.score).toBeGreaterThanOrEqual(0.7);
+  });
+
+  it('does not swallow a long suburb list into a one-suburb incident', () => {
+    const open = outage({ nodeIds: new Set(), localityIds: new Set(['commercia']), sdcName: 'Midrand' });
+    const bulletin = post({
+      nodeIds: new Set(),
+      localityIds: new Set(['commercia', 'a', 'b', 'c', 'd']),
+      relevance: 'OUTAGE',
+      sdcName: 'Midrand',
+      postedAt: hoursLater(2),
+    });
+    expect(scoreCandidate(bulletin, open).score).toBeLessThan(0.7);
+  });
+});
+
+describe('a graphic that shortens the distributor name', () => {
+  const named = (id, type, name) => ({ id, type, name });
+  it('links the morning Northcliff line to the overnight Northcliff Ring Main Unit (29 Sept)', () => {
+    const open = outage({
+      nodeIds: new Set(['roosevelt', 'rmu']),
+      localityIds: new Set(['northcliff', 'franklin']),
+      nodes: [named('roosevelt', 'SUBSTATION', 'Roosevelt'), named('rmu', 'DISTRIBUTOR', 'Northcliff Ring Main Unit')],
+      sdcName: 'Hursthill',
+    });
+    const graphic = post({
+      nodeIds: new Set(['northcliff']),
+      localityIds: new Set(['northcliff']),
+      nodes: [named('northcliff', 'DISTRIBUTOR', 'Northcliff')],
+      relevance: 'OUTAGE',
+      sdcName: 'Hursthill',
+      postedAt: hoursLater(6),
+    });
+    const scored = scoreCandidate(graphic, open);
+    expect(scored.reasons).toContain('same area, equipment named more loosely');
+    expect(scored.score).toBeGreaterThanOrEqual(0.7);
+  });
+
+  it('still keeps a different distributor separate (Blackheath vs Northcliff Ring Main Unit)', () => {
+    const open = outage({
+      nodeIds: new Set(['roosevelt', 'blackheath-dist']),
+      localityIds: new Set(['northcliff', 'blackheath', 'berario']),
+      nodes: [named('roosevelt', 'SUBSTATION', 'Roosevelt'), named('blackheath-dist', 'DISTRIBUTOR', 'Blackheath')],
+      sdcName: 'Hursthill',
+    });
+    const other = post({
+      nodeIds: new Set(['roosevelt', 'rmu']),
+      localityIds: new Set(['northcliff', 'franklin']),
+      nodes: [named('roosevelt', 'SUBSTATION', 'Roosevelt'), named('rmu', 'DISTRIBUTOR', 'Northcliff Ring Main Unit')],
+      relevance: 'OUTAGE',
+      sdcName: 'Hursthill',
+      postedAt: hoursLater(0.05),
+    });
+    expect(scoreCandidate(other, open).reasons).not.toContain('same area, equipment named more loosely');
+    expect(scoreCandidate(other, open).score).toBeLessThan(0.35);
+  });
+});
+
+describe('a status-board line for an asset a live incident already has', () => {
+  const posted = new Date('2026-09-29T11:12:00Z');
+  const line = { serviceType: 'WATER', fromDigest: true, nodeIds: new Set(['brixton-tower']), postedAt: posted };
+  const crosby = { id: 'crosby', status: 'ACTIVE', digest: false, nodeIds: new Set(['crosby', 'brixton-tower', 'hursthill']), lastUpdateAt: new Date('2026-09-28T19:21:00Z'), nodes: [] };
+
+  it('joins that incident (Brixton 1 Tower on Crosby, 29 Sept)', () => {
+    expect(boardLineOnLiveAssets(line, crosby)).toBe(true);
+  });
+
+  it('does not join a digest, a quiet incident, or a line about some other asset', () => {
+    expect(boardLineOnLiveAssets(line, { ...crosby, digest: true })).toBe(false);
+    expect(boardLineOnLiveAssets(line, { ...crosby, lastUpdateAt: new Date('2026-09-27T00:00:00Z') })).toBe(false);
+    expect(boardLineOnLiveAssets({ ...line, nodeIds: new Set(['other']) }, crosby)).toBe(false);
+  });
+
+  it('still sees the update that existed when the post was published, after a later post moved the incident forward', () => {
+    const later = {
+      ...crosby,
+      lastUpdateAt: new Date('2026-09-29T18:26:00Z'),
+      raw: { posts: [{ postId: 'older', postedAt: new Date('2026-09-28T19:21:00Z') }, { postId: 'newer', postedAt: new Date('2026-09-29T18:26:00Z') }] },
+    };
+    expect(boardLineOnLiveAssets({ ...line, id: 'board' }, later)).toBe(true);
+  });
+});
+
+describe('a placeless follow-up whose hashtag names one live incident', () => {
+  const posted = new Date('2026-09-29T19:11:00Z');
+  const villeria = { id: 'villeria', status: 'ACTIVE', lastUpdateAt: new Date('2026-09-29T09:28:00Z'), nodes: [{ name: 'Njala Infeed' }, { name: 'Watloo' }] };
+
+  it('continues that incident (#NjalaUpdate, 29 Sept)', () => {
+    const hit = soleHashtagIncident('#NjalaUpdate: Technicians are experiencing challenges to energise Line 1', [villeria], posted);
+    expect(hit.candidate.id).toBe('villeria');
+    expect(hit.stem).toBe('njala');
+  });
+
+  it('stays unresolved when two live incidents match, or the hashtag matches none', () => {
+    const other = { id: 'other', status: 'ACTIVE', lastUpdateAt: villeria.lastUpdateAt, nodes: [{ name: 'Njala West' }] };
+    expect(soleHashtagIncident('#NjalaUpdate line 1', [villeria, other], posted)).toBeNull();
+    expect(soleHashtagIncident('#CityPowerUpdates something', [villeria], posted)).toBeNull();
   });
 });

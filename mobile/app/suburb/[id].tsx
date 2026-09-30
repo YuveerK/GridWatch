@@ -1,108 +1,152 @@
 import { Stack } from 'expo-router/js-stack';
-import { useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { sortOutages } from '@/src/lib/area.js';
 import { api, type Outage } from '@/src/lib/api';
+import { withTimeout } from '@/src/lib/deadline.js';
 import { sameService } from '@/src/lib/query.js';
-import { Banner, Eyebrow, OutageRow, PrimaryButton, SecondaryButton, SectionTitle, StatusIcon } from '@/src/components/ui';
+import { Banner, OutageRow, SecondaryButton } from '@/src/components/ui';
 import { useApp } from '@/src/state/app';
-import { colors, font, serviceLabel } from '@/src/theme';
+import { colors, font, reading } from '@/src/theme';
+
+type Identity = { state: 'loading' | 'error' } | { state: 'ok'; name: string; municipality: string | null };
+type Supply = { state: 'loading' | 'error' } | { state: 'ok'; rows: Outage[]; possible: Outage[] };
 
 export default function SuburbScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const localityId = Array.isArray(id) ? id[0] : id;
-  const { following, follow, unfollow } = useApp();
-  const [name, setName] = useState('Suburb');
-  const [municipality, setMunicipality] = useState<string | null>(null);
-  const [power, setPower] = useState<Outage[]>([]);
-  const [water, setWater] = useState<Outage[]>([]);
-  const [possiblePower, setPossiblePower] = useState<Outage[]>([]);
-  const [possibleWater, setPossibleWater] = useState<Outage[]>([]);
-  const [loading, setLoading] = useState(true);
+  const router = useRouter();
+  const { following, follow, unfollow, alertMessage, alertStatus } = useApp();
+  const [identity, setIdentity] = useState<Identity>({ state: 'loading' });
+  const [power, setPower] = useState<Supply>({ state: 'loading' });
+  const [water, setWater] = useState<Supply>({ state: 'loading' });
   const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const request = useRef(0);
   const followed = following.some((item) => item.id === localityId);
 
-  useEffect(() => {
+  const loadIdentity = useCallback((token: number) => {
     if (!localityId) return;
-    let live = true;
-    Promise.all([
-      api.locality(localityId),
-      api.localityOutages(localityId, 'ELECTRICITY'),
-      api.localityOutages(localityId, 'WATER'),
-    ]).then(([locality, electricity, supply]) => {
-      if (!live) return;
-      setName(locality.name);
-      setMunicipality(locality.municipality);
-      setPower(sortOutages(sameService(electricity.data, 'ELECTRICITY')));
-      setWater(sortOutages(sameService(supply.data, 'WATER')));
-      setPossiblePower(sortOutages(sameService(electricity.possible, 'ELECTRICITY')));
-      setPossibleWater(sortOutages(sameService(supply.possible, 'WATER')));
+    setIdentity({ state: 'loading' });
+    withTimeout(api.locality(localityId)).then((locality) => {
+      if (token !== request.current) return;
+      setIdentity({ state: 'ok', name: locality.name, municipality: locality.municipality });
     }).catch(() => {
-      if (live) setNote('This suburb could not be loaded.');
-    }).finally(() => {
-      if (live) setLoading(false);
+      if (token !== request.current) return;
+      setIdentity({ state: 'error' });
     });
-    return () => {
-      live = false;
-    };
   }, [localityId]);
 
-  const onFollow = async () => {
+  const loadService = useCallback((service: 'ELECTRICITY' | 'WATER', token: number) => {
     if (!localityId) return;
-    if (followed) {
-      await unfollow(localityId);
-      setNote(null);
-      return;
+    const setSupply = service === 'WATER' ? setWater : setPower;
+    setSupply({ state: 'loading' });
+    withTimeout(api.localityOutages(localityId, service)).then((result) => {
+      if (token !== request.current) return;
+      setSupply({
+        state: 'ok',
+        rows: sortOutages(sameService(result.data, service)),
+        possible: sortOutages(sameService(result.possible, service)),
+      });
+    }).catch(() => {
+      if (token !== request.current) return;
+      setSupply({ state: 'error' });
+    });
+  }, [localityId]);
+
+  useEffect(() => {
+    const token = ++request.current;
+    setNote(null);
+    setIdentity({ state: 'loading' });
+    setPower({ state: 'loading' });
+    setWater({ state: 'loading' });
+    loadIdentity(token);
+    loadService('ELECTRICITY', token);
+    loadService('WATER', token);
+    return () => {
+      request.current += 1;
+    };
+  }, [loadIdentity, loadService, localityId]);
+
+  const onFollow = async () => {
+    if (!localityId || identity.state !== 'ok' || busy) return;
+    setBusy(true);
+    try {
+      if (followed) {
+        await unfollow(localityId);
+        setNote('Removed from Following.');
+        return;
+      }
+      const result = await follow({ id: localityId, name: identity.name });
+      setNote(result.message);
+    } finally {
+      setBusy(false);
     }
-    const result = await follow({ id: localityId, name });
-    setNote(result.message);
   };
+
+  const name = identity.state === 'ok' ? identity.name : '';
+  const possible = [
+    ...(power.state === 'ok' ? power.possible : []),
+    ...(water.state === 'ok' ? water.possible : []),
+  ];
 
   return (
     <ScrollView contentContainerStyle={styles.page}>
-      <Stack.Screen options={{ title: name }} />
-      {loading && <ActivityIndicator color={colors.power} />}
-      {municipality ? <Eyebrow>{municipality}</Eyebrow> : <Eyebrow>Suburb</Eyebrow>}
-      <Text style={styles.name}>{name}</Text>
-      <View style={styles.followCard}>
-        <StatusIcon name={followed ? 'check' : 'notifications-outline'} tone={followed ? 'good' : 'plan'} size={36} />
-        <View style={styles.followCopy}>
-          <Text style={styles.followTitle}>{followed ? 'Alerts are on for this suburb' : 'Follow this suburb'}</Text>
-          <Text style={styles.reason}>Follow asks to send alerts to this phone when a notice names it.</Text>
+      <Stack.Screen options={{ title: 'Suburb' }} />
+      {identity.state === 'loading' && <ActivityIndicator color={colors.power} />}
+      {identity.state === 'error' && (
+        <View style={styles.block}>
+          <Text style={styles.body}>This suburb could not be loaded.</Text>
+          <SecondaryButton label="Retry" onPress={() => loadIdentity(request.current)} />
         </View>
-      </View>
-      {followed ? <SecondaryButton label="Unfollow" icon="heart-dislike" onPress={onFollow} /> : <PrimaryButton label="Follow" icon="notifications" onPress={onFollow} />}
-      {note && <Banner>{note}</Banner>}
-      <ServiceList title="Power" rows={power} />
-      <ServiceList title="Water" rows={water} />
-      {(possiblePower.length > 0 || possibleWater.length > 0) && (
+      )}
+      {identity.state === 'ok' && (
         <>
-          <SectionTitle title="Not named in the notice" detail="These incidents mention equipment that serves this suburb. The notice itself did not name it." />
-          {possiblePower.map((outage) => <OutageRow key={outage.id} outage={outage} showService />)}
-          {possibleWater.map((outage) => <OutageRow key={outage.id} outage={outage} showService />)}
+          {identity.municipality ? <Text style={styles.meta}>{identity.municipality}</Text> : null}
+          <Text style={styles.name} accessibilityRole="header">{name}</Text>
+          <SecondaryButton label={followed ? 'Following' : 'Follow'} busy={busy} onPress={onFollow} />
+          {followed && <Text style={styles.meta}>{alertStatus === 'enabled' ? 'Following is saved. Alerts cover power and water for this suburb.' : alertMessage}</Text>}
+          {note && <Banner>{note}</Banner>}
+          {note?.includes('20 suburbs') && <SecondaryButton label="Open Following" onPress={() => router.push('/following')} />}
         </>
+      )}
+      <ServiceList title="Power reported here" supply={power} empty="No current power incident names this suburb." onRetry={() => loadService('ELECTRICITY', request.current)} />
+      <ServiceList title="Water reported here" supply={water} empty="No current water incident names this suburb." onRetry={() => loadService('WATER', request.current)} />
+      {possible.length > 0 && (
+        <View style={styles.possible}>
+          <Text style={styles.section}>Possible nearby impact</Text>
+          <Text style={styles.meta}>These incidents mention equipment that can serve this suburb. The notice itself did not name it. They are not confirmed local outages.</Text>
+          {possible.map((outage) => <OutageRow key={outage.id} outage={outage} showService />)}
+        </View>
       )}
     </ScrollView>
   );
 }
 
-function ServiceList({ title, rows }: { title: string; rows: Outage[] }) {
-  const service = title === 'Water' ? 'WATER' : 'ELECTRICITY';
+function ServiceList({ title, supply, empty, onRetry }: { title: string; supply: Supply; empty: string; onRetry: () => void }) {
   return (
     <View style={styles.block}>
-      <SectionTitle title={title} detail={rows.length === 0 ? `No current ${serviceLabel(service).toLowerCase()} incident names this suburb.` : `${rows.length} named`} />
-      {rows.map((outage) => <OutageRow key={outage.id} outage={outage} />)}
+      <Text style={styles.section}>{title}</Text>
+      {supply.state === 'loading' && <ActivityIndicator color={colors.power} />}
+      {supply.state === 'error' && (
+        <>
+          <Text style={styles.meta}>Unavailable</Text>
+          <SecondaryButton label="Retry" onPress={onRetry} />
+        </>
+      )}
+      {supply.state === 'ok' && supply.rows.length === 0 && <Text style={styles.meta}>{empty}</Text>}
+      {supply.state === 'ok' && supply.rows.map((outage) => <OutageRow key={outage.id} outage={outage} />)}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  page: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 36, gap: 14, backgroundColor: colors.page },
-  name: { color: colors.text, fontFamily: font.bold, fontSize: 34, letterSpacing: -0.8 },
-  reason: { color: colors.muted, fontFamily: font.text, fontSize: 14, lineHeight: 20 },
-  followCard: { flexDirection: 'row', gap: 12, alignItems: 'flex-start', backgroundColor: colors.card, borderRadius: 18, padding: 14, borderWidth: 1, borderColor: colors.line },
-  followCopy: { flex: 1, gap: 4 },
-  followTitle: { color: colors.text, fontFamily: font.semibold, fontSize: 16 },
+  page: { ...reading, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 36, gap: 12, backgroundColor: colors.page, flexGrow: 1 },
+  name: { color: colors.text, fontFamily: font.bold, fontSize: 32, lineHeight: 38 },
+  meta: { color: colors.muted, fontFamily: font.text, fontSize: 14, lineHeight: 20 },
+  body: { color: colors.text, fontFamily: font.text, fontSize: 16, lineHeight: 22 },
+  section: { color: colors.text, fontFamily: font.bold, fontSize: 20, lineHeight: 26 },
   block: { gap: 8 },
+  possible: { gap: 8, marginTop: 8 },
 });

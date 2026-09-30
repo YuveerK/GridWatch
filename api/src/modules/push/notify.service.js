@@ -43,13 +43,16 @@ export async function runNotifications({ now = new Date(), send = sendExpo } = {
 async function judge(item, { now, send }) {
   const outage = await prisma.outage.findUnique({
     where: { id: item.outageId },
-    select: { id: true, title: true, kind: true, localities: { select: { localityId: true, locality: { select: { canonicalName: true } } } }, posts: { select: { postId: true, faultIndex: true, postedAt: true, effect: true } } },
+    select: { id: true, title: true, kind: true, serviceType: true, localities: { select: { localityId: true, locality: { select: { canonicalName: true } } } }, posts: { select: { postId: true, faultIndex: true, postedAt: true, effect: true } } },
   });
   if (!outage) return { kind: 'NONE', decision: 'SKIPPED', reason: 'outage no longer exists' };
   const { before, after } = stateAround(outage.posts, item.postId, item.faultIndex);
   const kind = classifyChange({ before, after, kind: outage.kind });
   if (!kind) return { kind: 'NONE', decision: 'SKIPPED', reason: 'not a change worth a message' };
-  if (!outage.localities.length) return { kind, decision: 'SKIPPED', reason: 'City Power named no suburb' };
+  if (!outage.localities.length) {
+    const reporter = outage.serviceType === 'WATER' ? 'Johannesburg Water' : 'City Power';
+    return { kind, decision: 'SKIPPED', reason: `${reporter} named no suburb` };
+  }
 
   if (kind !== 'RESTORED') {
     const recent = await prisma.notificationEvent.findFirst({ where: { outageId: outage.id, decision: 'SENT', createdAt: { gte: new Date(now.getTime() - THROTTLE_MS) } }, select: { postId: true } });
@@ -69,7 +72,7 @@ async function judge(item, { now, send }) {
   for (const d of devices) {
     if (inQuietHours(now, d.quietFrom, d.quietTo)) continue;
     const place = placeById.get(d.subscriptions[0].localityId);
-    messages.push({ deviceId: d.id, to: d.token, sound: 'default', data: { outageId: outage.id, kind }, ...buildMessage({ kind, place, outageTitle: outage.title, summary, percent }) });
+    messages.push({ deviceId: d.id, to: d.token, sound: 'default', data: { outageId: outage.id, kind, service: outage.serviceType }, ...buildMessage({ kind, place, outageTitle: outage.title, summary, percent, service: outage.serviceType }) });
   }
   if (!messages.length) return { kind, decision: 'SKIPPED', reason: 'everyone is in quiet hours' };
 

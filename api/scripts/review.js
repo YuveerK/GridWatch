@@ -9,7 +9,7 @@
 //   npm run review -- --inspect <reviewId>
 //   npm run review -- --verify <id>
 import { prisma } from '../src/db/prisma.js';
-import { listReviewItems, loadReviewInspection, resolveReviewItem } from '../src/modules/review/review.service.js';
+import { listReviewItems, loadReviewInspection, reconcileOpenReviews, resolveReviewItem } from '../src/modules/review/review.service.js';
 import { verifyItem } from '../src/modules/review/verifier.js';
 
 const args = process.argv.slice(2);
@@ -21,6 +21,10 @@ const exact = (name) => {
 };
 const has = (name) => args.includes(`--${name}`) || args.some((a) => a.startsWith(`--${name}=`));
 const short = (d) => new Date(d).toISOString().slice(5, 16).replace('T', ' ');
+if (has('refresh')) {
+  const result = await reconcileOpenReviews({ prisma });
+  console.log(`Rechecked open reviews: ${result.resolved} resolved, ${result.opened} opened.`);
+}
 
 if (exact('inspect') && !exact('inspect').startsWith('--')) {
   const text = await loadReviewInspection({ prisma, id: exact('inspect') });
@@ -63,6 +67,7 @@ if (exact('inspect') && !exact('inspect').startsWith('--')) {
       console.log(`  [${i.priority}] ${i.serviceType} ${i.sourceAccount}  ${short(i.publishedAt)}  ${i.externalId.slice(-8)}${i.faultIndex ? ` fault ${i.faultIndex}` : ''}${i.sampled ? '  (spot check)' : ''}`);
       console.log(`      ${i.reasons.map((r) => `${r.code}${r.detail ? ` (${r.detail})` : ''}`).join('; ')}`);
       console.log(`      "${i.text}"`);
+      console.log(`      review id: ${i.id}`);
     }
   }
 }

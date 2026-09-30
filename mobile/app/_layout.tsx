@@ -1,4 +1,4 @@
-import 'react-native-gesture-handler';
+import 'react-native-gesture-handler'; // eslint-disable-line import/no-duplicates -- must stay the first import
 import { LogBox, Platform, StyleSheet } from 'react-native';
 import { Stack } from 'expo-router/js-stack';
 import { useRouter } from 'expo-router';
@@ -13,7 +13,7 @@ import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { GestureHandlerRootView } from 'react-native-gesture-handler'; // eslint-disable-line import/no-duplicates
 import { stackScreenOptions } from '@/src/navigation';
 import { AppState, useApp } from '@/src/state/app';
 

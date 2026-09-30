@@ -25,7 +25,7 @@ describe('which outage changes are worth a message', () => {
 });
 
 describe('the words on the phone', () => {
-  it('always says it is what City Power reported, and stays short', () => {
+  it('attributes an electricity notice to City Power, and stays short', () => {
     const m = buildMessage({ kind: 'PARTIAL', place: 'Hillbrow', outageTitle: 'Fort', summary: 'Fort Substation is 98% restored.', percent: 98 });
     expect(m.title).toBe('Hillbrow: power partly restored (98%)');
     expect(m.body).toBe('City Power reports: Fort Substation is 98% restored.');
@@ -33,6 +33,16 @@ describe('the words on the phone', () => {
   });
   it('has a sensible line when there is no summary', () => {
     expect(buildMessage({ kind: 'NEW_OUTAGE', place: 'Hillbrow', outageTitle: 'Fort (Hillbrow)', summary: null }).body).toBe('City Power reports an update on Fort (Hillbrow).');
+  });
+  it('a water notice never uses a power title or City Power attribution', () => {
+    const opened = buildMessage({ kind: 'NEW_OUTAGE', place: 'Brixton', outageTitle: 'Brixton reservoir', summary: 'Supply is interrupted.', service: 'WATER' });
+    expect(opened.title).toBe('Brixton: water interruption reported');
+    expect(opened.body).toBe('Johannesburg Water reports: Supply is interrupted.');
+    expect(opened.title.toLowerCase()).not.toContain('power');
+    expect(opened.body).not.toContain('City Power');
+    const restored = buildMessage({ kind: 'RESTORED', place: 'Brixton', outageTitle: 'Brixton reservoir', summary: null, service: 'WATER' });
+    expect(restored.title).toBe('Brixton: water supply restored');
+    expect(restored.body).toBe('Johannesburg Water reports an update on Brixton reservoir.');
   });
 });
 

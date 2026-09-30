@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { initialStatus, isPlanned, linkedToPost, statusFor } from '../../src/modules/outages/linker.service.js';
+import { initialStatus, isPlanned, linkedToPost, quotedStatusId, singleQuotedOutage, statusFor } from '../../src/modules/outages/linker.service.js';
 
 const ex = (status, states) => ({ result: { status, localities: states.map((state) => ({ name: 'x', state })) } });
 
@@ -91,6 +91,25 @@ describe('what counts as an umbrella graphic (E04)', () => {
   });
 });
 
+describe('an unplanned update the reader called planned', () => {
+  it('stays a live fault (Tshepisong lines attended tomorrow, 27 Sept)', async () => {
+    const { buildEffect, foldEffects } = await import('../../src/modules/outages/outage-state.js');
+    const update = buildEffect({
+      extraction: { result: { status: 'PLANNED', eta_text: 'tomorrow', localities: [] } },
+      facts: { localityIds: [], nodes: [], restoredLocalityIds: [] },
+      post: { kind: 'UNPLANNED' },
+      retroactive: false,
+      expand: true,
+    });
+    expect(update.status).toBe('ACTIVE');
+    const folded = foldEffects([
+      { postId: 'open', postedAt: new Date('2026-09-26T04:59:00Z'), faultIndex: 0, effect: { status: 'ACTIVE', expand: true, locs: [], nodeIds: ['a', 'c', 'd'] } },
+      { postId: 'later', postedAt: new Date('2026-09-27T17:13:00Z'), faultIndex: 0, effect: update },
+    ]);
+    expect(folded.status).toBe('ACTIVE');
+  });
+});
+
 describe('E06: an overall percentage and explicit per-suburb restoration', () => {
   it('mixed suburb tags stay as stated even with an overall partial percentage', async () => {
     const { foldEffects } = await import('../../src/modules/outages/outage-state.js');
@@ -125,12 +144,38 @@ describe('E06: an overall percentage and explicit per-suburb restoration', () =>
   });
 });
 
+describe('a restoration that only quotes an earlier outage post', () => {
+  const payload = { tweet: { referenced_tweets: [{ id: '2104474967387582519', type: 'quoted' }] } };
+  it('uses the single quoted status (Refilwe, 28 Sept)', () => {
+    expect(quotedStatusId(payload)).toBe('2104474967387582519');
+    expect(quotedStatusId({ tweet: { referenced_tweets: [{ id: '1', type: 'replied_to' }] } })).toBe(null);
+    expect(quotedStatusId({ tweet: { referenced_tweets: [{ id: '1', type: 'quoted' }, { id: '2', type: 'quoted' }] } })).toBe(null);
+  });
+  it('joins only when that post sits on exactly one incident', () => {
+    expect(singleQuotedOutage(['outage-a', 'outage-a'])).toBe('outage-a');
+    expect(singleQuotedOutage(['outage-a', 'outage-b'])).toBe(null);
+    expect(singleQuotedOutage([])).toBe(null);
+  });
+});
+
 describe('E09: an emergency-isolation programme is one kind of work from its first post to its last', () => {
   const ex = (relevance, status = 'RESTORED') => ({ relevance, result: { status } });
   it('the daily and final posts count as planned even when they are read as an update or a restoration', () => {
     expect(isPlanned(ex('UPDATE'), 'Day 4 of the emergency isolation programme in Glenanda has been successfully completed, with power supply restored.')).toBe(true);
     expect(isPlanned(ex('RESTORATION'), 'Glenanda - Emergency Isolation: Power has been fully restored to all customers who were affected by the emergency isolation.')).toBe(true);
     expect(isPlanned(ex('UPDATE'), 'The isolation programme is progressing well onsite.')).toBe(true);
+  });
+  it('work continuing tomorrow, with no maintenance notice, is not planned work (Tshepisong, 27 Sept)', () => {
+    const text = 'Tshepisong Switching Station: Due to unforeseen circumstances, Line A and D will be attended tomorrow. Further details will be communicated as soon as new information becomes available. City Power remains committed to restoring electricity supply to all affected customers.';
+    expect(isPlanned({ relevance: 'PLANNED_OUTAGE', result: { status: 'PLANNED' } }, text)).toBe(false);
+    expect(isPlanned({ relevance: 'PLANNED_OUTAGE', result: { status: 'CANCELLED' } }, '‼️POSTPONED ‼️Essential electricity network upgrades to affect Flora Park substation supply zone.')).toBe(true);
+    expect(isPlanned({ relevance: 'PLANNED_OUTAGE', result: { status: 'PLANNED' } }, 'Planned work at Alpha substation on 16 September 2026 from 09:00-17:00')).toBe(true);
+    expect(isPlanned({ relevance: 'PLANNED_OUTAGE', result: { status: 'PLANNED' } }, '')).toBe(true);
+  });
+
+  it('keeps an explicitly rescheduled maintenance notice planned when its short caption omits the month', () => {
+    expect(isPlanned({ relevance: 'PLANNED_OUTAGE', result: { status: 'PLANNED' } }, 'Klipfontein: now rescheduled to just the 22nd')).toBe(true);
+    expect(isPlanned({ relevance: 'PLANNED_OUTAGE', result: { status: 'PLANNED' } }, 'Mamelodi and Heatherley could not be energised as per #LoadReduction schedule; now part of the 12:00 schedule.')).toBe(true);
   });
   it('an ordinary fault, an unplanned interruption and a bare "isolated" are still not', () => {
     expect(isPlanned(ex('RESTORATION'), 'Power has been restored after an unplanned power interruption.')).toBe(false);

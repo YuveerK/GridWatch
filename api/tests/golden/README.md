@@ -13,9 +13,9 @@ Every file here is hand-labelled truth about City Power posts. Keys are the **la
 ## How each part is measured
 
 1. **Reading**: how many posts have an accepted reading, and how many wait for review or failed.
-2. **Coverage**: how many expected faults ended with exactly one accepted disposition.
+2. **Coverage**: how many expected faults ended with exactly one accepted disposition and consistent timeline entries. Missing/invalid expected faults and unexpected old fault indices are reported separately, per service/account. Unexpected indices remain consistency problems even when coverage is 100%. Use `npm run eval:all -- --details` to list every affected post and its exact problems.
 3. **Grouping**: pairwise precision, recall and F1 of which posts share an outage (`scripts/eval.js`). Holdouts are reported apart from the others.
-4. **Corrections**: how many manual corrections the engine now gets right *without help* (`scripts/eval-pairs.js`).
+4. **Corrections**: how many correction expectations hold in the database being evaluated (`scripts/eval-pairs.js`). Live results include manual overrides; only a replay without them measures what the engine gets right *without help*.
 5. **Final state**: whether outages end up with the right status, kind and planned window (`scripts/eval-pairs.js`).
 
 Run against the live database, corrections and states include the manual overrides, so they read as passing. Run them on a replay (`node scripts/replay-eval.js`, which ignores overrides) to see what the engine does on its own.

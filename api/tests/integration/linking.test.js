@@ -72,6 +72,35 @@ beforeEach(async () => {
 });
 
 describe('A04: the decision commits with the change', () => {
+  it('uses an explicit locality heading to attach a restoration of bare extension names', async () => {
+    await prisma.locality.createMany({ data: ['Lenasia', 'Lenasia Extensions 3', 'Lenasia Extensions 5'].map((name, i) => ({ id: `len${i}`, canonicalName: name, normalizedName: name.toLowerCase().replace('extensions', 'ext'), active: true, updatedAt: T0 })) });
+    resetLocalityIndex();
+    const first = await addPost(0, 'An outage affects Lenasia Extensions 3 and 5.', reading('OUTAGE', 'INVESTIGATING', [], { localities: ['Lenasia Extensions 3', 'Lenasia Extensions 5'].map((name) => ({ name, state: 'AFFECTED' })) }));
+    await processPost(first);
+    const last = await addPost(60, '#CityPowerUpdates #LenasiaSDC\n\nLenasia: Power has been restored to customers in Extensions 3 and 5.', reading('RESTORATION', 'RESTORED', [], { localities: ['Extensions 3', 'Extensions 5'].map((name) => ({ name, state: 'RESTORED' })) }));
+    await processPost(last);
+    const rows = await outages();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe('RESTORED');
+    expect(rows[0].posts).toHaveLength(2);
+    expect(rows[0].localities.map((l) => l.localityId).sort()).toEqual(['len1', 'len2']);
+    expect(await prisma.locality.count()).toBe(3);
+  });
+
+  it('tracks and restores a named hospital without expanding the outage to a suburb', async () => {
+    const name = 'Nelson Mandela Children’s Hospital';
+    const first = await addPost(0, `An outage is affecting customers at the ${name}.`, reading('OUTAGE', 'INVESTIGATING', [], { localities: [{ name, state: 'AFFECTED' }] }));
+    await processPost(first);
+    const restored = await addPost(60, `Power restored at the ${name}.`, reading('RESTORATION', 'RESTORED', [], { localities: [{ name, state: 'RESTORED' }] }));
+    await processPost(restored);
+    const rows = await outages();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].title).toContain(name);
+    expect(rows[0].status).toBe('RESTORED');
+    expect(rows[0].posts).toHaveLength(2);
+    expect(rows[0].localities).toHaveLength(0);
+  });
+
   it('a worker that lost its lease writes nothing: no outage, no timeline entry, no decision', async () => {
     const id = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
     const ghost = { name: 'pipeline', owner: 'not-the-owner', lost: false, assertHeld() {} };
@@ -172,6 +201,39 @@ describe('A05: multi-fault posts recover per fault', () => {
 });
 
 describe('A06: reprocessing replaces the old contribution', () => {
+  it('links a delayed quoted restoration to its closed historical episode, but rejects a much later quote', async () => {
+    const a = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    await processPost(a);
+    await addPost(30, 'Alpha restored', reading('RESTORATION', 'RESTORED', ['Alpha']));
+    await processPending();
+    await sweepStaleOutages(new Date('2026-09-20T00:00:00Z'));
+    const [closed] = await outages();
+    expect(closed.status).toBe('CLOSED');
+    const rawPayload = { tweet: { referenced_tweets: [{ type: 'quoted', id: '9001' }] } };
+    const delayed = await addPost(15, 'Power supply has been restored.', reading('RESTORATION', 'RESTORED', []), { rawPayload });
+    expect((await processPost(delayed)).outcome).toBe('LINKED');
+    expect((await outages())[0]).toMatchObject({ id: closed.id, status: 'CLOSED' });
+    const late = await addPost(30 * 24 * 60, 'Power supply has been restored.', reading('RESTORATION', 'RESTORED', []), { rawPayload });
+    await processPost(late);
+    expect(await prisma.outagePost.count({ where: { postId: late } })).toBe(0);
+  });
+
+  it('can put an old post back into its original closed incident without reopening it', async () => {
+    const a = await addPost(0, 'Planned maintenance at Alpha', reading('PLANNED_OUTAGE', 'PLANNED', ['Alpha'], { update_summary: '10 September 2026 from 09h00 until 17h00' }));
+    await processPost(a);
+    const b = await addPost(30, 'Reminder: planned maintenance at Alpha', reading('PLANNED_OUTAGE', 'PLANNED', ['Alpha'], { update_summary: '10 September 2026 from 09h00 until 17h00' }));
+    await processPost(b);
+    const [before] = await outages();
+    expect(before.posts).toHaveLength(2);
+    await sweepStaleOutages(new Date('2026-09-20T00:00:00Z'));
+    expect((await outages())[0].status).toBe('CLOSED');
+    expect((await reprocessPost(a)).outcome).toBe('LINKED');
+    const after = await outages();
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({ id: before.id, status: 'CLOSED' });
+    expect(after[0].posts).toHaveLength(2);
+  });
+
   it('reprocessing an unchanged post changes nothing (outages, links, evidence)', async () => {
     const id = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
     await processPost(id);
@@ -939,7 +1001,7 @@ describe('electricity and water in the same suburb stay separate', () => {
     expect([...(await detectSuspicious({ prisma, postIds: [id] })).keys()]).toEqual([]);
   });
 
-  it('a system-status board with several assets does not open one outage', async () => {
+  it('a headerless system-status board opens only its affected asset, not the healthy reservoirs', async () => {
     const board = {
       status: 'SUCCEEDED',
       relevance: 'UPDATE',
@@ -953,13 +1015,17 @@ describe('electricity and water in the same suburb stay separate', () => {
         entities: ['Illovo Reservoir', 'Bryanston Reservoir', 'Morningside Reservoir', 'Linksfield Reservoir'].map((name) => ({ type: 'RESERVOIR', name, parent_name: null })),
         localities: [],
         faults: [],
-        // a status list the board parser cannot read (no "Reservoir/ Tower" header)
+          // Headerless boards are now parsed: three healthy assets and one on bypass.
         image_text: 'Sandton System update. Illovo Reservoir Supplying adequately. Bryanston Reservoir Supplying adequately. Morningside Reservoir Supplying fairly. Linksfield Reservoir On bypass.',
       },
     };
     const id = await addPost(0, 'Sandton System Update', board, { serviceType: 'WATER' });
-    expect((await processPost(id)).outcome).toBe('SYSTEM_STATUS_BOARD');
-    expect(await prisma.outage.count()).toBe(0);
+    expect((await processPost(id)).outcome).toBe('NEW');
+    const incidents = await prisma.outage.findMany({ include: { nodes: { include: { node: true } } } });
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]).toMatchObject({ serviceType: 'WATER', waterState: 'BYPASS' });
+    expect(incidents[0].status).not.toBe('RESTORED');
+    expect(incidents[0].nodes.map((n) => n.node.name)).toEqual(['Linksfield Reservoir']);
   });
 
   // The daily "Reservoir/ Tower Status" boards (25 Sept): split in code, so the same board gives the same incidents every round.

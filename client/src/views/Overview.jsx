@@ -8,15 +8,45 @@ import SyncStatus from '../components/SyncStatus.jsx';
 import UpdatesFeed, { countNew, useSeenUpdates } from '../components/UpdatesFeed.jsx';
 import { Sparkline } from '../components/charts.jsx';
 import { EmptyState, ErrorState, Freshness, Meter, SectionHead, Skeleton, StatusBadge } from '../components/ui.jsx';
-import { nice, placeTone, plural, prettySdc, statusMeta, timeAgo, useApi } from '../lib/api.js';
+import { fmtDay, nice, placeTone, plural, prettySdc, statusMeta, timeAgo, todayISO, useApi } from '../lib/api.js';
 import { useDocumentTitle, useMyArea, useTick } from '../lib/hooks.js';
 import { isNewSince } from '../lib/newness.js';
 import { useMunicipality, useUtility, withMunicipality } from '../lib/municipality.jsx';
 import { useRefresh } from '../lib/refresh.js';
 
 const MapView = lazy(() => import('../components/MapView.jsx'));
-const LAYERS = { outages: true, equipment: false };
-const ORDER = { ACTIVE: 0, PARTIALLY_RESTORED: 1 };
+const MAP_LAYERS = { outages: true, equipment: false };
+const ORDER = { ACTIVE: 0, PARTIALLY_RESTORED: 1, PLANNED: 2, RESTORED: 3, CLOSED: 3, STALE: 4, CANCELLED: 5 };
+const LIVE_LAYERS = ['ACTIVE', 'PARTIALLY_RESTORED'];
+const DAY_LAYERS = ['ACTIVE', 'PARTIALLY_RESTORED', 'RESTORED', 'PLANNED', 'STALE', 'CANCELLED'];
+
+/** Closed incidents sit with Restored. Everything else is its own layer. */
+const layerOf = (status) => (status === 'CLOSED' ? 'RESTORED' : status);
+
+function layerChoices(water) {
+  return [
+    { id: 'ACTIVE', label: water ? 'Interrupted' : 'Active', tone: 'live' },
+    { id: 'PARTIALLY_RESTORED', label: water ? 'Returning' : 'Restoring', tone: 'partial' },
+    { id: 'RESTORED', label: 'Restored', tone: 'good' },
+    { id: 'PLANNED', label: 'Planned', tone: 'plan' },
+    { id: 'STALE', label: 'No update', tone: 'idle' },
+    { id: 'CANCELLED', label: 'Cancelled', tone: 'idle' },
+  ];
+}
+
+function LayerToggles({ choices, layers, counts, onToggle }) {
+  return (
+    <div className="layer-toggles" role="group" aria-label="Layers">
+      {choices.map((layer) => (
+        <button key={layer.id} type="button" className={`layer-toggle tone-${layer.tone}`} aria-pressed={layers.includes(layer.id)} onClick={() => onToggle(layer.id)}>
+          <i className="key-dot" />
+          {layer.label}
+          <span className="num">{counts[layer.id] ?? 0}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
 
 /** How long an outage has been running, in the fewest words. */
 function since(startedAt) {
@@ -48,11 +78,12 @@ function Metric({ label, value, hint, to, onClick, pressed, tone, spark, delta, 
   );
 }
 
-/** One live outage in the stage list. Selecting it frames it on the map and opens the detail underneath. */
-function StageRow({ o, selected, onSelect }) {
+/** One outage in the stage list. Selecting it frames it on the map and opens the detail underneath. */
+function StageRow({ o, selected, onSelect, dated }) {
   const { lastBatch } = useRefresh();
   const m = statusMeta(o.status, o.service, o.waterState);
-  const fresh = isNewSince(o.latestIngestedAt, lastBatch);
+  const fresh = !dated && isNewSince(o.latestIngestedAt, lastBatch);
+  const liveNow = o.status === 'ACTIVE' || o.status === 'PARTIALLY_RESTORED';
   const areas = o.places.filter((p) => !p.restored).map((p) => nice(p.name));
   return (
     <li className={`srow tone-${m.tone}${selected ? ' is-selected' : ''}`} data-outage={o.id}>
@@ -63,7 +94,7 @@ function StageRow({ o, selected, onSelect }) {
           <span className="srow-meta">
             <b>{m.label}</b>
             {o.sdc && <span>{prettySdc(o.sdc)}</span>}
-            <span className="num">{since(o.startedAt)} so far</span>
+            <span className="num">{liveNow && !dated ? `${since(o.startedAt)} so far` : `began ${fmtDay(o.startedAt)}`}</span>
             <span className="num">updated {timeAgo(o.lastUpdateAt)}</span>
           </span>
         </span>
@@ -112,34 +143,55 @@ export default function Overview() {
   const water = service === 'WATER';
   const { Utility, utility, accounts } = useUtility();
   const { data, error, loading } = useApi(withMunicipality('/v1/overview', muniParam), { refreshMs: 60_000 });
-  const map = useApi(withMunicipality('/v1/map', muniParam), { refreshMs: 60_000 });
+  const [day, setDay] = useState(''); // '' is live right now; a YYYY-MM-DD shows outages underway that Johannesburg day
+  const map = useApi(withMunicipality(day ? `/v1/map?on=${day}` : '/v1/map', muniParam), { refreshMs: 60_000, keepPrevious: !day });
   const { area } = useMyArea();
   const areaDetail = useApi(area ? `/v1/localities/${area.id}` : null);
   const areaShape = areaDetail.data?.id === area?.id ? areaDetail.data : null;
   const [selectedId, setSelectedId] = useState(null);
-  const [filter, setFilter] = useState('all'); // all | ACTIVE | PARTIALLY_RESTORED
+  const [layers, setLayers] = useState(LIVE_LAYERS);
   const [tab, setTab] = useState(() => (new URLSearchParams(window.location.search).get('panel') === 'updates' ? 'updates' : 'outages')); // outages | updates (?panel=updates links straight to the feed)
-  const updates = useApi(withMunicipality('/v1/updates?limit=30', muniParam), { refreshMs: 60_000 });
+  const updates = useApi(withMunicipality('/v1/updates?limit=60', muniParam), { refreshMs: 60_000 });
   const seen = useSeenUpdates();
   const newCount = seen.cleared ? 0 : countNew(updates.data?.data ?? [], seen.seenAt);
 
-  const outages = useMemo(
-    () => [...(map.data?.data ?? [])].sort((a, b) => ORDER[a.status] - ORDER[b.status] || new Date(b.lastUpdateAt) - new Date(a.lastUpdateAt)),
-    [map.data],
-  );
-  const shown = filter === 'all' ? outages : outages.filter((o) => o.status === filter);
-  // the headline numbers filter the list beside them; pressing the active one again shows everything
+  const outages = useMemo(() => {
+    const rows = [...(map.data?.data ?? [])];
+    if (day) return rows.sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt) || String(a.id).localeCompare(String(b.id)));
+    return rows.sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9) || new Date(b.lastUpdateAt) - new Date(a.lastUpdateAt));
+  }, [map.data, day]);
+  const shown = outages.filter((o) => layers.includes(layerOf(o.status)));
+  const dayLabel = day ? fmtDay(`${day}T12:00:00+02:00`) : '';
+  const choices = layerChoices(water).filter((layer) => {
+    const present = outages.some((o) => layerOf(o.status) === layer.id);
+    if (present) return true;
+    return !day && LIVE_LAYERS.includes(layer.id);
+  });
+  const counts = Object.fromEntries(choices.map((layer) => [layer.id, outages.filter((o) => layerOf(o.status) === layer.id).length]));
+  const onlyLayer = (status) => layers.length === 1 && layers[0] === status;
+  // the headline numbers show just that live layer; pressing the active one again shows both live layers
   const showOnly = (status) => {
-    setFilter((f) => (f === status ? 'all' : status));
+    setDay('');
+    setLayers(onlyLayer(status) && !day ? LIVE_LAYERS : [status]);
     setSelectedId(null);
     setTab('outages');
   };
-  const selected = outages.find((o) => o.id === selectedId) ?? null;
+  const pickDay = (value) => {
+    setDay(value);
+    setLayers(value ? DAY_LAYERS : LIVE_LAYERS);
+    setSelectedId(null);
+    setTab('outages');
+  };
+  const toggleLayer = (id) => {
+    setLayers((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+    setSelectedId(null);
+  };
+  const selected = shown.find((o) => o.id === selectedId) ?? null;
 
   const points = useMemo(() => {
     const pts = shown.flatMap((o) => o.places.map((p) => ({
       id: `${o.id}:${p.id}`, sub: p.id, oid: o.id, name: nice(p.name), lat: p.lat, lon: p.lon,
-      boundary: p.boundary ?? null, inferred: p.inferred, tone: placeTone(o, p.restored),
+      boundary: p.boundary ?? null, inferred: p.inferred, tone: day && !p.restored && ['RESTORED', 'CLOSED', 'STALE'].includes(o.status) ? 'live' : placeTone(o, p.restored),
       groups: [o.id], dim: Boolean(selectedId) && o.id !== selectedId, note: nice(o.title),
     })));
     if (areaShape?.lat != null && areaShape.lon != null && !pts.some((p) => p.sub === areaShape.id)) {
@@ -149,7 +201,7 @@ export default function Overview() {
       });
     }
     return pts;
-  }, [shown, selectedId, areaShape]);
+  }, [shown, selectedId, areaShape, day]);
   const focus = useMemo(() => {
     const frame = (pts, key) => {
       if (!pts.length) return null;
@@ -199,8 +251,8 @@ export default function Overview() {
             <p className="dateline"><Freshness lastPostAt={data?.lastPostAt} /></p>
           </div>
           <div className="metrics">
-            <Metric label={water ? 'Supply problems now' : 'Outages right now'} value={c?.live} onClick={() => showOnly('ACTIVE')} pressed={filter === 'ACTIVE'} tone="live" spark={daily.map((d) => d.count)} delta={<Delta now={today} before={yesterday} />} loading={loadingAll} />
-            <Metric label={water ? 'Supply returning' : 'Being restored'} value={c?.partial} onClick={() => showOnly('PARTIALLY_RESTORED')} pressed={filter === 'PARTIALLY_RESTORED'} tone="partial" hint={water ? 'Back in some areas' : 'Some suburbs are back on'} loading={loadingAll} />
+            <Metric label={water ? 'Supply problems now' : 'Outages right now'} value={c?.live} onClick={() => showOnly('ACTIVE')} pressed={!day && onlyLayer('ACTIVE')} tone="live" spark={daily.map((d) => d.count)} delta={<Delta now={today} before={yesterday} />} loading={loadingAll} />
+            <Metric label={water ? 'Supply returning' : 'Being restored'} value={c?.partial} onClick={() => showOnly('PARTIALLY_RESTORED')} pressed={!day && onlyLayer('PARTIALLY_RESTORED')} tone="partial" hint={water ? 'Back in some areas' : 'Some suburbs are back on'} loading={loadingAll} />
             <Metric label="Restored in 24 hours" value={c?.restored24h} to="/outages?status=restored" tone="good" hint={water ? 'Water supply restored' : 'Power is back on'} loading={loadingAll} />
             <Metric label="Planned ahead" value={c?.plannedUpcoming} to="/planned" tone="plan" hint="Scheduled maintenance" loading={loadingAll} />
           </div>
@@ -222,8 +274,17 @@ export default function Overview() {
             <SearchBox placeholder="Search your suburb, e.g. Fourways" compact />
             <MyArea />
           </div>
+          <div className="stage-when">
+            <div className="seg" role="group" aria-label="When">
+              <button type="button" aria-pressed={!day} onClick={() => pickDay('')}>Now</button>
+            </div>
+            <label className="day-filter">
+              <span>Day</span>
+              <input type="date" className="field" max={todayISO()} value={day} onChange={(e) => pickDay(e.target.value)} aria-label="Show outages underway on this day" />
+            </label>
+          </div>
           <div className="stage-tabs" role="tablist" aria-label="Show">
-            <button type="button" role="tab" aria-selected={tab === 'outages'} onClick={() => setTab('outages')}>{water ? 'Live incidents' : 'Live outages'} <span className="num">{shown.length}</span></button>
+            <button type="button" role="tab" aria-selected={tab === 'outages'} onClick={() => setTab('outages')}>{day ? dayLabel : (water ? 'Live incidents' : 'Live outages')} <span className="num">{shown.length}</span></button>
             <button type="button" role="tab" aria-selected={tab === 'updates'} onClick={() => setTab('updates')}>Latest updates{newCount > 0 && <span className="tab-badge">{newCount} new</span>}</button>
           </div>
           {tab === 'updates' ? (
@@ -231,21 +292,22 @@ export default function Overview() {
           ) : (
             <>
           <div className="stage-head">
-            <h2>{water ? 'Where water is interrupted' : 'Where power is out'}</h2>
-            <div className="seg" role="group" aria-label="Filter">
-              {[['all', 'All'], ['ACTIVE', water ? 'Now' : 'Out'], ['PARTIALLY_RESTORED', water ? 'Returning' : 'Restoring']].map(([id, label]) => (
-                <button key={id} type="button" aria-pressed={filter === id} onClick={() => { setFilter(id); setSelectedId(null); }}>{label}</button>
-              ))}
-            </div>
+            <h2>{day ? `Underway on ${dayLabel}` : (water ? 'Where water is interrupted' : 'Where power is out')}</h2>
+            <LayerToggles choices={choices} layers={layers} counts={counts} onToggle={toggleLayer} />
           </div>
           {error && !data && <ErrorState error={error} />}
           {map.loading && !map.data ? (
             <div className="stage-skeleton" aria-busy="true">{[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} h={62} />)}</div>
           ) : shown.length ? (
-            <ul className="slist">{shown.map((o) => <StageRow key={o.id} o={o} selected={o.id === selectedId} onSelect={setSelectedId} />)}</ul>
+            <>
+            <ul className="slist">{shown.map((o) => <StageRow key={o.id} o={o} selected={o.id === selectedId} onSelect={setSelectedId} dated={Boolean(day)} />)}</ul>
+            {map.data?.truncated && <p className="stage-note">This day has more outages than the map can draw. The latest 300 are shown.</p>}
+            </>
           ) : (
-            filter !== 'all' && outages.length ? (
-            <EmptyState icon="check" title="None in this group" action={<button type="button" className="btn small" onClick={() => setFilter('all')}>Show all</button>}>Nothing live matches this filter right now.</EmptyState>
+            outages.length ? (
+            <EmptyState icon="check" title="Those layers are hidden" action={<button type="button" className="btn small" onClick={() => setLayers(day ? DAY_LAYERS : LIVE_LAYERS)}>Show them</button>}>Turn a layer back on to see it in the list and on the map.</EmptyState>
+          ) : day ? (
+            <EmptyState icon="calendar" title={`Nothing underway on ${dayLabel}`}>No {water ? 'water incident' : 'outage'} was open on this day.</EmptyState>
           ) : (
             <EmptyState icon="check" title={water ? 'No live water incidents' : 'No live outages'}>{Utility} hasn't reported any active {water ? 'water supply problems' : 'outages'} in the last two days. That's good news.</EmptyState>
           )
@@ -256,7 +318,7 @@ export default function Overview() {
         </aside>
         <div className="stage-map">
           <Suspense fallback={<div className="map-fallback" />}>
-            <MapView points={points} layers={LAYERS} height="100%" focus={focus} onPickSuburb={pick} onPickCluster={pickCluster} onClear={() => setSelectedId(null)} label="Map of suburbs with an outage right now" />
+            <MapView points={points} layers={MAP_LAYERS} height="100%" focus={focus} onPickSuburb={pick} onPickCluster={pickCluster} onClear={() => setSelectedId(null)} label={day ? `Map of suburbs affected on ${dayLabel}` : 'Map of suburbs with an outage right now'} />
           </Suspense>
           {selected && (
             <div className="map-pick">
@@ -272,11 +334,9 @@ export default function Overview() {
               <Link to={`/outages/${selected.id}`} className="btn small primary">Open the timeline <Icon name="arrow" /></Link>
             </div>
           )}
-          <div className="map-key" aria-hidden="true">
+          <div className="map-key">
             {areaShape && <span><i className="key-dot tone-plan" /> Your area</span>}
-            <span><i className="key-dot tone-live" /> {water ? 'No supply' : 'Power out'}</span>
-            <span><i className="key-dot tone-partial" /> {water ? 'Reduced or recovering' : 'Being restored'}</span>
-            <span><i className="key-dot tone-good" /> {water ? 'Supply restored' : 'Back on'}</span>
+            <LayerToggles choices={choices} layers={layers} counts={counts} onToggle={toggleLayer} />
           </div>
           <Link to="/map" className="map-open btn small">Full map <Icon name="arrow" /></Link>
         </div>

@@ -757,8 +757,20 @@ button.metric { font: inherit; color: inherit; text-align: left; background: non
 .stage { display: grid; grid-template-columns: 440px minmax(0, 1fr); height: clamp(560px, calc(100vh - 60px - 140px), 820px); border-bottom: 1px solid var(--line); }
 .stage-panel { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--page); }
 .stage-tools { padding: 16px 20px 6px; display: flex; flex-direction: column; gap: 10px; }
+.stage-when { display: flex; align-items: center; gap: 8px; padding: 8px 20px 0; }
+.stage-when .seg { flex: none; }
+.day-filter { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.day-filter .field { height: 34px; min-width: 0; width: 100%; padding: 0 10px; }
+.stage-note { margin: 0; padding: 8px 20px 12px; font-size: 12.5px; color: var(--ink-3); }
 .stage-tools .area-banner, .stage-tools .answer.slim { margin: 0; }
-.stage-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px 10px; }
+.stage-head { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding: 14px 20px 10px; }
+.layer-toggles { display: flex; flex-wrap: wrap; gap: 6px; }
+.layer-toggle { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 999px; padding: 5px 10px; background: var(--tint); color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.layer-toggle .key-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tone); }
+.layer-toggle .num { font-size: 11px; font-weight: 500; color: var(--ink-3); }
+.layer-toggle[aria-pressed='false'] { background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--ink-3); }
+.layer-toggle[aria-pressed='false'] .key-dot { background: var(--ink-3); }
+.layer-toggle:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .stage-head h2 { font-size: 15px; font-weight: 650; display: flex; align-items: baseline; gap: 8px; }
 .stage-head h2 .num { font-size: 13px; color: var(--ink-3); font-weight: 500; }
 .slist { list-style: none; margin: 0; padding: 0 0 8px; overflow-y: auto; flex: 1; min-height: 0; scrollbar-width: thin; scrollbar-color: var(--axis) transparent; }
@@ -781,12 +793,13 @@ button.metric { font: inherit; color: inherit; text-align: left; background: non
 .stage-map { position: relative; min-width: 0; background: var(--sunken); }
 .stage-map .map { border-radius: 0; height: 100% !important; }
 .map-fallback { height: 100%; background: var(--sunken); }
-.map-key { position: absolute; left: 16px; bottom: 28px; display: flex; gap: 16px; padding: 8px 12px; background: color-mix(in srgb, var(--page) 88%, transparent); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); font-size: 12px; color: var(--ink-2); z-index: 2; }
+.map-key { position: absolute; left: 16px; bottom: 28px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; max-width: calc(100% - 80px); padding: 8px 12px; background: color-mix(in srgb, var(--page) 88%, transparent); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); font-size: 12px; color: var(--ink-2); z-index: 2; }
 .map-key span { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; }
 .map-key .key-dot { width: 9px; height: 9px; }
-.map-key .tone-live, .map-key .tone-partial, .map-key .tone-good { background: var(--tone); }
+.map-key .key-dot.tone-live, .map-key .key-dot.tone-partial, .map-key .key-dot.tone-good, .map-key .key-dot.tone-plan, .map-key .key-dot.tone-idle { background: var(--tone); }
+.map-key .layer-toggles { gap: 4px; }
 .map-open { position: absolute; right: 56px; top: 12px; z-index: 2; }
-.map-pick { position: absolute; left: 16px; bottom: 72px; z-index: 3; width: min(380px, calc(100% - 32px)); max-height: min(320px, 48%); overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; background: var(--card); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow-2); }
+.map-pick { position: absolute; left: 16px; bottom: 108px; z-index: 3; width: min(380px, calc(100% - 32px)); max-height: min(320px, 42%); overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; background: var(--card); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow-2); }
 .map-pick h2 { margin: 0; font-size: 17px; line-height: 1.25; padding-right: 22px; }
 .map-pick p { margin: 0; font-size: 14px; color: var(--ink-2); }
 .map-pick .btn { align-self: flex-start; }

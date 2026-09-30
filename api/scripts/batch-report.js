@@ -118,10 +118,16 @@ for (const x of posts) {
     for (const s of x.summaries) if (s.summary.length < 25 || s.summary.length > 260) flag(x, `odd summary length (${s.summary.length})`);
   }
 
-  // each fault of a multi-fault graphic must be its own outage
+  // two faults may both update an incident that already existed; they may not open one incident between them
   if (multi) {
-    const ids = x.linkDecisions.filter((d) => d.outageId).map((d) => d.outageId);
-    if (new Set(ids).size < ids.length) flag(x, 'two faults of one graphic share an outage');
+    const byOutage = new Map();
+    for (const d of x.linkDecisions) {
+      if (!d.outageId) continue;
+      const list = byOutage.get(d.outageId) ?? [];
+      list.push(d);
+      byOutage.set(d.outageId, list);
+    }
+    for (const group of byOutage.values()) if (group.length > 1 && group.some((d) => d.outcome === 'NEW')) flag(x, 'two faults of one graphic share an outage');
   }
   for (const d of x.linkDecisions) {
     const o = d.outage;

@@ -42,6 +42,9 @@ export type Outage = {
   latest?: { summary: string | null; at: string } | null;
   municipality?: { name: string } | null;
   sdc?: string | null;
+  sdcNode?: { id: string; name: string } | null;
+  restoredAt?: string | null;
+  likelyAreas?: LocalityRef[];
   postCount?: number | null;
   scheduled?: { date: string; from: string | null; to: string | null } | null;
   timeline?: TimelineItem[];

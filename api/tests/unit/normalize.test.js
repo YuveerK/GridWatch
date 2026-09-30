@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { tailPlace, differsByLabel, infraKey, isBareVoltage, isGenericWaterAsset, isNotSuburbName, labelledEquipmentName, likelyTypo, localityKey, namedAfter, similarity } from '../../src/lib/normalize.js';
+import { tailPlace, differsByLabel, infraKey, isBareVoltage, isGenericWaterAsset, isNotSuburbName, labelledEquipmentName, likelyTypo, localityKey, namedAfter, sameStationBySuffix, sameStationWithAreaWord, similarity, waterAssetAliasKey } from '../../src/lib/normalize.js';
 
 describe('isGenericWaterAsset', () => {
   it('a description is not an asset; a named pipe is', () => {
@@ -31,6 +31,16 @@ describe('normalize', () => {
   it('normalizes locality extensions and punctuation', () => {
     expect(localityKey('Beverley Ext.1 & 2')).toBe(localityKey('beverley extension1 and 2'));
     expect(localityKey('Lenasia South Ext 4')).toBe('lenasia south ext 4');
+  });
+
+  it('a street word does not make a longer station the same as a shorter one', () => {
+    expect(sameStationWithAreaWord('lenasia south ext 4', 'lenasia ext 4')).toBe(true);
+    expect(sameStationWithAreaWord('lenasia ext 4', 'lenasia south ext 4')).toBe(true);
+    expect(sameStationWithAreaWord('gresswold north', 'gresswold')).toBe(false);
+    expect(sameStationWithAreaWord('lenasia south ext 4', 'lenasia south ext 5')).toBe(false);
+    expect(sameStationBySuffix('roosevelt park', 'roosevelt')).toBe(true);
+    expect(sameStationBySuffix('ridge road', 'ridge')).toBe(false);
+    expect(sameStationBySuffix('ridge', 'ridge road')).toBe(false);
   });
 
   it('computes similarity', () => {
@@ -106,6 +116,11 @@ describe('only a part of a station needs a station', () => {
     expect(labelledEquipmentName('K3', null, 'SUBSTATION')).toEqual({ name: 'K3', bare: false });
     expect(labelledEquipmentName('03962', null, 'MINI_SUBSTATION')).toEqual({ name: '03962', bare: false });
     expect(labelledEquipmentName('Line C', null, 'FEEDER')).toBeNull();
+    expect(labelledEquipmentName('Line 1', null, 'TRANSFORMER')).toBeNull();
+    expect(labelledEquipmentName('Line 1', '1', 'TRANSFORMER')).toBeNull();
+    expect(waterAssetAliasKey('grand central reservoir')).toBe('grand central res');
+    expect(waterAssetAliasKey('grand central res')).toBe('grand central reservoir');
+    expect(waterAssetAliasKey('brixton 1 tower')).toBeNull();
   });
 });
 

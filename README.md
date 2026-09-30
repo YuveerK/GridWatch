@@ -91,9 +91,13 @@ npm run quality -- --list     # the last 20 cycles
 npm run review                # the queue of suspicious changes, most urgent first (it never edits an outage)
 npm run review -- --resolve <id> [--dismiss] [--note "why"]
 npm run eval:all              # measures reading, coverage, grouping (holdouts apart), manual corrections and final state separately
+npm run eval:all -- --details # lists every post with a disposition mismatch, grouped totals by service/account
+node scripts/reconcile-dispositions.js # preview targeted repairs; --apply snapshots and repairs under the pipeline lease
 npm run audit                 # data health, exit status 1 on any contradiction, review/error/stuck work or unhealthy ingestion
 npm run batch                 # the latest fetch, post by post (exit 1 checks failed, 2 degraded)
 ```
+
+Disposition reconciliation reuses stored readings; ambiguous links may require Gemini tie-breaks (bounded by `GRIDWATCH_AI_MAX_CALLS`, default 100). Posts referenced by manual overrides are held for inspection unless `--include-overrides` is supplied. `--post=<externalId>` limits the repair to one post. A processing failure restores the batch snapshot automatically, and the printed undo command remains available afterward.
 
 - **Quality results** (`CycleQuality`): one per cycle, with status COMPLETE / INCOMPLETE / NEEDS_REVIEW / FAILED. `GET /v1/quality/status` gives the one-word answer; `/admin/quality/latest` (operator) gives the detail.
 - **Retries**: a temporary AI failure on a tie-break is retried in the call, then queued and retried by itself (5 min, 15 min, 45 min, 2 h, 6 h). After the last try it waits for a person and shows in the review queue.

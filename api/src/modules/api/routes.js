@@ -26,6 +26,31 @@ const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).cat
 const LIVE = ['ACTIVE', 'PARTIALLY_RESTORED'];
 const HOUR = 3_600_000;
 
+/**
+ * Outages underway on one Johannesburg calendar day (`YYYY-MM-DD`).
+ * An unplanned incident counts from when it started until it was restored, went quiet, or is still open.
+ * Planned work counts on the day its announced window covers.
+ */
+export function outagesOnDayWhere(day) {
+  const start = new Date(`${day}T00:00:00+02:00`);
+  const end = new Date(start.getTime() + 24 * HOUR);
+  const began = { startedAt: { lt: end } };
+  const notFinished = {
+    OR: [
+      { status: { in: LIVE } },
+      { status: 'PLANNED' },
+      { status: { in: ['RESTORED', 'CLOSED'] }, OR: [{ restoredAt: { gte: start } }, { AND: [{ restoredAt: null }, { lastUpdateAt: { gte: start } }] }] },
+      { status: { in: ['STALE', 'CANCELLED'] }, lastUpdateAt: { gte: start } },
+    ],
+  };
+  return {
+    OR: [
+      { AND: [{ OR: [{ kind: 'UNPLANNED' }, { scheduledStart: null }] }, began, notFinished] },
+      { kind: 'PLANNED', scheduledStart: { lt: end }, scheduledEnd: { gte: start } },
+    ],
+  };
+}
+
 /** Parse a request's query/body against a schema; a bad request is answered with 400 and says what was wrong. */
 const parse = (schema, input, res) => {
   const r = schema.safeParse(input);
@@ -478,13 +503,24 @@ async function boundariesFor(localityIds) {
 /** Live outages with the approximate position of each affected suburb. Suburbs we could not place are only counted.
  * `municipality` (a Municipality code) restricts this to that municipality's outages. */
 router.get('/v1/map', wrap(async (req, res) => {
-  const parsed = parse(z.object({ municipality: text(20).optional(), service: text(20).optional() }), req.query, res);
+  const parsed = parse(z.object({ municipality: text(20).optional(), service: text(20).optional(), on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }), req.query, res);
   if (!parsed) return;
-  const rows = await prisma.outage.findMany({ where: { status: { in: LIVE }, ...outageInMunicipality(parsed.municipality), ...outageInService(parsed.service) }, include: outageInclude, orderBy: { lastUpdateAt: 'desc' }, take: 100 });
+  // `on` is a Johannesburg calendar day. A date that does not exist (31 February) is rejected.
+  const onDay = parsed.on && new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Johannesburg' }).format(new Date(`${parsed.on}T00:00:00+02:00`)) === parsed.on ? parsed.on : null;
+  if (parsed.on && !onDay) return res.status(400).json({ error: 'invalid_request' });
+  const rows = await prisma.outage.findMany({
+    where: onDay
+      ? { AND: [outagesOnDayWhere(onDay), outageInMunicipality(parsed.municipality), outageInService(parsed.service)] }
+      : { status: { in: LIVE }, ...outageInMunicipality(parsed.municipality), ...outageInService(parsed.service) },
+    include: outageInclude,
+    orderBy: onDay ? [{ startedAt: 'desc' }, { id: 'asc' }] : { lastUpdateAt: 'desc' },
+    take: onDay ? 300 : 100,
+  });
   const outages = await shapeMany(rows);
   // likely areas get their shape too; the client draws those faint and dashed, and they stay flagged `inferred`
   const boundaries = await boundariesFor([...new Set(outages.flatMap((o) => [...o.localities, ...o.likelyAreas].map((l) => l.id)))]);
   res.json({
+    ...(onDay ? { on: onDay, truncated: rows.length === 300 } : {}),
     data: outages.map((o) => {
       const named = o.localities.map((l) => place(l, { restored: l.restored, inferred: false, boundary: boundaries.get(l.id) ?? null }));
       const all = named.length ? named : o.likelyAreas.map((l) => place({ ...l, canonicalName: l.canonicalName }, { restored: false, inferred: true, boundary: boundaries.get(l.id) ?? null }));
@@ -790,7 +826,7 @@ router.get('/admin/review-queue', wrap(async (_req, res) => {
 
 // ───────────── insights: what is causing the outages, and where ─────────────
 
-/** The latest news, not every post: new outages, restorations, progress and new estimates. ?locality= limits it to one suburb. */
+/** Every recent post on an outage, newest first. ?locality= limits it to one suburb. */
 router.get('/v1/updates', wrap(async (req, res) => {
   const q = parse(z.object({ limit: intParam(1, 100, 30), days: intParam(1, 30, 7), locality: id.optional(), municipality: text(20).optional(), service: text(20).optional() }), req.query, res);
   if (!q) return;

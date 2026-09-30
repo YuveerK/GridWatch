@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../../db/prisma.js';
 import { assertLeaseInTx } from '../coordination/lease.js';
-import { differsByLabel, infraKey, isBareVoltage, isGenericWaterAsset, isNotSuburbName, labelledEquipmentName, likelyTypo, localityKey, namedAfter, similarity, tailPlace, oneEditApart } from '../../lib/normalize.js';
+import { differsByLabel, infraKey, isBareVoltage, isGenericWaterAsset, isNotSuburbName, labelledEquipmentName, likelyTypo, localityKey, namedAfter, sameStationBySuffix, sameStationWithAreaWord, similarity, tailPlace, oneEditApart, waterAssetAliasKey } from '../../lib/normalize.js';
 import { decodeEdgeEvidenceRef, edgeEvidenceRef } from '../../lib/evidence-edge.js';
 
 const FUZZY_NODE = 0.9;
@@ -131,6 +131,13 @@ export async function resolveLocality(name, preferIds = new Set(), municipalityI
     const stripped = key.replace(/ ext( \d+)*( and \d+)*$/, '').trim();
     candidates = inScope(map.get(stripped));
   }
+  // "Eagle Canyon Estate" is the same tracked suburb as "Eagle Canyon" when that shorter name already exists.
+  // The longer name may already have been learned on its own; the established shorter suburb still wins.
+  const place = key.replace(/\s+(estate|village)$/, '').trim();
+  if (place !== key && place.length >= 5) {
+    const shorter = inScope(map.get(place));
+    if (shorter) candidates = shorter;
+  }
   if (!candidates && key.length >= 5) {
     let best = null;
     let bestScore = 0;
@@ -148,6 +155,21 @@ export async function resolveLocality(name, preferIds = new Set(), municipalityI
   }
   if (!candidates?.length) return null;
   return candidates.find((c) => preferIds.has(c.id)) ?? candidates[0];
+}
+
+/** Restore the explicit place heading omitted from bare extension names by a reading.
+ * Only a single-fault notice with an exact known locality heading qualifies;
+ * an SDC hashtag, a generic heading or a multi-fault graphic supplies no context.
+ */
+export async function qualifyExtensionLocalities(result, text, municipalityId = null) {
+  const bare = (name) => /^ext(?:ension)?s?\.?\s*\d+[a-z]?$/i.test(name?.trim() ?? '');
+  if (result?.faults?.length || !result?.localities?.some((l) => bare(l.name))) return result;
+  const clean = String(text ?? '').replace(/#\w+/g, '').trim();
+  const heading = clean.match(/^([^:\r\n]{2,60}):/)?.[1].trim();
+  if (!heading) return result;
+  const place = await resolveLocality(heading, new Set(), municipalityId);
+  if (!place || localityKey(place.canonicalName) !== localityKey(heading)) return result;
+  return { ...result, localities: result.localities.map((l) => bare(l.name) ? { ...l, name: `${heading} ${l.name}` } : l) };
 }
 
 /** Suburbs missing from the supplied list are learned as candidates (streets/facilities are ignored). A learned locality is
@@ -170,7 +192,7 @@ async function learnLocality(name, ctx, municipalityId = null) {
 }
 
 /** Find or create a node; bumps evidence and promotes to CONFIRMED. */
-const JUNK_NAME = /^(affected|unspecified|unspecific|unnamed|tbc|unknown|customers?|areas?|surrounding( areas)?|n\/a|none|the|a|an|feeder|line|cable|mini[- ]?substation|substation|distributor)$/i;
+const JUNK_NAME = /^(affected|unspecified|unspecific|unnamed|tbc|unknown|customers?|areas?|surrounding( areas)?|n\/a|none|the|a|an|feeder|line|cable|mini[- ]?substation|substation|distributor|pole[- ]?mounted)$/i;
 
 export async function resolveNode({ type, name, at, source = null, mode = 'count', ctx, municipalityId = null, serviceType = 'ELECTRICITY' }) {
   if (!name || JUNK_NAME.test(name.trim())) return null;
@@ -188,6 +210,19 @@ export async function resolveNode({ type, name, at, source = null, mode = 'count
   // exactly as before this existed.
   const scope = { serviceType, ...(municipalityId != null ? { municipalityId } : {}) };
   let node = await prisma.infraNode.findFirst({ where: { type, normalizedKey: key, ...scope } });
+  // "Grand Central Res" already stored, and a later board line says "Grand Central Reservoir".
+  const alias = !node && serviceType === 'WATER' && (type === 'RESERVOIR' || type === 'WATER_TOWER') ? waterAssetAliasKey(key) : null;
+  if (alias) node = await prisma.infraNode.findFirst({ where: { type, normalizedKey: alias, ...scope } });
+  // "Lenasia Ext 4" is the already-known "Lenasia South Ext 4" when the longer name only adds a compass word and has
+  // been seen more often. A station that is itself the better-known name is left alone.
+  if (node && STATION_TYPES.includes(node.type)) {
+    const stronger = await prisma.infraNode.findMany({
+      where: { type: { in: STATION_TYPES }, ...scope, id: { not: node.id }, evidenceCount: { gt: node.evidenceCount } },
+      orderBy: [{ evidenceCount: 'desc' }, { normalizedKey: 'asc' }],
+    });
+    const twin = stronger.find((n) => sameStationWithAreaWord(n.normalizedKey, key));
+    if (twin) node = twin;
+  }
   // "X Substation" and "X Switching Station" are written interchangeably for the same site.
   if (!node && STATION_TYPES.includes(type)) {
     node = await prisma.infraNode.findFirst({ where: { normalizedKey: key, type: { in: STATION_TYPES }, ...scope }, orderBy: { evidenceCount: 'desc' } });
@@ -198,8 +233,7 @@ export async function resolveNode({ type, name, at, source = null, mode = 'count
   // "Roosevelt Park" and "Roosevelt" (one plain-word suffix) are the same substation.
   if (!node && STATION_TYPES.includes(type) && key.length >= 4) {
     const stations = await prisma.infraNode.findMany({ where: { type: { in: STATION_TYPES }, ...scope }, orderBy: [{ evidenceCount: 'desc' }, { normalizedKey: 'asc' }] });
-    const plainSuffix = (long, short) => long.startsWith(`${short} `) && /^[a-z]+$/.test(long.slice(short.length + 1));
-    node = stations.find((n) => plainSuffix(n.normalizedKey, key) || plainSuffix(key, n.normalizedKey)) ?? null;
+    node = stations.find((n) => sameStationBySuffix(n.normalizedKey, key) || sameStationWithAreaWord(n.normalizedKey, key)) ?? null;
   }
   if (!node) {
     const alias = await prisma.nodeAlias.findFirst({ where: { normalizedKey: key, node: { type, ...scope } }, include: { node: true } });
@@ -414,5 +448,19 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
     if (l.state === 'RESTORED') restoredLocalityIds.push(loc.id);
     for (const node of localityTargets({ rootCount, nodes, leaves, parentOf }, l.name, result.localities.map((x) => x.name))) await bumpNodeLocality(node.id, loc.id, at, source, mode, ctx);
   }
-  return { sdcNode, nodes, rootCount, localityIds, restoredLocalityIds, unmatched, municipalityId, serviceType };
+  // A notice can identify only a named customer site (for example a hospital).
+  // Retain that exact site as an OTHER identity; do not invent a suburb-wide
+  // outage, a supplying asset, or a topology edge from its address.
+  if (serviceType === 'ELECTRICITY' && !nodes.length && !localityIds.length &&
+      ['OUTAGE', 'UPDATE', 'RESTORATION', 'PLANNED_OUTAGE'].includes(extraction.relevance)) {
+    for (const name of unmatched) {
+      const match = name.trim().match(/^(.+)\s+(?:hospital|clinic|school|university|campus|stadium|mall|shopping (?:centre|center))$/i);
+      if (!match) continue;
+      const specific = match[1].split(/\s+/).filter((word) => !/^(the|a|an|local|public|private|nearby|surrounding|affected|all|some|other|and)$/i.test(word));
+      if (specific.join(' ').replace(/[^a-z]/gi, '').length < 3) continue;
+      const node = await resolveNode({ type: 'OTHER', name: name.trim(), at, source, mode, ctx, municipalityId, serviceType });
+      if (node && !nodes.some((n) => n.id === node.id)) nodes.push(node);
+    }
+  }
+  return { sdcNode, nodes, rootCount: rootCount || nodes.length, localityIds, restoredLocalityIds, unmatched, municipalityId, serviceType };
 }

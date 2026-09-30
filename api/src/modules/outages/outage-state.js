@@ -88,7 +88,9 @@ export function buildEffect({ extraction, facts, post, retroactive, expand, revi
   const r = extraction.result;
   const restoredIds = new Set(facts.restoredLocalityIds ?? []);
   return {
-    status: r.status ?? null,
+    // "Lines will be attended tomorrow" is still the live unplanned fault. A reader label of PLANNED
+    // must not turn that incident into planned work when the notice itself is not planned work.
+    status: r.status === 'PLANNED' && post.kind === 'UNPLANNED' ? 'ACTIVE' : (r.status ?? null),
     pct: r.restoration_percent ?? null,
     cause: r.cause ?? null,
     eta: r.eta_text ?? null,

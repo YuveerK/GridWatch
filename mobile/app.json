@@ -21,7 +21,7 @@
       "package": "za.gridwatch.app",
       "usesCleartextTraffic": true,
       "adaptiveIcon": {
-        "backgroundColor": "#090b0e",
+        "backgroundColor": "#0B1016",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -42,7 +42,7 @@
         {
           "image": "./assets/images/splash-icon.png",
           "resizeMode": "contain",
-          "backgroundColor": "#090b0e"
+          "backgroundColor": "#0B1016"
         }
       ],
       [
@@ -54,7 +54,7 @@
       [
         "expo-notifications",
         {
-          "color": "#f2b84b"
+          "color": "#F4BE58"
         }
       ],
       "@maplibre/maplibre-react-native"

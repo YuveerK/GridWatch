@@ -4,13 +4,13 @@ import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { generateJson } from '../ai/gemini.client.js';
 import { tailPlace } from '../../lib/normalize.js';
-import { scheduleWindow } from '../../lib/schedule.js';
+import { parseSchedule, scheduleWindow } from '../../lib/schedule.js';
 import { assertLeaseInTx, exclusive } from '../coordination/lease.js';
 import { buildEffect, initialStatus, refoldOutage, statusFor, suburbRestored } from './outage-state.js';
 import { headlineNode, pickHeadlineMatch } from './headline.js';
 import { isTransientAiError, nextRetryAt, retryTransient } from '../../lib/retry.js';
 import { resolveOverride } from './overrides.js';
-import { applyRevivalRule, scoreCandidate } from './scoring.js';
+import { applyRevivalRule, boardLineOnLiveAssets, sameDayWaterUpdate, scoreCandidate, soleHashtagIncident } from './scoring.js';
 import { cachedVerdict, storeVerdict } from './tiebreak-cache.js';
 
 const LINKABLE = new Set(['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE']);
@@ -41,15 +41,44 @@ export const linkedToPost = (candidate, postId) => candidate.raw.posts.some((p) 
 // \b so that "unplanned power interruption" / "unscheduled maintenance" are not mistaken for planned work
 // only added for posts that say they are amended, so nothing else about the tie-break changes
 const AMENDED_NOTE = ' This post is marked amended or corrected: it replaces an earlier post about the same fault, so its equipment names may differ from those already recorded. Judge it by the area and the timing.';
+const CITY_POWER_TIE = 'Decide whether a new City Power post is about the SAME fault as one of the candidate outages (same equipment failing, continued repairs, or its restoration) or a DIFFERENT fault. Sharing a suburb alone is not enough when BOTH sides name different equipment: two faults at different equipment are different outages, even nearby. But if a candidate outage names no equipment (it was first reported only by suburb) and the new post is about the same suburbs within a few hours, treat it as the same fault. The reverse is the same fault too: a new post that names no equipment, whose suburbs are exactly the suburbs of the candidate, within a few hours, continues that incident even when the candidate already names equipment. Planned maintenance and unplanned faults are never the same. A restoration post belongs to the outage it restores. Answer outage_id = null for a different fault.';
+const WATER_TIE = 'Decide whether a new Johannesburg Water notice is about the SAME incident as one of the candidate outages or a DIFFERENT one. A reservoir, tower, pump station or supply system that is still live is the same incident when this notice continues its low supply, constraint, recovery or outlet closure, even if the notice also names the upstream Rand Water works or the power outage that caused it. A different asset, with its own condition, is a different incident. A multi-system bulletin is not the same incident as a later notice about one supply system unless the notice is updating an asset that bulletin is already about. Pumping resumed, system recovering, or outlets opened is not customer restoration. Planned work and unplanned faults are never the same. Answer outage_id = null for a different incident.';
 const AMENDED = /\b(amended|corrected|correction|revised)\b/i;
 // An "emergency isolation" programme (days of isolated supply for cable work, with a "day 3 of 4" post each day and a "fully restored" post at the end)
 // is work that was decided on, not a fault: its daily and final posts must be the same KIND as its first, or the planned/unplanned boundary splits it.
 const PLANNED_TEXT = /\bplanned (maintenance|power interruption|interruption|outage)|\bscheduled (maintenance|interruption|outage)|\bemergency isolation\b|\bisolation programme\b/i;
 
+/** The notice itself announces maintenance: the word, the programme, a calendar date, or a postponement of that work. "Attended tomorrow" is not that. */
+function noticeDeclaresPlannedWork(text) {
+  if (!text) return false;
+  if (PLANNED_TEXT.test(text)) return true;
+  if (/\b(planned|scheduled|rescheduled)\b/i.test(text)) return true;
+  if (/\bload\s*reduction\b/i.test(text)) return true;
+  // "POSTPONED … network upgrades" is the planned job being moved, even when the short caption never repeats "planned"
+  // (Flora Park, 28 Sept). A fault whose repairs were put off until morning does not use this shape.
+  if (/\bpostponed\b/i.test(text) && /\b(upgrades?|maintenance|interruption|network|supply zone)\b/i.test(text)) return true;
+  return Boolean(parseSchedule(text));
+}
+
+/** A quote-tweet that only says supply is restored points at one earlier status. Several quotes, or none, do not. */
+export function quotedStatusId(rawPayload) {
+  const refs = rawPayload?.tweet?.referenced_tweets ?? rawPayload?.referenced_tweets ?? [];
+  const quotes = refs.filter((r) => r?.type === 'quoted' && r.id);
+  return quotes.length === 1 ? String(quotes[0].id) : null;
+}
+
+/** The quoted post restores one incident. Several incidents (a graphic) stay for a person. */
+export function singleQuotedOutage(outageIds) {
+  const ids = [...new Set((outageIds ?? []).filter(Boolean))];
+  return ids.length === 1 ? ids[0] : null;
+}
+
 /** Planned work also shows up as "restored" posts, so relevance alone is not enough. */
 export function isPlanned(extraction, text) {
-  const r = extraction.result;
-  if (extraction.relevance === 'PLANNED_OUTAGE' || r.status === 'PLANNED') return true;
+  const r = extraction.result ?? {};
+  const saysPlanned = extraction.relevance === 'PLANNED_OUTAGE' || r.status === 'PLANNED';
+  // A fault split out of a graphic has no post text of its own here, so the reading stands.
+  if (saysPlanned) return text ? noticeDeclaresPlannedWork(text) : true;
   // Only the post's own text counts: image digests mix planned and unplanned items.
   return extraction.relevance !== 'OUTAGE' && PLANNED_TEXT.test(text ?? '');
 }
@@ -95,6 +124,11 @@ async function loadCandidates(post, repairOutageIds = []) {
               // planned work (reminders days ahead, multi-day isolations) stays linkable much longer than a fault
               OR: [{ kind: 'UNPLANNED', lastUpdateAt: { gte: since } }, { kind: 'UNPLANNED', status: 'STALE', lastUpdateAt: { gte: revivalSince } }, { kind: 'PLANNED', lastUpdateAt: { gte: new Date(post.postedAt.getTime() - PLANNED_WINDOW_HOURS * HOUR) } }, { kind: 'PLANNED', scheduledEnd: { gte: post.postedAt } }],
             },
+            // A postponement can arrive after the planned window was swept closed (the job still ended on the calendar).
+            // It belongs to that planned job, not to a second outage.
+            ...(post.kind === 'PLANNED' && post.status === 'CANCELLED'
+              ? [{ status: 'CLOSED', kind: 'PLANNED', startedAt: { lte: post.postedAt }, lastUpdateAt: { gte: new Date(post.postedAt.getTime() - PLANNED_WINDOW_HOURS * HOUR) } }]
+              : []),
             // the outage(s) this very post was in before it was taken out to be re-linked (still scored like any other candidate)
             ...(repairOutageIds.length ? [{ id: { in: repairOutageIds } }] : []),
           ],
@@ -121,7 +155,7 @@ async function loadCandidates(post, repairOutageIds = []) {
     status: o.status,
     sdcName: o.sdcName,
     nodeIds: new Set(o.nodes.map((n) => n.nodeId)),
-    nodes: o.nodes.map((n) => ({ id: n.nodeId, type: n.node.type })),
+    nodes: o.nodes.map((n) => ({ id: n.nodeId, type: n.node.type, name: n.node.name })),
     digest: o.digest,
     localityIds: new Set([...o.localities.map((l) => l.localityId), ...(o.localities.length ? [] : o.nodes.flatMap((n) => named.get(n.node.normalizedKey) ?? []))]),
     // links made by the post being placed (an earlier fault of the same graphic) are not thread evidence for it
@@ -187,7 +221,8 @@ async function askLlm(post, extraction, ranked, { fromDigest = false } = {}) {
     .update(JSON.stringify({ model: env.GEMINI_MODEL, amended: post.amended, newPost, candidates: summaries.map(({ outage_id, ...rest }, i) => ({ ...rest, origin: shortlist[i].stableId })) }))
     .digest('hex')
     .slice(0, 24);
-  const key = `v6|${post.id}|${post.faultIndex ?? 0}|${fingerprint}`;
+  const tieVersion = post.serviceType === 'WATER' ? 'v7' : 'v6';
+  const key = `${tieVersion}|${post.id}|${post.faultIndex ?? 0}|${fingerprint}`;
   let hit = cachedVerdict(key);
   if (hit === undefined) {
     // Verdicts cached before the fingerprinted key existed identified a candidate by its earliest post alone. Two outages opened
@@ -209,8 +244,7 @@ async function askLlm(post, extraction, ranked, { fromDigest = false } = {}) {
     return { outageId: chosen?.id ?? null, reason: `${hit.reason} (cached)` };
   }
   const out = await generateJson({
-    systemInstruction:
-      'Decide whether a new City Power post is about the SAME fault as one of the candidate outages (same equipment failing, continued repairs, or its restoration) or a DIFFERENT fault. Sharing a suburb alone is not enough when BOTH sides name different equipment: two faults at different equipment are different outages, even nearby. But if a candidate outage names no equipment (it was first reported only by suburb) and the new post is about the same suburbs within a few hours, treat it as the same fault. The reverse is the same fault too: a new post that names no equipment, whose suburbs are exactly the suburbs of the candidate, within a few hours, continues that incident even when the candidate already names equipment. Planned maintenance and unplanned faults are never the same. A restoration post belongs to the outage it restores. Answer outage_id = null for a different fault.' + (post.amended ? AMENDED_NOTE : ''),
+    systemInstruction: (post.serviceType === 'WATER' ? WATER_TIE : CITY_POWER_TIE) + (post.amended ? AMENDED_NOTE : ''),
     parts: [{ text: JSON.stringify({ new_post: newPost, candidate_outages: summaries }) }],
     jsonSchema: tieBreakSchema,
     purpose: 'tiebreak',
@@ -253,7 +287,7 @@ export class StaleCandidateError extends Error {}
  * whole decision exists or none of it does, so a crash or a lost race can never leave a change without its marker.
  * Nothing slow (AI, network) happens in here: the candidates and verdict were settled before.
  */
-async function commitLink({ ctx, post, extraction, facts, outageId, isNew, retroactive, score, reasons, decision, manual = false, revision = null }) {
+async function commitLink({ ctx, post, extraction, facts, outageId, isNew, retroactive, score, reasons, decision, manual = false, revision = null, forceExpand = false, repairExisting = false }) {
   return prisma.$transaction(
     async (tx) => {
       await assertLeaseInTx(tx, ctx);
@@ -280,12 +314,16 @@ async function commitLink({ ctx, post, extraction, facts, outageId, isNew, retro
       } else {
         // serialise with any other change to this outage and make sure it is still there and still open to news
         const locked = await tx.$queryRaw`SELECT status FROM "Outage" WHERE id = ${id} FOR UPDATE`;
-        if (!locked.length || (locked[0].status === 'CLOSED' && !manual)) throw new StaleCandidateError(`outage ${id} changed while the post was being linked`);
+        const plannedCancellation = post.kind === 'PLANNED' && extraction.result?.status === 'CANCELLED';
+        // Reprocessing may put a historical post back into its original, already
+        // closed incident. It is an explicitly scoped repair candidate, not a new
+        // live post reviving an arbitrary closed outage.
+        if (!locked.length || (locked[0].status === 'CLOSED' && !manual && !plannedCancellation && !repairExisting)) throw new StaleCandidateError(`outage ${id} changed while the post was being linked`);
       }
       // A digest post (many nodes) must not smear its nodes across an existing single-fault outage. isDigest() is
       // definitionally false once a fault has been split out of a graphic (facts.fromDigest), so a separated fault
       // is judged on its OWN (already-narrow) facts here, not blanket-denied expansion just for having come from one.
-      const expand = isNew || !isDigest(facts);
+      const expand = isNew || !isDigest(facts) || forceExpand;
       const effect = buildEffect({ extraction, facts, post, retroactive, expand, revision });
       await tx.outagePost.create({
         data: { outageId: id, postId: post.id, role: roleFor(extraction, isNew && !retroactive), score, reasons, postedAt: post.postedAt, faultIndex: post.faultIndex, effect },
@@ -365,10 +403,11 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     municipalityId: facts.municipalityId ?? null,
     serviceType: facts.serviceType ?? postRow.serviceType ?? 'ELECTRICITY',
     nodeIds: new Set(facts.nodes.map((n) => n.id)),
-    nodes: facts.nodes.map((n) => ({ id: n.id, type: n.type })),
+    nodes: facts.nodes.map((n) => ({ id: n.id, type: n.type, name: n.name })),
     localityIds: new Set(facts.localityIds),
     // "[AMENDED UPDATE]" / "*Amended*" in the opening words: a correction of an earlier post (not judged for one fault inside a graphic)
     amended: !facts.fromDigest && AMENDED.test((postRow.noteTweetText || postRow.text || '').slice(0, 90)),
+    fromDigest: Boolean(facts.fromDigest),
     plannedClosure: Boolean(extraction.result.planned_closure), // a water board line reporting a deliberate closure
     schedule: postKind === 'PLANNED' ? scheduleFor(extraction, postRow, facts) : null, // an unplanned fault has no announced window
   };
@@ -384,6 +423,9 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
 
   if (!LINKABLE.has(extraction.relevance)) return decide({ outcome: 'NEW', reason: `not linkable (${extraction.relevance})` });
 
+  // One post can be on an outage only once. A second asset-line of the same graphic therefore cannot join an incident
+  // an earlier line already joined (Brixton 1 Tower stays beside Crosby when Crosby was the previous line). An outage
+  // this post itself just opened is the same restriction: two faults cannot collapse into one new incident.
   const candidates = (await loadCandidates(post, repairOutageIds))
     .filter((c) => !facts.fromDigest || !linkedToPost(c, post.id))
     .map((c) => applyRevivalRule({ ...c, ...scoreCandidate(post, c) }, post, { windowHours: env.OUTAGE_WINDOW_HOURS, highScore: env.LINK_HIGH_SCORE }))
@@ -404,12 +446,26 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
   // order (whichever sorts first) is a guess dressed up as confidence. Let the tie-break choose, exactly as it does for a score in the
   // ambiguous middle band.
   const tooClose = tooCloseToCall(candidates);
+  const waterFollowUp = candidates.find((c) => sameDayWaterUpdate(post, c, { lowScore: env.LINK_LOW_SCORE }));
+  const assetLine = candidates.find((c) => boardLineOnLiveAssets(post, c));
+  const hashtagHit = !facts.nodes.length && !facts.localityIds.length
+    ? soleHashtagIncident(postRow.noteTweetText || postRow.text, candidates, post.postedAt, { postId: post.id })
+    : null;
   if (manual) {
     outageId = manual.action === 'JOIN' ? manual.outageId : null;
     reason = `manual: ${manual.action === 'JOIN' ? 'joined the outage of the anchor post' : 'kept as its own outage'}${manual.note ? ` (${manual.note})` : ''}`;
   } else if (top && top.score >= env.LINK_HIGH_SCORE && !maybeNewFault && !tooClose) {
     outageId = top.id;
     reason = top.reasons.join(', ');
+  } else if (waterFollowUp) {
+    outageId = waterFollowUp.id;
+    reason = `same-day water asset: ${waterFollowUp.reasons.join(', ')}`;
+  } else if (assetLine) {
+    outageId = assetLine.id;
+    reason = `status line for an asset already on this incident: ${assetLine.reasons.join(', ')}`;
+  } else if (hashtagHit) {
+    outageId = hashtagHit.candidate.id;
+    reason = `hashtag continuation: #${hashtagHit.stem}`;
   } else if (top && top.score >= env.LINK_LOW_SCORE && (!isDigest(facts) || !(extraction.result.faults?.length >= 2))) {
     // a prose update about one incident that names many substations is not a multi-fault graphic: let the tie-break decide
     usedLlm = true;
@@ -433,6 +489,36 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     }
   } else {
     reason = top ? `best candidate ${top.score} below threshold` : 'no open candidates';
+  }
+
+  if (!manual && !outageId && !post.nodeIds.size && !post.localityIds.size && extraction.relevance === 'RESTORATION') {
+    const quotedId = quotedStatusId(postRow.rawPayload);
+    if (quotedId) {
+      const quoted = await prisma.sourcePost.findFirst({
+        where: { externalId: quotedId, sourceAccount: postRow.sourceAccount, serviceType: post.serviceType },
+        select: { externalId: true, publishedAt: true, outagePosts: { select: { outageId: true, outage: { select: { serviceType: true, status: true, lastUpdateAt: true } } } } },
+      });
+      const quotedOutageId = singleQuotedOutage((quoted?.outagePosts ?? []).filter((p) =>
+        p.outage.serviceType === post.serviceType && (p.outage.status !== 'CLOSED' ||
+          (postRow.publishedAt >= quoted.publishedAt && postRow.publishedAt <= new Date(p.outage.lastUpdateAt.getTime() + env.OUTAGE_WINDOW_HOURS * HOUR)))
+      ).map((p) => p.outageId));
+      if (quotedOutageId) {
+        return commitLink({
+          revision,
+          ctx,
+          post,
+          extraction,
+          facts,
+          outageId: quotedOutageId,
+          repairExisting: true, // the explicit quote identifies this historical episode, within its window
+          isNew: false,
+          retroactive: false,
+          score: null,
+          reasons: [`quoted post ${quoted.externalId}`],
+          decision: { outcome: 'LINKED', topScore: top?.score ?? null, usedLlm: false, reason: `restoration of the quoted post ${quoted.externalId}`, candidates: summary },
+        });
+      }
+    }
   }
 
   if (!manual && !outageId && !post.nodeIds.size && !post.localityIds.size) {
@@ -506,7 +592,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     return decide({ outcome: 'NEEDS_REVIEW', topScore: top?.score ?? null, reason: 'looks like a large digest by equipment count alone, but was not split into separate faults: ambiguous', candidates: summary });
   }
 
-  const linkedTop = outageId && top?.id === outageId ? top : null;
+  const linked = outageId ? candidates.find((c) => c.id === outageId) ?? null : null;
   return commitLink({
           revision,
     ctx,
@@ -516,9 +602,11 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     outageId,
     isNew: !outageId,
     retroactive: !outageId && extraction.relevance === 'RESTORATION',
-    score: linkedTop?.score ?? null,
-    reasons: linkedTop?.reasons ?? null,
+    score: linked?.score ?? null,
+    reasons: linked?.reasons ?? null,
     manual: Boolean(manual),
+    repairExisting: repairOutageIds.includes(outageId),
+    forceExpand: Boolean(waterFollowUp && outageId === waterFollowUp.id),
     decision: { outcome: outageId ? 'LINKED' : 'NEW', topScore: top?.score ?? null, usedLlm, reason, candidates: summary },
   });
 }

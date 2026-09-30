@@ -47,6 +47,30 @@ export function checkPostDispositions({ expectedIndices, decisions, outagePosts 
   return { problems, excluded };
 }
 
+/** Count accepted expected faults separately from entries left over after a layout change.
+ * An obsolete index is a consistency problem, but cannot subtract an unrelated expected
+ * fault from coverage. A recorded decision only counts when its timeline agrees.
+ */
+export function dispositionCoverage({ expectedIndices, decisions, outagePosts }) {
+  const indices = [...new Set(expectedIndices)];
+  const missingIndices = [];
+  const invalidIndices = [];
+  for (const i of indices) {
+    const ds = decisions.filter((d) => d.faultIndex === i);
+    if (!ds.length) missingIndices.push(i);
+    else if (checkPostDispositions({
+      expectedIndices: [i], decisions: ds, outagePosts: outagePosts.filter((p) => p.faultIndex === i),
+    }).problems.length) invalidIndices.push(i);
+  }
+  const expected = new Set(indices);
+  const unexpectedIndices = [...new Set([...decisions, ...outagePosts].map((r) => r.faultIndex))].filter((i) => !expected.has(i));
+  return {
+    expected: indices.length,
+    accepted: indices.length - missingIndices.length - invalidIndices.length,
+    missingIndices, invalidIndices, unexpectedIndices,
+  };
+}
+
 /** Does an outage effect still match the reading it was built from? null when the effect predates revisions (nothing to compare). */
 export function effectReadingMismatch(effect, currentResult) {
   if (!effect?.reading) return null;
@@ -172,7 +196,7 @@ export async function assessCycle({ prisma, faultItems, promptVersion, trigger, 
     const expectedIndices = isReply ? [0] : items.map((i) => i.faultIndex);
     const verdict = e || isReply ? checkPostDispositions({ expectedIndices, decisions: x.linkDecisions, outagePosts: x.outagePosts }) : { problems: [], excluded: [] };
     expectedFaults += expectedIndices.length;
-    disposed += expectedIndices.filter((i) => x.linkDecisions.some((d) => d.faultIndex === i)).length;
+    disposed += dispositionCoverage({ expectedIndices, decisions: x.linkDecisions, outagePosts: x.outagePosts }).accepted;
     for (const p of verdict.problems) problems.push({ kind: 'DISPOSITION', postId: x.id, externalId: x.externalId, message: p });
     // judged per fault: a mixed SDC summary can hold linkable faults even when the post as a whole is not an outage post
     const relevanceOf = new Map(items.map((i) => [i.faultIndex, i.extraction.relevance]));

@@ -18,6 +18,13 @@ export function infraKey(name) {
   return baseNormalize(name).replace(TYPE_WORDS, ' ').replace(/\s+/g, ' ').trim();
 }
 
+/** "Grand Central Res" and "Grand Central Reservoir" are one asset. The other spelling, or null when the key has neither ending. */
+export function waterAssetAliasKey(key) {
+  if (key.endsWith(' reservoir')) return `${key.slice(0, -' reservoir'.length)} res`;
+  if (key.endsWith(' res')) return `${key.slice(0, -' res'.length)} reservoir`;
+  return null;
+}
+
 export function localityKey(name) {
   return baseNormalize(name);
 }
@@ -45,7 +52,10 @@ export function labelledEquipmentName(name, station, type = 'LINE', context = ''
     if (prefixed) n = `${prefixed[1]} ${n}`;
   }
   const bare = n.match(BARE_LABEL);
-  if (bare) return station ? { name: `${station} ${bare[1]}`, bare: true } : STATION_PARTS.has(type) ? null : { name: n, bare: false };
+  // "Line 1" typed as a transformer is still just a line number (Njala, 29 Sept). A parent that is itself only a line
+  // number ("1") is not a station, so it must not be stored as "1 1".
+  const home = station && !BARE_LABEL.test(String(station).trim()) ? station : null;
+  if (bare) return home ? { name: `${home} ${bare[1]}`, bare: true } : STATION_PARTS.has(type) || /^(?:line|feeder|cable|circuit)\b/i.test(n) ? null : { name: n, bare: false };
   const withLine = n.match(STATION_LINE);
   if (withLine) return { name: `${withLine[1]} ${withLine[2]}`, bare: false };
   return { name: n, bare: false };
@@ -107,6 +117,41 @@ export function tailPlace(name) {
 }
 
 const STREET_WORDS = /\b(street|st|str|road|rd|avenue|ave|drive|dr|lane|ln|close|crescent|cres|boulevard|way|highway|between)\b/i;
+const STREET_TOKEN = /^(street|st|str|road|rd|avenue|ave|drive|dr|lane|ln|close|crescent|cres|boulevard|way|highway)$/;
+
+/**
+ * "Roosevelt Park" and "Roosevelt" are one station: the longer name adds a single plain word.
+ * "Ridge Road" is not "Ridge". The extra word is a street word, so it is a different place.
+ */
+export function sameStationBySuffix(a, b) {
+  const [long, short] = a.length >= b.length ? [a, b] : [b, a];
+  if (!long.startsWith(`${short} `)) return false;
+  const extra = long.slice(short.length + 1);
+  return /^[a-z]+$/.test(extra) && !STREET_TOKEN.test(extra);
+}
+
+const AREA_QUALIFIER = new Set(['north', 'south', 'east', 'west', 'central']);
+
+/**
+ * "lenasia ext 4" and "lenasia south ext 4" are one switching station: the longer name only inserts a compass word,
+ * and both still carry the same number. "Gresswold" and "Gresswold North" do not (no shared number), and neither do
+ * two stations whose numbers differ.
+ */
+export function sameStationWithAreaWord(a, b) {
+  const ta = String(a ?? '').split(' ').filter(Boolean);
+  const tb = String(b ?? '').split(' ').filter(Boolean);
+  if (Math.abs(ta.length - tb.length) !== 1) return false;
+  const [long, short] = ta.length > tb.length ? [ta, tb] : [tb, ta];
+  if (!short.some((token) => /\d/.test(token))) return false;
+  let i = 0;
+  let extra = null;
+  for (const token of long) {
+    if (token === short[i]) i += 1;
+    else if (extra) return false;
+    else extra = token;
+  }
+  return i === short.length && AREA_QUALIFIER.has(extra);
+}
 const FACILITY_WORDS = /\b(centre|center|clinic|hospital|school|college|university|campus|stadium|mall|shopping|station|hotel|police|laboratory|wastewater|treatment|golf|shooting range|old age|church|mosque|water|standby|feederboard|substation|transformer|kiosk)\b/i;
 const ORG_WORDS = /\b(transnet|eskom|absa|sabc|standard bank|nedbank|fnb|coca-?cola|rand daily mail|city power|johannesburg water|telkom|city of tshwane|tshwane)\b/i;
 

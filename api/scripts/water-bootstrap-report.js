@@ -2,7 +2,7 @@
 //   node scripts/water-bootstrap-report.js --handle JHBWater --from 2026-09-01
 import { prisma } from '../src/db/prisma.js';
 import { WATER_PROMPT_VERSION } from '../src/modules/ai/prompts/water.prompt.js';
-import { crossServiceLinks, giantWaterIncidents, recoveringMarkedRestored, waterNodesWithElectricityTypes } from '../src/modules/processing/quality.js';
+import { crossServiceLinks, giantWaterIncidents, legitimateLargeWaterIncidents, recoveringMarkedRestored, waterNodesWithElectricityTypes } from '../src/modules/processing/quality.js';
 
 const args = process.argv.slice(2);
 const flag = (name) => {
@@ -18,7 +18,12 @@ const posts = await prisma.sourcePost.findMany({
 });
 const outages = await prisma.outage.findMany({
   where: { serviceType: 'WATER' },
-  select: { id: true, status: true, serviceType: true, _count: { select: { localities: true, nodes: true, posts: true } } },
+  select: {
+    id: true, status: true, serviceType: true, waterState: true,
+    localities: { select: { impactBasis: true } },
+    nodes: { select: { node: { select: { type: true } } } },
+    posts: { select: { effect: true } },
+  },
 });
 const decisions = await prisma.linkDecision.findMany({
   where: { post: { sourceAccount: handle, publishedAt: { gte: from } } },
@@ -71,7 +76,14 @@ const byOutcome = {};
 for (const d of decisions) byOutcome[d.outcome] = (byOutcome[d.outcome] ?? 0) + 1;
 const crossed = crossServiceLinks(decisions.map((d) => ({ postService: d.post.serviceType, outageService: d.outage?.serviceType })));
 const badTypes = waterNodesWithElectricityTypes(nodes);
-const giants = giantWaterIncidents(outages.map((o) => ({ serviceType: o.serviceType, localities: o._count.localities, nodes: o._count.nodes })));
+// Keep the source evidence used by audit.js: counts alone cannot distinguish a
+// legitimate explicit supply zone from a merged multi-asset incident.
+const waterShaped = outages.map((o) => ({
+  ...o,
+  effectStates: [...new Set(o.posts.map((p) => p.effect?.waterState).filter(Boolean))],
+}));
+const giants = giantWaterIncidents(waterShaped);
+const wideZones = legitimateLargeWaterIncidents(waterShaped);
 const restored = await prisma.outagePost.findMany({
   where: { outage: { serviceType: 'WATER', status: 'RESTORED' }, post: { sourceAccount: handle } },
   select: { effect: true, post: { select: { text: true, noteTweetText: true } }, outage: { select: { status: true } } },
@@ -114,6 +126,7 @@ line('processing errors', errors);
 line('cross-service errors', crossed.length);
 line('false restorations', falseRestores.length);
 line('suspicious giant incidents', giants.length);
+line('large explicit supply zones', wideZones.length);
 line('electricity-typed water nodes', badTypes.length);
 await prisma.$disconnect();
 process.exit(crossed.length || badTypes.length || falseRestores.length ? 1 : 0);

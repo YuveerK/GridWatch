@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { learnFromExtraction, removeContributions, resolveLocality, resetLocalityIndex } from '../../src/modules/infrastructure/infrastructure.service.js';
+import { learnFromExtraction, qualifyExtensionLocalities, removeContributions, resolveLocality, resetLocalityIndex } from '../../src/modules/infrastructure/infrastructure.service.js';
 import { prisma, resetDb } from './db.js';
 
 const at = new Date('2026-09-19T12:00:00Z');
@@ -10,6 +10,39 @@ beforeEach(async () => {
   await resetDb();
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "EvidenceContribution", "Locality" CASCADE');
   resetLocalityIndex();
+});
+
+describe('outages identifying only a named customer facility', () => {
+  it('does not use an SDC hashtag, unknown heading or graphic heading to qualify extensions', async () => {
+    await prisma.locality.create({ data: { id: 'len', canonicalName: 'Lenasia', normalizedName: 'lenasia', active: true, updatedAt: at } });
+    resetLocalityIndex();
+    const result = { localities: [{ name: 'Extensions 3', state: 'RESTORED' }], faults: [] };
+    for (const text of ['#LenasiaSDC Power restored to Extensions 3.', 'Latest update: Power restored to Extensions 3.', 'Unknownville: Power restored to Extensions 3.']) {
+      expect(await qualifyExtensionLocalities(result, text)).toBe(result);
+    }
+    const graphic = { ...result, faults: [{ localities: result.localities }] };
+    expect(await qualifyExtensionLocalities(graphic, 'Lenasia:')).toBe(graphic);
+  });
+  const reading = (name, relevance = 'OUTAGE') => ({ ...extraction([], [{ name, state: 'AFFECTED' }], 'Inner City'), relevance });
+  it('retains the hospital identity without inventing a suburb or supply edge', async () => {
+    await post('hospital');
+    const r = await learnFromExtraction(reading('Nelson Mandela Children’s Hospital'), at, { source: { postId: 'hospital', faultIndex: 0 } });
+    expect(r.nodes.map((n) => [n.type, n.name])).toEqual([['OTHER', 'Nelson Mandela Children’s Hospital']]);
+    expect(r.rootCount).toBe(1);
+    expect(r.localityIds).toEqual([]);
+    expect(await prisma.locality.count()).toBe(0);
+    expect(await prisma.infraEdge.count()).toBe(0);
+    const again = await learnFromExtraction(reading('Nelson Mandela Children’s Hospital'), at, { source: { postId: 'hospital', faultIndex: 0 } });
+    expect(again.nodes[0].id).toBe(r.nodes[0].id);
+    expect(again.nodes[0].evidenceCount).toBe(1);
+  });
+  it('does not turn generic places, general notices or Water sites into electricity assets', async () => {
+    for (const name of ['the hospital', 'local public hospital', 'surrounding schools']) {
+      expect((await learnFromExtraction(reading(name), at)).nodes).toEqual([]);
+    }
+    expect((await learnFromExtraction(reading('Nelson Mandela Children’s Hospital', 'GENERAL_NOTICE'), at)).nodes).toEqual([]);
+    expect((await learnFromExtraction(reading('Nelson Mandela Children’s Hospital'), at, { serviceType: 'WATER' })).nodes).toEqual([]);
+  });
 });
 
 describe('A14: same-name equipment of different types stays distinct', () => {
@@ -246,6 +279,13 @@ describe('electrical labels and voltages are not equipment on their own', () => 
 });
 
 describe('a mistyped suburb is the suburb, not a new one', () => {
+  it('"Eagle Canyon Estate" is the existing "Eagle Canyon", even after the longer name was learned', async () => {
+    await prisma.locality.create({ data: { id: 'eagle', canonicalName: 'Eagle Canyon', normalizedName: 'eagle canyon', active: true, sourceLine: 1, sourceLabel: 'Eagle Canyon', updatedAt: at } });
+    await prisma.locality.create({ data: { id: 'estate', canonicalName: 'Eagle Canyon Estate', normalizedName: 'eagle canyon estate', active: true, sourceLine: 2, sourceLabel: 'Eagle Canyon Estate', updatedAt: at } });
+    resetLocalityIndex();
+    expect((await resolveLocality('Eagle Canyon Estate')).id).toBe('eagle');
+  });
+
   it('"Develand" resolves to the existing "Devland" instead of creating an unplaced duplicate', async () => {
     await prisma.locality.create({ data: { id: 'devl', canonicalName: 'Devland', normalizedName: 'devland', active: true, sourceLine: 1, sourceLabel: 'Devland', updatedAt: at } });
     resetLocalityIndex();

@@ -102,6 +102,25 @@ describe('B1/B2: each cycle saves what it covered and whether it completed', () 
     expect(r.status).toBe('NEEDS_REVIEW');
   });
 
+  it('does not report a review decision as an accepted fault', async () => {
+    await addPost(0, 'Power out at an unidentified location', reading('OUTAGE', 'INVESTIGATING', []));
+    const startedAt = new Date(Date.now() - 60_000);
+    await processPending();
+    const r = await assess({ trigger: 'manual', startedAt });
+    expect(r.status).toBe('NEEDS_REVIEW');
+    expect(r.summary).toMatchObject({ expectedFaults: 1, faultsWithDisposition: 0 });
+  });
+
+  it('does not report a linked fault as accepted when its timeline entry is missing', async () => {
+    const id = await addPost(0, 'Power out at Alpha', reading('OUTAGE', 'INVESTIGATING', ['Alpha']));
+    const startedAt = new Date(Date.now() - 60_000);
+    await processPending();
+    await prisma.outagePost.deleteMany({ where: { postId: id } });
+    const r = await assess({ trigger: 'manual', startedAt });
+    expect(r.status).toBe('NEEDS_REVIEW');
+    expect(r.summary).toMatchObject({ expectedFaults: 1, faultsWithDisposition: 0 });
+  });
+
   it('missing work is INCOMPLETE: a skipped stage, a backlog, an unfinished fetch', async () => {
     const startedAt = new Date(Date.now() - 60_000);
     expect((await assess({ trigger: 'scheduler', startedAt, incomplete: ['sweep'] })).status).toBe('INCOMPLETE');

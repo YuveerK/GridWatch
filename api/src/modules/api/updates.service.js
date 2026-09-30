@@ -20,23 +20,21 @@ export function readingEffect(result, faultIndex = 0) {
 }
 
 /**
- * What kind of news is this post for its outage, or null when it changed nothing a resident cares about?
- * Only news is shown: a new outage, power restored, restoration progress, a new estimate, or a change of status.
- * An "update" that repeats what was already said is left out. When neither a stored effect nor a reading exists there is
- * nothing to compare, so the post is kept (better a repeat than a missed restoration).
+ * What kind of news this post is for its outage. Every post on an outage is shown: a repeat that does not
+ * change the status, percentage or estimate is still an update, so the newest thing an account said stays visible.
  */
 export function classify({ role, effect, prev }) {
   if (role === 'OPENED') return 'opened';
   if (role === 'RESTORATION' || effect?.status === 'RESTORED') return 'restored';
   if (!effect) return 'update';
-  if (!prev) return effect.pct != null ? 'progress' : effect.eta ? 'estimate' : null; // nothing to compare with: news only if it says something concrete
+  if (!prev) return effect.pct != null ? 'progress' : effect.eta ? 'estimate' : 'update';
   if (effect.pct != null && effect.pct !== prev.pct) return 'progress';
   if (effect.status && effect.status !== prev.status) return effect.status === 'PARTIALLY_RESTORED' ? 'progress' : 'status';
   if (effect.eta && effect.eta !== prev.eta) return 'estimate';
-  return null;
+  return 'update';
 }
 
-/** The latest meaningful updates, newest first. Optionally only for outages that involve one suburb, or of one municipality. */
+/** The latest posts on outages, newest first. Optionally only for outages that involve one suburb, or of one municipality. */
 export async function latestUpdates({ limit = 30, days = 7, localityId = null, municipality = null, service = 'ELECTRICITY', now = new Date() } = {}) {
   const since = new Date(now.getTime() - days * DAY);
   const lookback = new Date(since.getTime() - 5 * DAY); // earlier posts, so the first one in view has something to be compared with

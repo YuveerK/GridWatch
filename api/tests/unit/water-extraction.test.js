@@ -164,6 +164,11 @@ describe('water notice summaries', () => {
     expect(waterNoticeSummary({ ...base, water_state: 'NO_SUPPLY', entities: [{ name: 'Honeydew Reservoir' }], localities: [{ name: 'Willowbrook', impact: 'NO_SUPPLY' }] })).toMatch(/no water supply/i);
     const written = 'Crews are repairing the valve and supply remains interrupted in the area.';
     expect(waterNoticeSummary({ ...base, relevance: 'SYSTEM_UPDATE', water_state: 'LOW', cause: written })).toBe(written);
+    const paragraph = 'Randburg systems declined but mostly remained stable and supplying fairly to adequately. While Honeydew Reservoir and Tower, Waterval and Quellerina Towers declined to critically low. Though pumping has resumed, poor pressure to no water may still occur in higher-lying areas, while systems are recovering.';
+    const composed = waterNoticeSummary({ ...base, water_state: 'RECOVERING', customer_supply: null, cause: paragraph, entities: [{ name: 'Quellerina Tower' }], localities: [] });
+    expect(composed.length).toBeLessThanOrEqual(260);
+    expect(composed).toMatch(/Quellerina Tower/);
+    expect(composed).not.toBe(paragraph);
   });
 });
 

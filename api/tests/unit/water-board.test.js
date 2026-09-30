@@ -69,8 +69,8 @@ describe('a board is split the same way every time, whatever the AI decided', ()
     const aiFaults = Array.from({ length: 16 }, (_, i) => ({ water_state: 'CONSTRAINED', entities: [{ type: 'RESERVOIR', name: `R${i}` }], localities: [] }));
     const a = waterFaultItems(reading(MIDRAND, { relevance: 'GENERAL_NOTICE', faults: aiFaults }));
     const b = waterFaultItems(reading(MIDRAND, { relevance: 'UPDATE', faults: [] }));
-    const names = (items) => items.map((i) => i.extraction.result.entities[0].name);
-    expect(names(a)).toEqual(['President Park Reservoir', 'President Park Tower', 'Diepsloot Reservoir', 'Steyn City Reservoir']);
+    const names = (items) => items.map((i) => i.extraction.result.entities.map((e) => e.name));
+    expect(names(a)).toEqual([['President Park Reservoir', 'President Park Tower'], ['Diepsloot Reservoir'], ['Steyn City Reservoir']]);
     expect(names(b)).toEqual(names(a));
   });
 
@@ -132,6 +132,22 @@ describe('a board line says whether a closure is deliberate', () => {
 });
 
 describe('only a status list is a board', () => {
+  it('a board whose transcription dropped the whole "Reservoir/ Tower Status" heading (Midrand, 29 Sept 20:55) is still parsed', () => {
+    const t = 'SYSTEM UPDATES 29 September 2026 - 20:55 Midrand System Erand Reservoir Supplying fairly but low. Erand Tower On bypass. Supplying fairly. Grand Central Tower No pumping due to reservoir low level. Rabie Ridge Reservoir Supplying fairly. Indicators Adequate supply';
+    const board = parseStatusBoard(t);
+    expect(board.system).toBe('Midrand');
+    expect(board.assets.map((a) => a.name)).toEqual(['Erand Reservoir', 'Erand Tower', 'Grand Central Tower', 'Rabie Ridge Reservoir']);
+    expect(statusBoardFaults({ image_text: t }).map((f) => f.entities.map((e) => e.name))).toEqual([['Erand Reservoir', 'Erand Tower'], ['Grand Central Tower']]);
+  });
+
+  it('a reservoir and its tower on one board are one fault (Witpoortjie, 29 Sept)', () => {
+    const t = 'SYSTEM UPDATES 29 September 2026 - 21:00 Roodepoort System Reservoir/ Tower Status Witpoortjie Reservoir Outlet closed overnight to build capacity. Witpoortjie Tower No pumping due to low reservoir. Robertville Pump Station No pumping. Indicators';
+    expect(statusBoardFaults({ image_text: t }).map((f) => f.entities.map((e) => e.name))).toEqual([
+      ['Witpoortjie Reservoir', 'Witpoortjie Tower'],
+      ['Robertville Pump Station'],
+    ]);
+  });
+
   it('a board whose transcription dropped "Status" (Soweto, 25 Sept 13:15) is still parsed', () => {
     const t = 'SYSTEM UPDATES 25 September 2026 - 13:15 Soweto System Reservoir/ Tower Supplying fairly. Doornkop Reservoir Supplying fairly. Jabulani Reservoir On bypass. Supplying fairly. Zondi Tower On bypass. Supplying fairly. Indicators Adequate supply';
     expect(statusBoardFaults({ image_text: t }).map((f) => f.entities[0].name)).toEqual(['Jabulani Reservoir', 'Zondi Tower']);
@@ -141,7 +157,21 @@ describe('only a status list is a board', () => {
     const notice = 'Customer Notice Status update of Commando system. Challenges with incoming supply affected pumping from Crosby Pump Station to the Brixton Reservoirs. Brixton 1 Reservoir: supplying fairly. Brixton 1 Tower: supplying fairly. Hursthill 1 and Hursthill 2 Reservoirs: both remain on bypass.';
     const r = { image_text: notice, entities: ['Crosby Pump Station', 'Brixton 1 Reservoir', 'Brixton 1 Tower', 'Hursthill 1 Reservoir'].map((name) => ({ type: 'RESERVOIR', name })), localities: [], faults: [] };
     expect(statusListLike(notice)).toBe(true);
+    expect(parseStatusBoard(notice)).toBeNull();
     expect(isUnsplitWaterBoard(r)).toBe(false);
+  });
+
+  it('does not consume a prose notice as the status text of its first pump station', () => {
+    const notice = 'Customer Notice Progress and Status of Commando System. Crosby Reservoir remains low but continues to supply. Crosby Pump Station remains operational. Brixton 1 and Brixton 2 Reservoirs remain critically low, their outlets closed. Hursthill 1 and Hursthill 2 Reservoirs remain on bypass. Customers may experience poor pressure to no water. Reservoir levels remain low to critically low.';
+    expect(parseStatusBoard(notice)).toBeNull();
+    const faults = [
+      { water_state: 'LOW', entities: [{ type: 'RESERVOIR', name: 'Crosby Reservoir' }], localities: [] },
+      { water_state: 'NO_SUPPLY', entities: [{ type: 'WATER_TOWER', name: 'Brixton 1 Tower' }, { type: 'WATER_TOWER', name: 'Brixton 2 Tower' }], localities: [] },
+      { water_state: 'LOW_PRESSURE', entities: [{ type: 'RESERVOIR', name: 'Hursthill 1' }, { type: 'RESERVOIR', name: 'Hursthill 2' }], localities: [] },
+    ];
+    const items = waterFaultItems(reading(notice, { relevance: 'UPDATE', faults }));
+    expect(items.map((i) => i.extraction.result.water_state)).toEqual(['LOW', 'NO_SUPPLY', 'LOW_PRESSURE']);
+    expect(items[2].extraction.result.entities.map((e) => e.name)).toEqual(['Hursthill 1', 'Hursthill 2']);
   });
 
   it('an unparsed status list is still set aside rather than made one giant incident', () => {

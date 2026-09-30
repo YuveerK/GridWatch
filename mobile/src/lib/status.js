@@ -75,13 +75,15 @@ export const ROLE = {
 /** The timeline label for a post's role, in the incident's own service. */
 export const roleLabel = (role, service) => (role === 'RESTORATION' && service === 'WATER' ? 'Water supply restored' : (ROLE[role] ?? ROLE.UPDATE).label);
 
-/** Where an incident is in its life: 0 reported, 1 being restored / recovering, 2 restored.
+/** Where an incident is in its life: 0 reported, 1 limited or recovering, 2 explicitly restored.
+ * Closed, cancelled, stale, and planned are not repair milestones.
  * @param {string} status
  * @param {string} [service]
  * @param {string | null} [waterState]
  */
 export function progressStep(status, service = 'ELECTRICITY', waterState = null) {
-  if (status === 'RESTORED' || status === 'CLOSED') return 2;
+  if (status === 'RESTORED') return 2;
+  if (status === 'CLOSED' || status === 'CANCELLED' || status === 'STALE' || status === 'PLANNED') return -1;
   if (status === 'PARTIALLY_RESTORED') return 1;
   if (service === 'WATER' && status === 'ACTIVE' && statusMeta(status, service, waterState).tone !== 'live') return 1;
   return 0;

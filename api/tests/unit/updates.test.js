@@ -13,12 +13,12 @@ describe('which posts are news', () => {
     expect(classify({ role: 'UPDATE', effect: { status: 'REPAIRING', pct: 20, eta: 'ETA 3pm' }, prev })).toBe('status');
     expect(classify({ role: 'UPDATE', effect: { status: 'PARTIALLY_RESTORED', pct: 20, eta: 'ETA 3pm' }, prev })).toBe('progress');
   });
-  it('an update that repeats what was already said is not news', () => {
+  it('a follow-up that repeats the same status still shows', () => {
     const same = { status: 'REPAIRING', pct: null, eta: 'ETA 3pm' };
-    expect(classify({ role: 'UPDATE', effect: same, prev: same })).toBeNull();
+    expect(classify({ role: 'UPDATE', effect: same, prev: same })).toBe('update');
   });
-  it('the first update in view counts only if it says something concrete; posts from before effects existed are kept', () => {
-    expect(classify({ role: 'UPDATE', effect: { status: 'INVESTIGATING', pct: null, eta: null }, prev: null })).toBeNull();
+  it('the first update in view still shows when it names no percentage or estimate', () => {
+    expect(classify({ role: 'UPDATE', effect: { status: 'INVESTIGATING', pct: null, eta: null }, prev: null })).toBe('update');
     expect(classify({ role: 'UPDATE', effect: { status: 'INVESTIGATING', pct: null, eta: 'ETA 3pm' }, prev: null })).toBe('estimate');
     expect(classify({ role: 'UPDATE', effect: null, prev: null })).toBe('update');
   });

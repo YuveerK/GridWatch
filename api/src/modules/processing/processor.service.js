@@ -2,10 +2,11 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { ensureWaterSummaries, extractPost, faultLayout } from '../ai/extraction.service.js';
+import { loadReductionFaults, mergeSameStationFaults } from '../ai/readers/electricity.reader.js';
 import { isUnsplitWaterBoard, waterFaultItems } from '../ai/readers/water.reader.js';
 import { unsupportedService } from '../ai/service-fit.js';
 import { LeaseLostError, assertLeaseInTx, exclusive, recoverStaleWork } from '../coordination/lease.js';
-import { learnFromExtraction, removeContributions } from '../infrastructure/infrastructure.service.js';
+import { learnFromExtraction, qualifyExtensionLocalities, removeContributions } from '../infrastructure/infrastructure.service.js';
 import { readingRevision } from '../../lib/reading-revision.js';
 import { MAX_RETRY_ATTEMPTS, nextRetryAt } from '../../lib/retry.js';
 import { linkPost, markQuietOutagesStale, recordDecision } from '../outages/linker.service.js';
@@ -47,30 +48,40 @@ export function resetMunicipalityCache() {
  * What the linker sees for a reading: one item for an ordinary post, or one synthetic "mini-post" per fault for a graphic
  * reporting several separate faults. Each item is learned and linked (and retried) on its own.
  */
-export function faultItems(extraction) {
-  if (faultLayout(extraction.result) === 1 && !(extraction.result.faults?.length === 1 && extraction.relevance === 'SDC_SUMMARY')) {
-    return [{ faultIndex: 0, extraction, fromDigest: false }];
-  }
+function asFaultItem(extraction, fault, faultIndex) {
   const sdc = extraction.result.sdc;
-  return extraction.result.faults.map((f, faultIndex) => ({
+  return {
     faultIndex,
     fromDigest: true,
     extraction: {
       ...extraction,
-      relevance: RELEVANCE_BY_STATUS[f.status] ?? 'OUTAGE',
+      relevance: RELEVANCE_BY_STATUS[fault.status] ?? 'OUTAGE',
       result: {
         ...extraction.result,
-        status: f.status,
-        cause: f.cause,
-        eta_text: f.eta_text,
-        restoration_percent: f.restoration_percent,
-        update_summary: f.summary ?? null,
-        entities: [...(sdc ? [{ type: 'SDC', name: sdc, parent_name: null }] : []), ...f.equipment],
-        localities: f.localities,
+        status: fault.status,
+        cause: fault.cause,
+        eta_text: fault.eta_text,
+        restoration_percent: fault.restoration_percent,
+        update_summary: fault.summary ?? null,
+        entities: [...(sdc ? [{ type: 'SDC', name: sdc, parent_name: null }] : []), ...fault.equipment],
+        localities: fault.localities,
         faults: [],
       },
     },
-  }));
+  };
+}
+
+export function faultItems(extraction) {
+  const reduction = loadReductionFaults(extraction.result);
+  if (reduction) return reduction.map((fault, faultIndex) => asFaultItem(extraction, fault, faultIndex));
+  const only = extraction.result.faults?.length === 1 ? extraction.result.faults[0] : null;
+  const explicitSingleFault = only && (extraction.relevance === 'SDC_SUMMARY' || only.equipment?.length || only.localities?.length);
+  if (faultLayout(extraction.result) === 1 && !explicitSingleFault) {
+    return [{ faultIndex: 0, extraction, fromDigest: false }];
+  }
+  // The source index also identifies summaries, overrides and regression cases.
+  // Merging two earlier rows must never renumber an unrelated later asset.
+  return mergeSameStationFaults(extraction.result.faults, { indexed: true }).map((fault) => asFaultItem(extraction, fault, fault.sourceFaultIndex));
 }
 
 /** Everything the post ends up as, from its per-fault decisions: review work is never hidden behind a linked sibling. */
@@ -114,6 +125,7 @@ async function processLocked(postId, ctx, { force = false, repairOutageIds = [],
     const account = await accountFor(postRow.sourceAccount);
     const municipalityId = account.municipalityId ?? null;
     const serviceType = postRow.serviceType ?? account.serviceType ?? 'ELECTRICITY';
+    if (serviceType === 'ELECTRICITY') extraction.result = await qualifyExtensionLocalities(extraction.result, postRow.noteTweetText || postRow.text, municipalityId);
     if (serviceType === 'WATER') await ensureWaterSummaries(postId, extraction.result);
     // a reply in a thread is judged with the thread's first post (Tshwane's "1/3 #WaterSupplyUpdate..." then "2/3 ...")
     const head = postRow.conversationId && postRow.conversationId !== postRow.externalId
@@ -145,7 +157,8 @@ async function processLocked(postId, ctx, { force = false, repairOutageIds = [],
       const source = { postId, faultIndex: item.faultIndex };
       const facts = { ...(await learnFromExtraction(item.extraction, postRow.publishedAt, { source, ctx, municipalityId, serviceType })), fromDigest: item.fromDigest };
       if (item.fromDigest && !facts.nodes.length && !facts.localityIds.length) {
-        await recordDecision(ctx, { id: postId, faultIndex: item.faultIndex }, { outcome: 'NEW', reason: 'fault names no equipment or suburbs' });
+        const linkable = ['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE'].includes(item.extraction.relevance);
+        await recordDecision(ctx, { id: postId, faultIndex: item.faultIndex }, { outcome: 'NEW', reason: linkable ? 'fault names no equipment or suburbs' : `not linkable (${item.extraction.relevance})` });
         continue;
       }
       const decision = await linkPost({ postRow, extraction: item.extraction, facts, faultIndex: item.faultIndex, ctx, repairOutageIds, revision });

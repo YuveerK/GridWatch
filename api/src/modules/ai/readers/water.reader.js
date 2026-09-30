@@ -56,9 +56,12 @@ function withLocalityState(localities) {
   }));
 }
 
+const MAX_SUMMARY = 260;
+
 function usableSentence(text) {
   const sentence = typeof text === 'string' ? text.trim() : '';
-  return sentence.length >= 25 ? sentence : '';
+  // A pasted status-board paragraph is not a resident sentence. Compose one from the assets instead.
+  return sentence.length >= 25 && sentence.length <= MAX_SUMMARY ? sentence : '';
 }
 
 function joinNames(items) {
@@ -74,8 +77,12 @@ function joinNames(items) {
  */
 export function waterNoticeSummary(result, fault = null) {
   const scope = fault ?? result ?? {};
-  const explicit = usableSentence(fault?.summary) || usableSentence(scope.cause) || usableSentence(result?.cause) || (!fault ? usableSentence(result?.update_summary) : '');
-  if (explicit) return explicit;
+  const overflow = [fault?.summary, scope.cause, result?.cause].some((text) => typeof text === 'string' && text.trim().length > MAX_SUMMARY);
+  // A pasted paragraph is not the resident sentence. Name the assets and the operating state instead.
+  if (!overflow) {
+    const explicit = usableSentence(fault?.summary) || usableSentence(scope.cause) || usableSentence(result?.cause) || (!fault ? usableSentence(result?.update_summary) : '');
+    if (explicit) return explicit;
+  }
   const entities = scope.entities?.length ? scope.entities : result?.entities;
   const localities = scope.localities?.length ? scope.localities : result?.localities;
   const asset = joinNames(entities);
@@ -151,9 +158,23 @@ export const deliberateClosure = (text) => /overnight|demand management|throttl|
 export function parseStatusBoard(imageText) {
   const text = String(imageText ?? '').replace(/\s+/g, ' ');
   const at = text.search(BOARD);
-  if (at < 0) return null;
-  const system = (text.slice(0, at).match(/([A-Z][\w ]*?)\s+System\s*$/) ?? [])[1]?.trim() ?? null;
-  const body = text.slice(at).replace(BOARD, '').split(/\bIndicators\b/i)[0];
+  let system = null;
+  let body = null;
+  if (at >= 0) {
+    system = (text.slice(0, at).match(/([A-Z][\w ]*?)\s+System\s*$/) ?? [])[1]?.trim() ?? null;
+    body = text.slice(at).replace(BOARD, '').split(/\bIndicators\b/i)[0];
+  } else if (!/customer notice/i.test(text) && (text.match(/supplying (adequately|fairly|failry)|on bypass|critically low|no pumping|outlet closed/gi) ?? []).length >= 3) {
+    // The evening board sometimes drops the "Reservoir/ Tower Status" heading (Midrand, 29 Sept 20:55) and starts at the assets.
+    // The asset pattern also swallows a clock time ("20:55 Midrand System Erand Reservoir"), so the system name is the anchor.
+    const named = text.match(/\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})\s+System\b/);
+    if (!named) return null;
+    const after = text.slice(named.index + named[0].length);
+    const firstAsset = after.search(new RegExp(ASSET.source));
+    if (firstAsset < 0) return null;
+    system = named[1].trim();
+    body = after.slice(firstAsset).split(/\bIndicators\b/i)[0];
+  }
+  if (body == null) return null;
   const hits = [];
   for (const m of body.matchAll(ASSET)) {
     let name = m[1].trim();
@@ -171,11 +192,44 @@ export function parseStatusBoard(imageText) {
   return assets.length ? { system, assets } : null;
 }
 
+const assetStem = (name) => name.replace(/\s+(reservoir|tower)$/i, '').trim().toLowerCase();
+
+/** A reservoir and its tower on the same board are one place (Witpoortjie Reservoir outlet closed, Witpoortjie Tower not pumping, 29 Sept). */
+function mergeReservoirAndTower(faults) {
+  const groups = new Map();
+  const other = [];
+  for (const fault of faults) {
+    const entity = fault.entities?.length === 1 ? fault.entities[0] : null;
+    if (!entity || (entity.type !== 'RESERVOIR' && entity.type !== 'WATER_TOWER')) {
+      other.push(fault);
+      continue;
+    }
+    const list = groups.get(assetStem(entity.name)) ?? [];
+    list.push(fault);
+    groups.set(assetStem(entity.name), list);
+  }
+  const merged = [];
+  for (const list of groups.values()) {
+    const types = new Set(list.map((fault) => fault.entities[0].type));
+    if (list.length === 2 && types.has('RESERVOIR') && types.has('WATER_TOWER')) {
+      const [reservoir, tower] = list[0].entities[0].type === 'RESERVOIR' ? list : [list[1], list[0]];
+      merged.push({
+        ...reservoir,
+        entities: [reservoir.entities[0], tower.entities[0]],
+        cause: [reservoir.cause, tower.cause].filter(Boolean).join(' '),
+        summary: [reservoir.summary, tower.summary].filter(Boolean).join(' '),
+        planned_closure: Boolean(reservoir.planned_closure || tower.planned_closure),
+      });
+    } else merged.push(...list);
+  }
+  return [...merged, ...other];
+}
+
 /** The board's problem assets as faults (one each), or null when the reading is not a status board. */
 export function statusBoardFaults(result) {
   const board = parseStatusBoard(result?.image_text);
   if (!board) return null;
-  return board.assets.filter((a) => a.problem).map((a) => ({
+  const faults = board.assets.filter((a) => a.problem).map((a) => ({
     water_state: a.state,
     cause: a.text || null,
     eta_text: null,
@@ -186,6 +240,7 @@ export function statusBoardFaults(result) {
     systems: board.system ? [board.system] : [],
     planned_closure: deliberateClosure(a.text), // may join the announced planned job for this asset (scoreWaterCandidate)
   }));
+  return mergeReservoirAndTower(faults);
 }
 
 /**
@@ -233,6 +288,25 @@ export function isUnsplitWaterBoard(result) {
   return true;
 }
 
+const ZONE_SPLIT = new Set(['RESERVOIR', 'WATER_TOWER', 'PUMP_STATION']);
+
+/** Several assets of the same kind, with no water system tying them together, are separate incidents.
+ * A reservoir and its tower stay one fault. */
+function expandIndependentZoneAssets(fault) {
+  const entities = fault.entities ?? [];
+  if (entities.some((entity) => entity.type === 'WATER_SYSTEM')) return [fault];
+  const zones = entities.filter((entity) => ZONE_SPLIT.has(entity.type));
+  if (zones.length < 2) return [fault];
+  const type = zones[0].type;
+  if (zones.some((zone) => zone.type !== type)) return [fault];
+  // Numbered units reported together with one condition remain the source's one
+  // fault. Merely counting Hursthill 1 and 2 is not evidence of two incidents.
+  const family = (name) => String(name).toLowerCase().replace(/\b(reservoir|tower|pump station)\b/g, '').replace(/\b\d+\b/g, '').replace(/\s+/g, ' ').trim();
+  const families = new Set(zones.map((zone) => family(zone.name)));
+  if (families.size === 1 && !families.has('')) return [fault];
+  return zones.map((zone) => ({ ...fault, entities: [zone], systems: [] }));
+}
+
 export function waterFaultItems(extraction) {
   if (isThrottlingSchedule(extraction.result)) return asNotice(extraction);
   const board = statusBoardFaults(extraction.result);
@@ -245,17 +319,21 @@ export function waterFaultItems(extraction) {
       extraction: { ...extraction, relevance: 'UPDATE', result: asPipeline({ ...extraction.result, relevance: 'UPDATE', customer_supply: null, localities: [], ...f, faults: [] }) },
     }));
   }
-  const faults = extraction.result?.faults ?? [];
+  const faults = (extraction.result?.faults ?? []).flatMap(expandIndependentZoneAssets);
   if (faults.length < 2) return [{ faultIndex: 0, extraction, fromDigest: false }];
-  return faults.map((f, faultIndex) => ({
-    faultIndex,
-    fromDigest: true,
-    extraction: {
-      ...extraction,
-      relevance: RELEVANCE[extraction.result.relevance] ?? extraction.relevance,
-      result: asPipeline({ ...extraction.result, ...f, faults: [] }),
-    },
-  }));
+  return faults.map((f, faultIndex) => {
+    // "Roodepoort systems remain stable and supplying fairly" names no asset and no suburb: it is not an incident.
+    const notice = !(f.entities ?? []).length && !(f.localities ?? []).length && QUIET_STATE.has(f.water_state);
+    return {
+      faultIndex,
+      fromDigest: true,
+      extraction: {
+        ...extraction,
+        relevance: notice ? 'GENERAL_NOTICE' : (RELEVANCE[extraction.result.relevance] ?? extraction.relevance),
+        result: asPipeline({ ...extraction.result, ...f, relevance: notice ? 'INFORMATIONAL' : extraction.result.relevance, faults: [] }),
+      },
+    };
+  });
 }
 
 export const waterReader = {

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { type ComponentProps } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { placeName } from '@/src/lib/area.js';
 import type { Outage } from '@/src/lib/api';
 import { statusMeta } from '@/src/lib/status.js';
@@ -10,21 +10,6 @@ import { useApp } from '@/src/state/app';
 import { colors, font, serviceLabel, toneColor, toneTint } from '@/src/theme';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
-
-function detailLine(outage: Outage) {
-  const parts: string[] = [];
-  const places = outage.localities?.length ?? 0;
-  if (places > 1) parts.push(`${places} suburbs`);
-  if (outage.sdc) parts.push(outage.sdc.replace(/([a-z])([A-Z])/g, '$1 $2'));
-  if (outage.scheduled?.date) {
-    const times = outage.scheduled.from && outage.scheduled.to ? ` ${outage.scheduled.from}–${outage.scheduled.to}` : '';
-    parts.push(`Scheduled ${outage.scheduled.date}${times}`);
-  } else if (outage.eta) {
-    parts.push(`ETA ${outage.eta}`);
-  }
-  if (outage.postCount && outage.postCount > 1) parts.push(`${outage.postCount} posts`);
-  return parts.join(' · ');
-}
 
 const STATUS_ICON: Record<string, IconName> = {
   alert: 'warning',
@@ -67,11 +52,20 @@ export function Pill({ label, tone }: { label: string; tone: string }) {
   );
 }
 
-export function Banner({ children }: { children: string }) {
+export function Banner({ children, tone = 'info', action }: { children: string; tone?: 'info' | 'warning' | 'error'; action?: { label: string; onPress: () => void } }) {
+  const icon = tone === 'error' ? 'alert-circle' : tone === 'warning' ? 'warning' : 'information-circle';
+  const color = tone === 'error' ? colors.live : tone === 'warning' ? colors.partial : colors.power;
   return (
     <View style={styles.banner}>
-      <Ionicons name="information-circle" size={18} color={colors.power} />
-      <Text style={styles.bannerText}>{children}</Text>
+      <Ionicons name={icon} size={18} color={color} />
+      <View style={styles.bannerBody}>
+        <Text style={styles.bannerText}>{children}</Text>
+        {action ? (
+          <Pressable accessibilityRole="button" onPress={action.onPress} style={styles.bannerAction}>
+            <Text style={styles.bannerActionLabel}>{action.label}</Text>
+          </Pressable>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -79,9 +73,7 @@ export function Banner({ children }: { children: string }) {
 export function Wordmark() {
   return (
     <View style={styles.wordmark}>
-      <View style={styles.mark}>
-        <Ionicons name="pulse" size={13} color="#1a1408" />
-      </View>
+      <Image source={require('../../assets/images/icon.png')} style={styles.markImage} accessibilityIgnoresInvertColors />
       <Text style={styles.wordmarkText}>GridWatch</Text>
     </View>
   );
@@ -117,59 +109,107 @@ export function OutageRow({ outage, showService = false }: { outage: Outage; sho
   const meta = statusMeta(outage.status, service, outage.waterState);
   const when = relativeTime(outage.lastUpdateAt);
   const place = placeName(outage);
-  const summary = outage.latest?.summary?.trim() || outage.cause?.trim() || '';
-  const where = outage.municipality?.name || outage.infrastructure?.[0]?.name;
-  const detail = detailLine(outage);
+  const summary = outage.latest?.summary?.trim() || '';
+  const support = supportFact(outage);
   const percent = typeof outage.restorationPercent === 'number' ? outage.restorationPercent : null;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${place}, ${meta.label}, ${when}`}
+      accessibilityLabel={`${place}, ${meta.label}, updated ${when}`}
       onPress={() => router.push({ pathname: '/outage/[id]', params: { id: outage.id } })}
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}
     >
-      <View style={styles.rowTop}>
-        <StatusIcon name={meta.icon} tone={meta.tone} />
-        <View style={styles.rowBody}>
+      <View style={[styles.accent, { backgroundColor: toneColor(meta.tone) }]} />
+      <View style={styles.rowBody}>
+        <View style={styles.rowTop}>
+          {showService ? <Ionicons name={service === 'WATER' ? 'water' : 'flash'} size={16} color={service === 'WATER' ? colors.water : colors.power} /> : null}
           <Text style={styles.rowTitle} numberOfLines={2}>{place}</Text>
-          {outage.title && outage.title !== place ? <Text style={styles.rowSub} numberOfLines={1}>{outage.title}</Text> : null}
-          {where ? <Text style={styles.rowSub} numberOfLines={1}>{where}</Text> : null}
-          {detail ? <Text style={styles.rowSub} numberOfLines={2}>{detail}</Text> : null}
-          {summary ? <Text style={styles.rowSummary} numberOfLines={2}>{summary}</Text> : null}
         </View>
-        <Ionicons name="chevron-forward" size={18} color={colors.faint} />
-      </View>
-      <View style={styles.rowFoot}>
-        <Pill label={showService ? `${serviceLabel(service)} · ${meta.label}` : meta.label} tone={meta.tone} />
-        <Text style={styles.rowTime}>{when}</Text>
-      </View>
-      {percent != null && (
-        <View style={styles.meter}>
-          <View style={styles.track}>
-            <View style={[styles.fill, { width: `${Math.max(0, Math.min(100, percent))}%`, backgroundColor: toneColor(meta.tone) }]} />
+        <Pill label={meta.label} tone={meta.tone} />
+        {summary ? <Text style={styles.rowSummary} numberOfLines={2}>{summary}</Text> : null}
+        {support ? <Text style={styles.rowSub} numberOfLines={2}>{support}</Text> : null}
+        <Text style={styles.rowTime}>Updated {when}</Text>
+        {percent != null && (
+          <View style={styles.meter}>
+            <View style={styles.track}>
+              <View style={[styles.fill, { width: `${Math.max(0, Math.min(100, percent))}%`, backgroundColor: toneColor(meta.tone) }]} />
+            </View>
+            <Text style={styles.percent}>Reported {percent}%</Text>
           </View>
-          <Text style={styles.percent}>{percent}%</Text>
+        )}
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={colors.faint} />
+    </Pressable>
+  );
+}
+
+function supportFact(outage: Outage) {
+  if (outage.scheduled?.date) {
+    const times = outage.scheduled.from && outage.scheduled.to ? ` ${outage.scheduled.from}–${outage.scheduled.to}` : '';
+    return `Scheduled ${outage.scheduled.date}${times}`;
+  }
+  if (outage.eta) return `ETA ${outage.eta}`;
+  const places = outage.localities?.length ?? 0;
+  if (places > 1) return `${places} suburbs named`;
+  return null;
+}
+
+export function PrimaryButton({ label, onPress, icon, busy = false, disabled = false }: { label: string; onPress: () => void; icon?: IconName; busy?: boolean; disabled?: boolean }) {
+  const off = busy || disabled;
+  return (
+    <Pressable accessibilityRole="button" accessibilityState={{ disabled: off, busy }} disabled={off} onPress={onPress} style={({ pressed }) => [styles.primary, off && styles.disabled, pressed && !off && styles.pressed]}>
+      {icon && !busy ? <Ionicons name={icon} size={18} color="#1a1408" /> : null}
+      <Text style={styles.primaryLabel}>{busy ? 'Working…' : label}</Text>
+    </Pressable>
+  );
+}
+
+export function SecondaryButton({ label, onPress, icon, busy = false, disabled = false }: { label: string; onPress: () => void; icon?: IconName; busy?: boolean; disabled?: boolean }) {
+  const off = busy || disabled;
+  return (
+    <Pressable accessibilityRole="button" accessibilityState={{ disabled: off, busy }} disabled={off} onPress={onPress} style={({ pressed }) => [styles.secondary, off && styles.disabled, pressed && !off && styles.pressed]}>
+      {icon && !busy ? <Ionicons name={icon} size={18} color={colors.text} /> : null}
+      <Text style={styles.secondaryLabel}>{busy ? 'Working…' : label}</Text>
+    </Pressable>
+  );
+}
+
+export function IconButton({ label, icon, onPress }: { label: string; icon: IconName; onPress: () => void }) {
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={styles.iconButton}>
+      <Ionicons name={icon} size={22} color={colors.text} />
+    </Pressable>
+  );
+}
+
+function Bone({ width, height, radius = 8 }: { width: number | `${number}%`; height: number; radius?: number }) {
+  return <View style={{ width, height, borderRadius: radius, backgroundColor: colors.cardRaised }} />;
+}
+
+/** A static placeholder shaped like a real row, shown only while that row's own data is loading. No pulsing: this app avoids perpetual motion that implies a live feed. */
+export function OutageRowSkeleton() {
+  return (
+    <View style={[styles.row, styles.skeletonRow]} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+      <View style={[styles.accent, { backgroundColor: colors.line }]} />
+      <View style={styles.rowBody}>
+        <Bone width="70%" height={17} />
+        <View style={styles.skeletonGap}>
+          <Bone width={84} height={20} radius={999} />
         </View>
-      )}
-    </Pressable>
+        <Bone width="92%" height={14} />
+        <View style={styles.skeletonGap}>
+          <Bone width={110} height={12} />
+        </View>
+      </View>
+    </View>
   );
 }
 
-export function PrimaryButton({ label, onPress, icon }: { label: string; onPress: () => void; icon?: IconName }) {
+export function OutageListSkeleton({ rows = 3 }: { rows?: number }) {
   return (
-    <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
-      {icon ? <Ionicons name={icon} size={18} color="#1a1408" /> : null}
-      <Text style={styles.primaryLabel}>{label}</Text>
-    </Pressable>
-  );
-}
-
-export function SecondaryButton({ label, onPress, icon }: { label: string; onPress: () => void; icon?: IconName }) {
-  return (
-    <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}>
-      {icon ? <Ionicons name={icon} size={18} color={colors.text} /> : null}
-      <Text style={styles.secondaryLabel}>{label}</Text>
-    </Pressable>
+    <View accessibilityLabel="Loading incidents" accessibilityRole="progressbar">
+      {Array.from({ length: rows }, (_, index) => <OutageRowSkeleton key={index} />)}
+    </View>
   );
 }
 
@@ -181,17 +221,21 @@ const styles = StyleSheet.create({
   sectionDetail: { color: colors.muted, fontFamily: font.text, fontSize: 14, lineHeight: 20 },
   pill: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
   pillDot: { width: 6, height: 6, borderRadius: 3 },
-  pillText: { fontFamily: font.semibold, fontSize: 12 },
-  banner: { flexDirection: 'row', gap: 10, alignItems: 'flex-start', backgroundColor: colors.cardRaised, borderRadius: 16, padding: 14, borderWidth: 1, borderColor: colors.line },
-  bannerText: { flex: 1, color: colors.text, fontFamily: font.text, fontSize: 14, lineHeight: 20 },
+  pillText: { flexShrink: 1, fontFamily: font.semibold, fontSize: 12 },
+  banner: { flexDirection: 'row', gap: 10, alignItems: 'flex-start', backgroundColor: colors.cardRaised, borderRadius: 16, padding: 14 },
+  bannerBody: { flex: 1, gap: 8 },
+  bannerText: { color: colors.text, fontFamily: font.text, fontSize: 14, lineHeight: 20 },
+  bannerAction: { minHeight: 48, justifyContent: 'center', alignSelf: 'flex-start' },
+  bannerActionLabel: { color: colors.power, fontFamily: font.semibold, fontSize: 15 },
   wordmark: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  mark: { width: 24, height: 24, borderRadius: 8, backgroundColor: colors.power, alignItems: 'center', justifyContent: 'center' },
+  markImage: { width: 24, height: 24, borderRadius: 6 },
   wordmarkText: { color: colors.text, fontFamily: font.bold, fontSize: 15, letterSpacing: -0.2 },
   switchRow: { flexDirection: 'row', backgroundColor: colors.card, borderRadius: 16, padding: 4, gap: 4, borderWidth: 1, borderColor: colors.line },
-  switchItem: { flex: 1, minHeight: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 },
+  switchItem: { flex: 1, minHeight: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 },
   switchLabel: { color: colors.faint, fontFamily: font.semibold, fontSize: 15 },
   switchLabelOn: { color: '#1a1408' },
-  row: { backgroundColor: colors.card, borderRadius: 18, padding: 14, gap: 12, borderWidth: 1, borderColor: colors.line, marginBottom: 10 },
+  row: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: 16, paddingVertical: 12, paddingRight: 12, gap: 8, marginBottom: 10, overflow: 'hidden' },
+  accent: { width: 4, alignSelf: 'stretch', borderRadius: 2 },
   pressed: { opacity: 0.82 },
   rowTop: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
   rowBody: { flex: 1, gap: 3 },
@@ -204,8 +248,12 @@ const styles = StyleSheet.create({
   track: { flex: 1, height: 6, borderRadius: 3, backgroundColor: colors.cardRaised, overflow: 'hidden' },
   fill: { height: 6, borderRadius: 3 },
   percent: { color: colors.muted, fontFamily: font.mono, fontSize: 12, minWidth: 36, textAlign: 'right' },
-  primary: { minHeight: 52, borderRadius: 16, backgroundColor: colors.power, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: 16 },
-  primaryLabel: { color: '#1a1408', fontFamily: font.bold, fontSize: 16, lineHeight: 22, flexShrink: 0, paddingRight: 4 },
-  secondary: { minHeight: 52, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: 16 },
-  secondaryLabel: { color: colors.text, fontFamily: font.semibold, fontSize: 16, lineHeight: 22, flexShrink: 0, paddingRight: 4 },
+  primary: { minHeight: 48, borderRadius: 12, backgroundColor: colors.power, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: 16 },
+  primaryLabel: { color: '#1a1408', fontFamily: font.bold, fontSize: 16, lineHeight: 22, flexShrink: 1, paddingRight: 4 },
+  secondary: { minHeight: 48, borderRadius: 12, borderWidth: 1, borderColor: colors.lineStrong, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: 16 },
+  secondaryLabel: { color: colors.text, fontFamily: font.semibold, fontSize: 16, lineHeight: 22, flexShrink: 1, paddingRight: 4 },
+  disabled: { opacity: 0.45 },
+  iconButton: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
+  skeletonRow: { alignItems: 'stretch' },
+  skeletonGap: { marginTop: 4 },
 });

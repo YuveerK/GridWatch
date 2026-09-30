@@ -1,18 +1,19 @@
 export const colors = {
-  page: '#090b0e',
-  card: '#10131a',
-  cardRaised: '#171c25',
-  text: '#f4f1ea',
-  muted: '#a8afba',
-  faint: '#737b88',
-  line: 'rgba(255,255,255,0.08)',
-  power: '#f2b84b',
-  water: '#62c8e8',
-  live: '#ff5b45',
-  partial: '#ffb02e',
-  good: '#34d399',
-  plan: '#7eb0e0',
-  idle: '#8b93a0',
+  page: '#0B1016',
+  card: '#141D28',
+  cardRaised: '#1D2A38',
+  text: '#F5F3ED',
+  muted: '#B6C0CD',
+  faint: '#97A4B5',
+  line: 'rgba(245,243,237,0.10)',
+  lineStrong: 'rgba(245,243,237,0.22)',
+  power: '#F4BE58',
+  water: '#6DD5F2',
+  live: '#FF7969',
+  partial: '#F3BE63',
+  good: '#62D5AD',
+  plan: '#A1BFFF',
+  idle: '#A7B2C2',
 };
 
 export const font = {
@@ -21,6 +22,11 @@ export const font = {
   bold: 'HankenGrotesk_700Bold',
   mono: 'JetBrainsMono_500Medium',
 };
+
+export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 24, xxxl: 32 };
+
+/** Keeps long reading screens from stretching across a tablet. Maps stay full width. */
+export const reading = { width: '100%' as const, maxWidth: 720, alignSelf: 'center' as const };
 
 export function toneColor(tone: string) {
   if (tone === 'live') return colors.live;
@@ -31,13 +37,17 @@ export function toneColor(tone: string) {
 }
 
 export function toneTint(tone: string) {
-  if (tone === 'live') return 'rgba(255,91,69,0.16)';
-  if (tone === 'partial') return 'rgba(255,176,46,0.16)';
-  if (tone === 'good') return 'rgba(52,211,153,0.16)';
-  if (tone === 'plan') return 'rgba(126,176,224,0.16)';
-  return 'rgba(139,147,160,0.16)';
+  if (tone === 'live') return 'rgba(255,121,105,0.16)';
+  if (tone === 'partial') return 'rgba(243,190,99,0.16)';
+  if (tone === 'good') return 'rgba(98,213,173,0.16)';
+  if (tone === 'plan') return 'rgba(161,191,255,0.16)';
+  return 'rgba(167,178,194,0.14)';
 }
 
 export function serviceLabel(service: string) {
   return service === 'WATER' ? 'Water' : 'Power';
+}
+
+export function serviceColor(service: string) {
+  return service === 'WATER' ? colors.water : colors.power;
 }

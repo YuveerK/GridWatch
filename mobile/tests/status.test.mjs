@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { normalizeQuiet } from '../src/lib/alerts.js';
 import { areaHeadline, sortOutages } from '../src/lib/area.js';
-import { areasToGeoJSON, nearestSuburb } from '../src/lib/geo.js';
+import { areasToGeoJSON, mapLayerFor, nearestSuburb, selectionSentence, visiblePlaces } from '../src/lib/geo.js';
 import { sameService, withService } from '../src/lib/query.js';
-import { placeTone, roleLabel, statusMeta } from '../src/lib/status.js';
+import { placeTone, progressStep, roleLabel, statusMeta } from '../src/lib/status.js';
 
 test('water recovering, low pressure and bypass stay amber and are never labelled restored', () => {
   for (const state of ['RECOVERING', 'LOW_PRESSURE', 'BYPASS']) {
@@ -79,12 +80,39 @@ test('map areas take the incident tone, and a restored place is green', () => {
       title: 'Substation',
       status: 'ACTIVE',
       service: 'ELECTRICITY',
-      places: [{ name: 'Rosebank', lat: -26.1, lon: 28.04, restored: true }],
+      places: [{ id: 'rosebank', name: 'Rosebank', lat: -26.1, lon: 28.04, restored: true }],
     },
   ]);
-  assert.equal(collection.features[0].properties.tone, 'partial');
-  assert.equal(collection.features[1].properties.tone, 'good');
+  const bryanston = collection.features.filter((feature) => feature.properties.name === 'Bryanston');
+  assert.equal(bryanston.length, 2);
+  assert.equal(bryanston[0].geometry.type, 'Polygon');
+  assert.equal(bryanston[1].geometry.type, 'Point');
+  assert.deepEqual(bryanston[1].geometry.coordinates, [28.0, -26.1]);
+  assert.equal(bryanston[0].properties.tone, 'partial');
+  assert.equal(bryanston[0].properties.restored, 0);
+  assert.equal(bryanston[0].properties.inferred, 0);
+  const rosebank = collection.features.find((feature) => feature.properties.name === 'Rosebank');
+  assert.equal(rosebank.geometry.type, 'Point');
+  assert.equal(rosebank.properties.tone, 'good');
+  assert.equal(rosebank.properties.restored, 1);
+  assert.equal(rosebank.properties.placeId, 'rosebank');
   assert.equal(placeTone({ status: 'ACTIVE', service: 'WATER', waterState: 'LOW_PRESSURE' }, false), 'partial');
+});
+
+test('each legend layer can be hidden on its own', () => {
+  const outages = [
+    { id: 'a', status: 'ACTIVE', service: 'ELECTRICITY', places: [{ name: 'Live', inferred: false, restored: false }, { name: 'Back', inferred: false, restored: true }] },
+    { id: 'b', status: 'PLANNED', service: 'ELECTRICITY', places: [{ name: 'Job', inferred: false, restored: false }] },
+    { id: 'c', status: 'ACTIVE', service: 'ELECTRICITY', places: [{ name: 'Maybe', inferred: true, restored: false }] },
+    { id: 'd', status: 'ACTIVE', service: 'WATER', waterState: 'RECOVERING', places: [{ name: 'Low', inferred: false, restored: false }] },
+  ];
+  assert.equal(mapLayerFor(outages[0], outages[0].places[0]), 'live');
+  assert.equal(mapLayerFor(outages[0], outages[0].places[1]), 'good');
+  assert.equal(mapLayerFor(outages[1], outages[1].places[0]), 'plan');
+  assert.equal(mapLayerFor(outages[2], outages[2].places[0]), 'possible');
+  assert.equal(mapLayerFor(outages[3], outages[3].places[0]), 'partial');
+  const names = visiblePlaces(outages, { plan: false, good: false, possible: false }).flatMap((outage) => outage.places.map((place) => place.name));
+  assert.deepEqual(names, ['Live', 'Low']);
 });
 
 test('a GPS fix only snaps to a nearby tracked suburb', () => {
@@ -95,4 +123,41 @@ test('a GPS fix only snaps to a nearby tracked suburb', () => {
   assert.equal(nearestSuburb(suburbs, -26.1, 28.0)?.id, 'near');
   assert.equal(nearestSuburb(suburbs, -33.9, 18.4)?.id, 'far');
   assert.equal(nearestSuburb([{ id: 'only-far', name: 'Durban', lat: -29.8, lon: 31.0 }], -26.2, 28.0), null);
+});
+
+test('closed is not a restoration milestone', () => {
+  assert.equal(progressStep('CLOSED'), -1);
+  assert.equal(progressStep('RESTORED'), 2);
+  assert.equal(progressStep('STALE', 'WATER', 'RECOVERING'), -1);
+  assert.equal(statusMeta('CLOSED').tone, 'idle');
+  assert.equal(statusMeta('CLOSED').label, 'Closed');
+  assert.notEqual(statusMeta('CLOSED').label, statusMeta('RESTORED').label);
+});
+
+test('equal quiet hours are not a window', () => {
+  assert.deepEqual(normalizeQuiet(22, 22), { from: null, to: null, clearedBecauseEqual: true });
+  assert.deepEqual(normalizeQuiet(22, 6), { from: 22, to: 6, clearedBecauseEqual: false });
+  assert.deepEqual(normalizeQuiet(null, null), { from: null, to: null, clearedBecauseEqual: false });
+});
+
+test('a restored map place stays distinct from an active incident', () => {
+  const restored = selectionSentence({
+    status: 'ACTIVE',
+    service: 'ELECTRICITY',
+    waterState: null,
+    restored: true,
+    inferred: false,
+  });
+  assert.equal(restored.label, 'Restored here');
+  assert.equal(restored.tone, 'good');
+  assert.match(restored.long, /wider incident/);
+  const inferred = selectionSentence({
+    status: 'ACTIVE',
+    service: 'WATER',
+    waterState: 'RECOVERING',
+    restored: false,
+    inferred: true,
+  });
+  assert.equal(inferred.label, 'Possible impact');
+  assert.equal(inferred.tone, 'partial');
 });

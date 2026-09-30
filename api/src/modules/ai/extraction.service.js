@@ -6,7 +6,7 @@ import { logger } from '../../lib/logger.js';
 import { knowledgeContext, sdcFromText, waterKnowledgeContext } from '../infrastructure/knowledge-context.js';
 import { generateJson } from './gemini.client.js';
 import { readerFor } from './reader-registry.js';
-import { classifyWaterNotice, waterNoticeSummary } from './readers/water.reader.js';
+import { classifyWaterNotice, waterFaultItems, waterNoticeSummary } from './readers/water.reader.js';
 
 const MAX_IMAGES = 4;
 
@@ -192,15 +192,19 @@ export async function extractPost(postId, { force = false, signal } = {}) {
 
 /** A water reading often has no resident sentence (cause is null). Fill the missing post summary from the reading. */
 export async function ensureWaterSummaries(postId, result) {
-  if (!result || await prisma.postSummary.count({ where: { postId } })) return;
-  const faults = result.faults ?? [];
-  const multi = faults.length >= 2 || (faults.length === 1 && result.relevance === 'SDC_SUMMARY');
-  const rows = multi
-    ? faults.map((f, i) => ({ faultIndex: i, summary: waterNoticeSummary(result, f) }))
-    : [{ faultIndex: 0, summary: waterNoticeSummary(result) }];
-  for (const r of rows.filter((x) => x.summary?.trim())) {
-    await prisma.postSummary.create({ data: { postId, faultIndex: r.faultIndex, summary: r.summary.trim(), model: 'water-notice' } });
-  }
+  if (!result) return;
+  // Summaries follow the faults the linker uses. A status board's problem assets are not the AI's own fault list,
+  // so a sentence written at the AI's index lands on the wrong reservoir (Central and Midrand, 29 Sept).
+  const items = waterFaultItems({ result, relevance: result.relevance });
+  const rows = items
+    .filter((item) => !['GENERAL_NOTICE', 'IRRELEVANT'].includes(item.extraction.relevance))
+    .map((item) => ({ faultIndex: item.faultIndex, summary: waterNoticeSummary(item.extraction.result, item.extraction.result).trim() }))
+    .filter((row) => row.summary);
+  const existing = await prisma.postSummary.findMany({ where: { postId }, select: { faultIndex: true, summary: true } });
+  const same = existing.length === rows.length && rows.every((row) => existing.some((have) => have.faultIndex === row.faultIndex && have.summary === row.summary));
+  if (same) return;
+  await prisma.postSummary.deleteMany({ where: { postId } });
+  if (rows.length) await prisma.postSummary.createMany({ data: rows.map((row) => ({ postId, faultIndex: row.faultIndex, summary: row.summary, model: 'water-notice' })) });
 }
 
 /** The fault layout a reading implies: what the linker keys its per-fault decisions on. */

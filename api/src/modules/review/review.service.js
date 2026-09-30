@@ -3,7 +3,7 @@ import { likelyTypo, similarity } from '../../lib/normalize.js';
 import { faultItems } from '../processing/processor.service.js';
 import { acceptedExtraction, checkPostDispositions, readingFaultItems } from '../processing/quality.js';
 import { formatReviewInspection } from './inspect.js';
-import { REASONS, isSampled, priorityOf } from './suspicion.js';
+import { REASONS, differentDistributorUnderSharedStation, incidentalAssetOnLargerIncident, isSampled, oneStationInsideRegionalList, operatingUpdateBesidePlannedRepair, plannedProgrammeBesideLiveFault, priorityOf, sharesOnlyParentStation, sharesOnlyUpstreamPump } from './suspicion.js';
 import { unsupportedService } from '../ai/service-fit.js';
 import { verifyItem } from './verifier.js';
 
@@ -27,7 +27,7 @@ export async function detectSuspicious({ prisma, postIds, now = new Date() }) {
       outagePosts: {
         select: {
           faultIndex: true, role: true, effect: true, postedAt: true,
-          outage: { select: { id: true, title: true, kind: true, status: true, startedAt: true, retroactive: true, serviceType: true, localities: { select: { localityId: true } }, nodes: { select: { nodeId: true, node: { select: { id: true, name: true, type: true, normalizedKey: true, evidenceCount: true } } } }, posts: { select: { postId: true, faultIndex: true, effect: true } } } },
+          outage: { select: { id: true, title: true, kind: true, status: true, startedAt: true, retroactive: true, serviceType: true, localities: { select: { localityId: true } }, nodes: { select: { nodeId: true, node: { select: { id: true, name: true, type: true, normalizedKey: true, evidenceCount: true } } } }, posts: { select: { postId: true, faultIndex: true, postedAt: true, effect: true } } } },
         },
       },
     },
@@ -77,15 +77,15 @@ export async function detectSuspicious({ prisma, postIds, now = new Date() }) {
             startedAt: { gte: new Date(o.startedAt.getTime() - 72 * HOUR), lte: o.startedAt },
             OR: [...(locIds.length ? [{ localities: { some: { localityId: { in: locIds } } } }] : []), ...(nodeIds.length ? [{ nodes: { some: { nodeId: { in: nodeIds } } } }] : [])],
           },
-          select: { id: true, title: true, kind: true, status: true, startedAt: true, nodes: { select: { nodeId: true } } },
+          select: { id: true, title: true, kind: true, status: true, startedAt: true, nodes: { select: { nodeId: true, node: { select: { type: true } } } }, localities: { select: { localityId: true } } },
         });
         if (o.retroactive) {
           if (others.length) add(x.id, op.faultIndex, 'RESTORATION_SPLIT_FROM_INCIDENT', `similar: "${others[0].title}"`);
           else add(x.id, op.faultIndex, 'RESTORATION_NO_PRECEDING_INCIDENT', 'nothing earlier for these suburbs or equipment');
         } else {
-          const near = others.filter((p) => p.kind === o.kind && LIVE.includes(p.status) && o.startedAt.getTime() - p.startedAt.getTime() <= 24 * HOUR);
+          const near = others.filter((p) => p.kind === o.kind && LIVE.includes(p.status) && o.startedAt.getTime() - p.startedAt.getTime() <= 24 * HOUR && !sharesOnlyParentStation(nodeIds, locIds, p) && !sharesOnlyUpstreamPump(nodeIds, p) && !differentDistributorUnderSharedStation(o.nodes, p) && !oneStationInsideRegionalList(nodeIds, locIds, p));
           if (near.length) add(x.id, op.faultIndex, 'NEW_NEAR_ACTIVE', `still live: "${near[0].title}"`);
-          const conflict = others.filter((p) => p.kind !== o.kind && p.status !== 'CANCELLED' && p.nodes.some((n) => nodeIds.includes(n.nodeId)));
+          const conflict = others.filter((p) => p.kind !== o.kind && p.status !== 'CANCELLED' && p.nodes.some((n) => nodeIds.includes(n.nodeId)) && !incidentalAssetOnLargerIncident(nodeIds, locIds, p) && !operatingUpdateBesidePlannedRepair(locIds, p) && !plannedProgrammeBesideLiveFault(o.kind, locIds, p));
           if (conflict.length) add(x.id, op.faultIndex, 'KIND_CONFLICT', `${conflict[0].kind.toLowerCase()}: "${conflict[0].title}"`);
         }
       }
@@ -111,9 +111,15 @@ export async function detectSuspicious({ prisma, postIds, now = new Date() }) {
       }
       // many suburbs new to an outage that already existed
       if (op.role !== 'OPENED' && op.effect?.locs?.length) {
-        const known = new Set(o.posts.filter((p) => !(p.postId === x.id && p.faultIndex === op.faultIndex)).flatMap((p) => (p.effect?.locs ?? []).map((l) => l.id)));
+        const known = new Set(o.posts.filter((p) => !(p.postId === x.id && p.faultIndex === op.faultIndex) && !(p.postedAt && op.postedAt && p.postedAt > op.postedAt)).flatMap((p) => (p.effect?.locs ?? []).map((l) => l.id)));
         const added = op.effect.locs.filter((l) => !known.has(l.id)).length;
-        if (added >= 5) add(x.id, op.faultIndex, 'CHANGED_SCOPE', `${added} new suburbs`);
+        // A follow-up the same morning that already shares most of its equipment is the same trip naming more suburbs
+        // (the Njala article, an hour after the station list, 29 Sept). An older incident, or a post that shares little equipment, still counts.
+        const effectNodes = op.effect?.nodeIds ?? [];
+        const sharedEquipment = effectNodes.filter((id) => nodeIds.includes(id)).length;
+        const ageH = (op.postedAt - o.startedAt) / HOUR;
+        const sameEvent = ageH >= 0 && ageH <= 6 && effectNodes.length > 0 && sharedEquipment >= 3 && sharedEquipment / effectNodes.length >= 0.5;
+        if (added >= 5 && !sameEvent) add(x.id, op.faultIndex, 'CHANGED_SCOPE', `${added} new suburbs`);
       }
     }
   }

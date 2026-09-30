@@ -1,9 +1,43 @@
 import { describe, expect, it } from 'vitest';
-import { auditSummary, checkPostDispositions, crossServiceLinks, effectReadingMismatch, giantWaterIncidents, ingestionProblems, largeUnplannedOutages, largeWaterIncidentClass, legitimateLargeWaterIncidents, plannedOverdue, recoveringMarkedRestored, stuckProcessing, waterNodesWithElectricityTypes } from '../../src/modules/processing/quality.js';
+import { auditSummary, checkPostDispositions, dispositionCoverage, crossServiceLinks, effectReadingMismatch, giantWaterIncidents, ingestionProblems, largeUnplannedOutages, largeWaterIncidentClass, legitimateLargeWaterIncidents, plannedOverdue, recoveringMarkedRestored, stuckProcessing, waterNodesWithElectricityTypes } from '../../src/modules/processing/quality.js';
 import { readingRevision } from '../../src/lib/reading-revision.js';
 
 const linked = (i, outageId = `o${i}`) => ({ faultIndex: i, outcome: 'LINKED', outageId, reason: 'shared node' });
 const entry = (i, outageId = `o${i}`) => ({ faultIndex: i, outageId });
+
+describe('coverage separates missing work from obsolete fault indices', () => {
+  it('keeps the accepted current fault while flagging old Water board entries separately', () => {
+    // 29 September Eikenhof update: one current fault, three stored dispositions.
+    const rows = { expectedIndices: [0], decisions: [0, 1, 2].map((i) => linked(i)), outagePosts: [0, 1, 2].map((i) => entry(i)) };
+    expect(dispositionCoverage(rows)).toEqual({ expected: 1, accepted: 1, missingIndices: [], invalidIndices: [], unexpectedIndices: [1, 2] });
+    expect(checkPostDispositions(rows).problems).toHaveLength(4);
+  });
+
+  it('reports missing Water system faults without treating the accepted siblings as failures', () => {
+    // 29 September Palmiet update: five current faults, only the first two disposed.
+    expect(dispositionCoverage({ expectedIndices: [0, 1, 2, 3, 4], decisions: [linked(0), linked(1)], outagePosts: [entry(0), entry(1)] }))
+      .toEqual({ expected: 5, accepted: 2, missingIndices: [2, 3, 4], invalidIndices: [], unexpectedIndices: [] });
+  });
+
+  it('does not count a review decision or a missing timeline as accepted', () => {
+    expect(dispositionCoverage({ expectedIndices: [0, 1, 2], decisions: [linked(0), { faultIndex: 1, outcome: 'NEEDS_REVIEW', reason: 'ambiguous' }, linked(2)], outagePosts: [entry(0)] }))
+      .toEqual({ expected: 3, accepted: 1, missingIndices: [], invalidIndices: [1, 2], unexpectedIndices: [] });
+  });
+
+  it('rejects duplicate decisions and mismatched timeline destinations', () => {
+    expect(dispositionCoverage({ expectedIndices: [0, 1], decisions: [linked(0), linked(0), linked(1)], outagePosts: [entry(0), entry(1, 'wrong')] }).accepted).toBe(0);
+  });
+
+  it('accepts a reasoned exclusion and still counts orphan timeline indices', () => {
+    expect(dispositionCoverage({ expectedIndices: [0], decisions: [{ faultIndex: 0, outcome: 'NEW', reason: 'not linkable (GENERAL_NOTICE)' }], outagePosts: [entry(3)] }))
+      .toEqual({ expected: 1, accepted: 1, missingIndices: [], invalidIndices: [], unexpectedIndices: [3] });
+  });
+
+  it('never produces negative coverage for an empty current layout', () => {
+    expect(dispositionCoverage({ expectedIndices: [], decisions: [linked(0)], outagePosts: [entry(0)] }))
+      .toEqual({ expected: 0, accepted: 0, missingIndices: [], invalidIndices: [], unexpectedIndices: [0] });
+  });
+});
 
 describe('F02: a decision and its timeline entry must agree exactly', () => {
   const fresh = (i, outageId = 'o' + i) => ({ faultIndex: i, outcome: 'NEW', outageId, reason: 'no candidate' });

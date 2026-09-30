@@ -1,6 +1,6 @@
 import { Link, Stack } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
-import { colors } from '@/src/theme';
+import { colors, font, reading } from '@/src/theme';
 
 export default function NotFoundScreen() {
   return (
@@ -8,7 +8,8 @@ export default function NotFoundScreen() {
       <Stack.Screen options={{ title: 'Not found' }} />
       <View style={styles.container}>
         <Text style={styles.title}>This screen does not exist.</Text>
-        <Link href="/" style={styles.link}>
+        <Text style={styles.body}>The link may be out of date. My area is still available.</Text>
+        <Link href="/" style={styles.link} accessibilityRole="link">
           <Text style={styles.linkText}>Back to my area</Text>
         </Link>
       </View>
@@ -17,8 +18,9 @@ export default function NotFoundScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, backgroundColor: colors.page },
-  title: { fontSize: 20, fontWeight: '700', color: colors.text },
-  link: { marginTop: 16, paddingVertical: 12 },
-  linkText: { fontSize: 16, color: colors.power },
+  container: { ...reading, flex: 1, justifyContent: 'center', padding: 20, gap: 8, backgroundColor: colors.page },
+  title: { fontFamily: font.bold, fontSize: 28, lineHeight: 34, color: colors.text },
+  body: { fontFamily: font.text, fontSize: 16, lineHeight: 22, color: colors.muted },
+  link: { minHeight: 48, justifyContent: 'center' },
+  linkText: { fontFamily: font.semibold, fontSize: 16, color: colors.power },
 });

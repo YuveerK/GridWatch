@@ -17,6 +17,11 @@ const KIND = {
   update: { label: 'Update', icon: 'info', tone: 'idle' },
 };
 
+function aboutLabel(kind, water) {
+  if (kind === 'opened') return water ? 'New incident' : 'New outage';
+  return water ? 'Existing incident' : 'Existing outage';
+}
+
 /** The newest update time this browser has already been shown; a small "new since your last visit" marker, not an alert stream. */
 const KEY = 'gw:updates-seen';
 const read = () => {
@@ -47,7 +52,7 @@ export default function UpdatesFeed({ all, loading, seenAt, markSeen }) {
   const { service } = useMunicipality();
   const water = service === 'WATER';
   const [scope, setScope] = useState('all');
-  const mine = useApi(area && scope === 'area' ? `/v1/updates?limit=30&locality=${area.id}&service=${service}` : null, { refreshMs: 60_000 });
+  const mine = useApi(area && scope === 'area' ? `/v1/updates?limit=60&locality=${area.id}&service=${service}` : null, { refreshMs: 60_000 });
   const items = scope === 'area' ? mine.data?.data : all;
   const busy = scope === 'area' ? mine.loading && !mine.data : loading;
   const seenTimer = useRef(null);
@@ -81,7 +86,8 @@ export default function UpdatesFeed({ all, loading, seenAt, markSeen }) {
                 <div className="urow-main">
                   <div className="urow-meta">
                     <ServiceIdentity service={u.service ?? service} compact />
-                    <b>{water && u.kind === 'restored' ? 'Water supply restored' : water && u.kind === 'opened' ? 'New incident' : k.label}</b>
+                    <b>{aboutLabel(u.kind, water)}</b>
+                    {u.kind !== 'opened' && u.kind !== 'update' && <span>{water && u.kind === 'restored' ? 'Water supply restored' : k.label}</span>}
                     <span>{timeAgo(u.postedAt)}</span>
                     {u.sdc && <span>{prettySdc(u.sdc)}</span>}
                     {isNew && <em className="new-pill">New</em>}

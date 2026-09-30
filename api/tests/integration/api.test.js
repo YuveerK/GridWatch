@@ -326,6 +326,45 @@ describe('/v1/map likely areas', () => {
   });
 });
 
+describe('/v1/map?on= a Johannesburg day', () => {
+  const day = (offset) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Johannesburg' }).format(new Date(Date.now() + offset * 86_400_000));
+
+  it('shows incidents underway that day, and leaves the live map as what is open now', async () => {
+    const yesterday = day(-1);
+    const today = day(0);
+    const tomorrow = day(1);
+    const started = new Date(`${yesterday}T08:00:00+02:00`);
+    const restored = new Date(`${yesterday}T18:00:00+02:00`);
+    const windowStart = new Date(`${tomorrow}T04:00:00Z`);
+    const windowEnd = new Date(`${tomorrow}T10:00:00Z`);
+    await prisma.outage.create({ data: { id: 'day-live', title: 'Live now', status: 'ACTIVE', startedAt: new Date(), lastUpdateAt: new Date() } });
+    await prisma.outage.create({ data: { id: 'day-gone', title: 'Restored yesterday', status: 'RESTORED', startedAt: started, lastUpdateAt: restored, restoredAt: restored } });
+    await prisma.outage.create({ data: { id: 'day-plan', title: 'Planned tomorrow', kind: 'PLANNED', status: 'PLANNED', startedAt: new Date(), lastUpdateAt: new Date(), scheduledStart: windowStart, scheduledEnd: windowEnd } });
+
+    const live = await (await call('/v1/map')).json();
+    expect(live.data.map((o) => o.id)).toContain('day-live');
+    expect(live.data.map((o) => o.id)).not.toContain('day-gone');
+    expect(live.on).toBeUndefined();
+
+    const then = await (await call(`/v1/map?on=${yesterday}`)).json();
+    expect(then.on).toBe(yesterday);
+    expect(then.data.map((o) => o.id)).toContain('day-gone');
+    expect(then.data.map((o) => o.id)).not.toContain('day-live');
+    expect(then.data.map((o) => o.id)).not.toContain('day-plan');
+
+    const ahead = await (await call(`/v1/map?on=${tomorrow}`)).json();
+    expect(ahead.data.map((o) => o.id)).toContain('day-plan');
+    expect(ahead.data.map((o) => o.id)).not.toContain('day-gone');
+
+    const still = await (await call(`/v1/map?on=${today}`)).json();
+    expect(still.data.map((o) => o.id)).toContain('day-live');
+    expect(still.data.map((o) => o.id)).not.toContain('day-gone');
+    expect(still.data.map((o) => o.id)).not.toContain('day-plan');
+
+    expect((await call('/v1/map?on=2026-02-31')).status).toBe(400);
+  });
+});
+
 describe('overview history strips', () => {
   it('reports 14 zero-filled days per service centre', async () => {
     const t = new Date(Date.now() - 2 * 3_600_000);
@@ -354,8 +393,8 @@ describe('insights', () => {
   });
 });
 
-describe('/v1/updates: the news, not every post', () => {
-  it('leaves out repeats, and can be limited to outages in one suburb', async () => {
+describe('/v1/updates: every linked source update remains visible', () => {
+  it('keeps follow-ups with unchanged status, and can be limited to outages in one suburb', async () => {
     const now = Date.now();
     const at = (min) => new Date(now - min * 60_000);
     await prisma.locality.create({ data: { id: 'ul', canonicalName: 'Alpha', normalizedName: 'alpha', active: true, sourceLine: 1, sourceLabel: 't', updatedAt: at(0) } });
@@ -374,15 +413,16 @@ describe('/v1/updates: the news, not every post', () => {
     await post('u1', 30, 'UPDATE', { status: 'REPAIRING', pct: null, eta: 'ETA 6pm' }); // new status
     await post('u2', 20, 'OPENED', { status: 'INVESTIGATING', pct: null, eta: null });
     const all = (await (await call('/v1/updates')).json()).data;
-    expect(all.map((u) => `${u.outageId}:${u.kind}`)).toEqual(['u2:opened', 'u1:status', 'u1:opened']);
+    expect(all.map((u) => `${u.outageId}:${u.kind}`)).toEqual(['u2:opened', 'u1:status', 'u1:update', 'u1:opened']);
+    expect(all.map((u) => u.summary)).toEqual(['s4', 's3', 's2', 's1']);
     const mine = (await (await call('/v1/updates?locality=ul')).json()).data;
-    expect(mine.map((u) => u.outageId)).toEqual(['u1', 'u1']);
+    expect(mine.map((u) => u.outageId)).toEqual(['u1', 'u1', 'u1']);
     expect((await call('/v1/updates?limit=0')).status).toBe(400);
   });
 });
 
 describe('/v1/updates on outages from before effects were stored', () => {
-  it('compares old posts using their stored readings, so a repeat is dropped and real progress is kept', async () => {
+  it('uses stored readings to distinguish an ordinary follow-up from restoration progress', async () => {
     const now = Date.now();
     const at = (min) => new Date(now - min * 60_000);
     await prisma.outage.create({ data: { id: 'l1', title: 'Old', status: 'ACTIVE', sdcName: 'X', startedAt: at(100), lastUpdateAt: at(10) } });
@@ -398,7 +438,7 @@ describe('/v1/updates on outages from before effects were stored', () => {
     await post(60, 'UPDATE', { ...base, status: 'INVESTIGATING' }); // says nothing new
     await post(30, 'UPDATE', { ...base, status: 'PARTIALLY_RESTORED', restoration_percent: 48 });
     const r = (await (await call('/v1/updates')).json()).data;
-    expect(r.map((u) => u.kind)).toEqual(['progress', 'opened']);
+    expect(r.map((u) => u.kind)).toEqual(['progress', 'update', 'opened']);
   });
 });
 

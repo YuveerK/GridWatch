@@ -2,11 +2,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Platform } from 'react-native';
+import { AppState as AppLifecycle, Linking, Platform } from 'react-native';
+import { createPreferenceReconciler } from '@/src/lib/alert-sync.js';
+import { ALERT_COPY, normalizeQuiet } from '@/src/lib/alerts.js';
 import { ApiError, api, type ServiceName } from '@/src/lib/api';
 
 const PREFS_KEY = 'gridwatch.prefs';
-export const ALERTS_OFF = 'Alerts are not being sent yet';
+export const ALERTS_OFF = ALERT_COPY.unavailable;
+
+export type AlertStatus = 'checking' | 'enabled' | 'denied' | 'unavailable' | 'failed' | 'off';
 
 export type Suburb = { id: string; name: string };
 export type Quiet = { from: number | null; to: number | null };
@@ -19,7 +23,9 @@ type Prefs = {
   token: string | null;
 };
 
-type AlertResult = { alerts: boolean; message: string | null };
+type AlertResult = { alerts: boolean; status: AlertStatus; message: string };
+
+type QuietResult = { synced: boolean; message: string };
 
 type AppContextValue = {
   ready: boolean;
@@ -30,9 +36,17 @@ type AppContextValue = {
   following: Suburb[];
   quiet: Quiet;
   alerts: boolean;
+  alertStatus: AlertStatus;
+  alertMessage: string;
+  notice: string | null;
+  pendingSync: boolean;
+  clearNotice: () => void;
+  retryAlerts: () => Promise<void>;
+  openAlertSettings: () => void;
   follow: (suburb: Suburb) => Promise<AlertResult>;
   unfollow: (id: string) => Promise<void>;
-  setQuiet: (from: number | null, to: number | null) => Promise<void>;
+  setQuiet: (from: number | null, to: number | null) => Promise<QuietResult>;
+  now: number;
 };
 
 const empty: Prefs = {
@@ -76,47 +90,93 @@ async function pushToken() {
   return result.data;
 }
 
-async function syncAlerts(following: Suburb[], quiet: Quiet, ask: boolean): Promise<AlertResult & { token: string | null }> {
-  if (Platform.OS === 'web') return { alerts: false, message: ALERTS_OFF, token: null };
-  const existing = await Notifications.getPermissionsAsync();
+function alertResult(status: AlertStatus, token: string | null = null): AlertResult & { token: string | null } {
+  return { alerts: status === 'enabled', status, message: ALERT_COPY[status], token };
+}
+
+async function syncAlerts(following: Suburb[], quiet: Quiet, ask: boolean, hooks?: { stillCurrent?: () => boolean }): Promise<AlertResult & { token: string | null; obsolete?: boolean }> {
+  const current = () => (hooks?.stillCurrent ? hooks.stillCurrent() : true);
+  if (!current()) return { ...alertResult('failed'), obsolete: true };
+  if (Platform.OS === 'web') return alertResult('unavailable');
+  let existing;
+  try {
+    existing = await Notifications.getPermissionsAsync();
+  } catch {
+    return alertResult('failed');
+  }
   let status = existing.status;
-  if (status !== 'granted' && ask) status = (await Notifications.requestPermissionsAsync()).status;
-  if (status !== 'granted') return { alerts: false, message: ALERTS_OFF, token: null };
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('default', {
-      name: 'Outages',
-      importance: Notifications.AndroidImportance.DEFAULT,
-    });
+  try {
+    if (status !== 'granted' && ask) status = (await Notifications.requestPermissionsAsync()).status;
+  } catch {
+    return alertResult('failed');
+  }
+  if (status !== 'granted') return alertResult(ask || existing.status === 'denied' ? 'denied' : 'off');
+  try {
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'Outages',
+        importance: Notifications.AndroidImportance.DEFAULT,
+      });
+    }
+  } catch {
+    return alertResult('failed');
   }
   let token: string;
   try {
     token = await pushToken();
   } catch {
-    return { alerts: false, message: ALERTS_OFF, token: null };
+    return alertResult('failed');
   }
+  if (!current()) return { ...alertResult('failed'), obsolete: true, token };
   const platform = Platform.OS === 'ios' ? 'ios' : 'android';
   try {
     await api.registerDevice({ token, platform, quietFrom: quiet.from, quietTo: quiet.to });
+    if (!current()) return { ...alertResult('failed'), obsolete: true, token };
     await api.replaceSubscriptions(token, following.map((item) => item.id));
-    return { alerts: true, message: null, token };
+    if (!current()) return { ...alertResult('failed'), obsolete: true, token };
+    return alertResult('enabled', token);
   } catch (error) {
     if (error instanceof ApiError && (error.code === 'push_disabled' || error.status === 503)) {
-      return { alerts: false, message: ALERTS_OFF, token };
+      return { ...alertResult('unavailable'), token };
     }
-    return { alerts: false, message: ALERTS_OFF, token };
+    return { ...alertResult('failed'), token };
   }
 }
 
 export function AppState({ children }: { children: ReactNode }) {
   const [prefs, setPrefs] = useState<Prefs>(empty);
   const [ready, setReady] = useState(false);
-  const [alerts, setAlerts] = useState(false);
+  const [alertStatus, setAlertStatus] = useState<AlertStatus>('off');
+  const [notice, setNotice] = useState<string | null>(null);
+  const [pendingSync, setPendingSync] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const prefsRef = useRef(prefs);
-  prefsRef.current = prefs;
+  const reconciler = useRef<ReturnType<typeof createPreferenceReconciler> | null>(null);
 
   const commit = useCallback((next: Prefs) => {
     prefsRef.current = next;
     setPrefs(next);
+  }, []);
+
+  const applySync = useCallback((outcome: { obsolete?: boolean; skipped?: boolean; pending?: boolean; status?: AlertStatus; token?: string | null; abandoned?: boolean } | void) => {
+    if (!outcome || outcome.skipped) return;
+    if (outcome.obsolete) {
+      setPendingSync(true);
+      return;
+    }
+    if (outcome.status) setAlertStatus(outcome.status);
+    const needsRetry = outcome.status === 'failed' || outcome.status === 'unavailable' || Boolean(outcome.abandoned);
+    setPendingSync(needsRetry);
+    if (outcome.token) commit({ ...prefsRef.current, token: outcome.token });
+    if (needsRetry) setNotice('Saved on this phone. Alerts could not sync. Retry.');
+  }, [commit]);
+
+  useEffect(() => {
+    if (reconciler.current) return;
+    reconciler.current = createPreferenceReconciler({
+      readDesired: () => prefsRef.current,
+      sync: syncAlerts,
+    });
   }, []);
 
   useEffect(() => {
@@ -126,21 +186,38 @@ export function AppState({ children }: { children: ReactNode }) {
       commit(loaded);
       setReady(true);
       if (loaded.token || loaded.following.length) {
-        const result = await syncAlerts(loaded.following, loaded.quiet, false);
-        if (!live) return;
-        setAlerts(result.alerts);
-        if (result.token && result.token !== loaded.token) commit({ ...prefsRef.current, token: result.token });
+        setAlertStatus('checking');
+        reconciler.current!.run(false).then((outcome) => {
+          if (live) applySync(outcome);
+        }).catch(() => {
+          if (live) setPendingSync(true);
+        });
       }
     });
     return () => {
       live = false;
     };
-  }, [commit]);
+  }, [applySync, commit]);
 
   useEffect(() => {
     if (!ready) return;
     AsyncStorage.setItem(PREFS_KEY, JSON.stringify(prefs)).catch(() => undefined);
   }, [prefs, ready]);
+
+  useEffect(() => {
+    const tick = () => setNow(Date.now());
+    const timer = setInterval(tick, 60_000);
+    const sub = AppLifecycle.addEventListener('change', (state) => {
+      if (state === 'active') {
+        tick();
+        reconciler.current!.run(false).then(applySync).catch(() => setPendingSync(true));
+      }
+    });
+    return () => {
+      clearInterval(timer);
+      sub.remove();
+    };
+  }, [applySync]);
 
   const value = useMemo<AppContextValue>(() => ({
     ready,
@@ -148,45 +225,65 @@ export function AppState({ children }: { children: ReactNode }) {
     suburb: prefs.suburb,
     following: prefs.following,
     quiet: prefs.quiet,
-    alerts,
+    alerts: alertStatus === 'enabled',
+    alertStatus,
+    alertMessage: ALERT_COPY[alertStatus],
+    notice,
+    pendingSync,
+    clearNotice: () => setNotice(null),
+    retryAlerts: async () => {
+      applySync(await reconciler.current!.run(false));
+    },
+    openAlertSettings: () => {
+      Linking.openSettings().catch(() => undefined);
+    },
     setService: (service) => commit({ ...prefsRef.current, service }),
     setSuburb: (suburb) => commit({ ...prefsRef.current, suburb }),
     follow: async (suburb) => {
       const current = prefsRef.current;
       if (current.following.length >= 20 && !current.following.some((item) => item.id === suburb.id)) {
-        return { alerts: false, message: 'You can follow up to 20 suburbs.' };
+        return { alerts: false, status: 'off' as AlertStatus, message: 'You can follow up to 20 suburbs. Remove one from Following to add another.' };
       }
       const following = current.following.some((item) => item.id === suburb.id)
         ? current.following
         : [...current.following, suburb];
       commit({ ...current, following });
-      const result = await syncAlerts(following, current.quiet, true);
-      setAlerts(result.alerts);
-      if (result.token) commit({ ...prefsRef.current, token: result.token });
-      return { alerts: result.alerts, message: result.message };
+      const outcome = await reconciler.current!.run(true);
+      if (outcome.obsolete || outcome.skipped) return { alerts: alertStatus === 'enabled', status: alertStatus, message: ALERT_COPY[alertStatus] };
+      applySync(outcome);
+      const status = (outcome.status ?? alertStatus) as AlertStatus;
+      const message = status === 'failed' || status === 'unavailable' ? 'Saved on this phone. Alerts could not sync. Retry.' : ALERT_COPY[status];
+      return { alerts: status === 'enabled', status, message };
     },
     unfollow: async (id) => {
       const current = prefsRef.current;
       const following = current.following.filter((item) => item.id !== id);
       commit({ ...current, following });
-      if (!current.token) return;
-      try {
-        await api.replaceSubscriptions(current.token, following.map((item) => item.id));
-      } catch (error) {
-        if (error instanceof ApiError && (error.code === 'push_disabled' || error.status === 503)) setAlerts(false);
-      }
+      if (!current.token && following.length === 0) return;
+      applySync(await reconciler.current!.run(false));
     },
+    now,
     setQuiet: async (from, to) => {
-      if ((from == null) !== (to == null)) return;
+      const normalized = normalizeQuiet(from, to);
       const current = prefsRef.current;
-      const quiet = { from, to };
+      const quiet = { from: normalized.from, to: normalized.to };
       commit({ ...current, quiet });
-      if (!current.token && current.following.length === 0) return;
-      const result = await syncAlerts(current.following, quiet, false);
-      setAlerts(result.alerts);
-      if (result.token) commit({ ...prefsRef.current, token: result.token });
+      const localNote = normalized.clearedBecauseEqual
+        ? 'Equal hours turn quiet hours off.'
+        : 'Saved on this phone.';
+      if (!current.token && current.following.length === 0) {
+        return { synced: false, message: localNote };
+      }
+      const result = await reconciler.current!.run(false);
+      if (result.obsolete) return { synced: false, message: localNote };
+      applySync(result);
+      if (result.skipped) return { synced: false, message: localNote };
+      return {
+        synced: result.status === 'enabled',
+        message: result.status === 'enabled' ? `${localNote} Alert settings synchronized.` : result.status === 'failed' || result.status === 'unavailable' ? `${localNote} Alerts could not sync. Retry.` : `${localNote} ${result.message ?? ''}`.trim(),
+      };
     },
-  }), [alerts, commit, prefs, ready]);
+  }), [alertStatus, applySync, commit, notice, now, pendingSync, prefs, ready]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
