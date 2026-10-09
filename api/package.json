@@ -27,7 +27,8 @@
     "health": "node scripts/health.js",
     "eval:all": "node scripts/eval-all.js",
     "test:integration": "vitest run --config vitest.integration.config.js",
-    "test:all": "vitest run && vitest run --config vitest.integration.config.js"
+    "test:all": "vitest run && vitest run --config vitest.integration.config.js",
+    "review:cases": "node scripts/review-cases.js"
   },
   "engines": {
     "node": ">=22"

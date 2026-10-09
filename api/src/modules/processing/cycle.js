@@ -8,6 +8,7 @@ import { withLease, PIPELINE } from '../coordination/lease.js';
 import { faultItems, processPending, retryImageFailures, retryTieBreaks } from './processor.service.js';
 import { assessCycle, beginCycleQuality, coveredPostIds, failCycleQuality } from './quality.js';
 import { runReview } from '../review/review.service.js';
+import { runSelfCorrectionStage } from '../self-correction/service.js';
 
 function friendly(err) {
   const m = String(err?.message ?? err);
@@ -22,7 +23,7 @@ function friendly(err) {
  * Single-flight (never two at once), with a cooldown on manual runs and a cap on posts read per run, because
  * every run spends money at X and at the AI provider. Dependencies are injected so it can be tested without either.
  */
-export function createCycle({ ingest, process, retry, review, sweep, place, counts, assess, begin, failRecord, lease = async (fn) => ({ acquired: true, value: await fn(undefined) }), now = () => Date.now(), cooldownMs = 90_000, maxPosts = 200 }) {
+export function createCycle({ ingest, process, retry, review, selfCorrect, sweep, place, counts, assess, begin, failRecord, lease = async (fn) => ({ acquired: true, value: await fn(undefined) }), now = () => Date.now(), cooldownMs = 90_000, maxPosts = 200 }) {
   let state = { state: 'idle', trigger: null, step: null, startedAt: null, finishedAt: null, progress: null, found: null, result: null, error: null };
   let lastManualAt = 0;
   let current = Promise.resolve();
@@ -80,6 +81,15 @@ export function createCycle({ ingest, process, retry, review, sweep, place, coun
       stageFailures.push('review');
       logger.warn({ err: err?.message }, 'the review pass failed; its posts are looked at again next run');
     }
+    // Bounded, off-by-default self-correction stage (SELF_CORRECTION_MODE=off preserves this exactly as a no-op).
+    // Never mutates anything by itself in shadow mode; auto mode only ever applies allowlisted, gated policies.
+    let selfCorrection = { ran: false, generated: 0, persisted: 0, applied: 0 };
+    try {
+      selfCorrection = (await selfCorrect?.({ ctx, startedAt: cycleStart })) ?? selfCorrection;
+    } catch (err) {
+      stageFailures.push('selfCorrect');
+      logger.warn({ err: err?.message }, 'the self-correction stage failed; will try again next run');
+    }
     state.step = 'tidying';
     // pin any suburbs learned from these posts on the map; capped and failure-proof, it can never hold up or break a fetch
     let placed = 0;
@@ -103,7 +113,7 @@ export function createCycle({ ingest, process, retry, review, sweep, place, coun
     // If assessing itself fails that is an explicit outcome: the record is closed FAILED (if the database allows) and the result says so.
     let quality = null;
     try {
-      quality = await assess?.({ trigger: state.trigger, startedAt: cycleStart, qualityId, ingestionRunId: ing?.runId ?? null, ingestion: ing, tally: proc?.tally ?? {}, backlog: proc?.remaining ?? 0, incomplete });
+      quality = await assess?.({ trigger: state.trigger, startedAt: cycleStart, qualityId, ingestionRunId: ing?.runId ?? null, ingestion: ing, tally: proc?.tally ?? {}, backlog: proc?.remaining ?? 0, incomplete, selfCorrection });
     } catch (err) {
       stageFailures.push('assess');
       logger.warn({ err: err?.message }, 'could not assess the quality of this cycle');
@@ -212,9 +222,27 @@ export const cycle = createCycle({
     return { tried: pictures.tried + tieBreaks.tried, fixed: pictures.fixed + tieBreaks.fixed, pictures, tieBreaks };
   },
   review: reviewStage,
+  selfCorrect: ({ ctx, startedAt }) => runSelfCorrectionStage({ ctx, prisma, startedAt }),
   begin: ({ trigger, startedAt }) => beginCycleQuality({ prisma, trigger, startedAt }),
   failRecord: (args) => failCycleQuality({ prisma, ...args }),
-  assess: (args) => assessCycle({ prisma, faultItems, promptVersion: env.AI_PROMPT_VERSION, ...args }),
+  assess: async (args) => {
+    const result = await assessCycle({ prisma, faultItems, promptVersion: env.AI_PROMPT_VERSION, ...args });
+    if (!args.error) {
+      const accounts = await prisma.sourceAccount.findMany({ where: { active: true } });
+      result.summary.sourceChecks = accounts.map((a) => ({ source: a.displayName,checkedAt: new Date().toISOString(),incomplete: Boolean((args.incomplete ?? []).some((i) => !i.startsWith('ingest:')) || (args.ingestion?.perAccount ?? []).some((r) => r.displayName === a.displayName && r.incomplete) || (args.ingestion?.failedAccounts ?? []).some((f) => f.displayName === a.displayName)) }));
+      await prisma.cycleQuality.update({ where: { id: result.id },data: { summary: result.summary } });
+    }
+    try {
+      const { reconcileCases } = await import('../review/cases.js');
+      await reconcileCases({ prisma });
+    } catch (err) {
+      logger.warn({ err: err.message }, 'review case indexing failed; live query fallback remains available');
+      result.summary.incomplete = [...(result.summary.incomplete ?? []), 'review-index'];
+      result.status = 'INCOMPLETE';
+      await prisma.cycleQuality.update({ where: { id: result.id }, data: { status: result.status, summary: result.summary } });
+    }
+    return result;
+  },
   lease: (fn) => withLease(PIPELINE, fn),
   sweep: sweepStage,
   place: () => placeLocalities({ max: 8, budgetMs: 20_000 }),

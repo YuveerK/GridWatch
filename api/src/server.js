@@ -8,7 +8,7 @@ import { cycle } from './modules/processing/cycle.js';
 import { scheduleState } from './modules/processing/schedule-state.js';
 import { runNotifications } from './modules/push/notify.service.js';
 
-const server = createApp().listen(env.PORT, () => logger.info(`GridWatch API listening on :${env.PORT}`));
+const server = createApp().listen(env.PORT, env.HOST, () => logger.info(`GridWatch API listening on :${env.PORT}`));
 
 // The sweep takes the same pipeline lease as everything else, so it never runs in the middle of a fetch or a linking pass.
 const sweep = async () => {

@@ -9,6 +9,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { effectiveExtraction } from '../src/modules/review/effective-reading.js';
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/db/prisma.js';
 import { faultItems } from '../src/modules/processing/processor.service.js';
@@ -23,6 +24,7 @@ const pct = (a, b) => (b ? `${((a / b) * 100).toFixed(1)}%` : 'n/a');
 const posts = await prisma.sourcePost.findMany({
   select: {
     id: true, externalId: true, sourceAccount: true, publishedAt: true, serviceType: true, processingStatus: true, text: true, noteTweetText: true,
+    readingOverride: true, PostMedia: true,
     extractions: { orderBy: { createdAt: 'desc' }, select: { promptVersion: true, status: true, result: true, relevance: true } },
     linkDecisions: { select: { faultIndex: true, outcome: true, outageId: true, reason: true } },
     outagePosts: { select: { faultIndex: true, outageId: true } },
@@ -30,7 +32,7 @@ const posts = await prisma.sourcePost.findMany({
 });
 const replies = posts.filter((p) => /^\s*@\w+/.test(p.noteTweetText || p.text || ''));
 const readable = posts.filter((p) => !replies.includes(p));
-const current = (p) => p.extractions.find((e) => e.promptVersion === (readerFor(p.serviceType).promptVersion ?? env.AI_PROMPT_VERSION));
+const current = (p) => effectiveExtraction(p, p.extractions.find((e) => e.promptVersion === (readerFor(p.serviceType).promptVersion ?? env.AI_PROMPT_VERSION)));
 const by = (s) => readable.filter((p) => current(p)?.status === s).length;
 let expected = 0;
 let ok = 0;

@@ -30,14 +30,16 @@ export function ServiceProvider({ children }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [stored, setStored] = useState(readStored);
-  const fromUrl = serviceFromParam(new URLSearchParams(location.search).get('service'));
+  const reviewing = location.pathname === '/review' || location.pathname.startsWith('/review/');
+  const fromUrl = reviewing ? null : serviceFromParam(new URLSearchParams(location.search).get('service'));
   const service = fromUrl ?? stored;
 
   const withService = useCallback((s) => {
+    if (reviewing) return; // /review owns its all-service queue filter; leave public map scope separate.
     const params = new URLSearchParams(location.search);
     params.set('service', serviceParam(s));
     navigate({ pathname: location.pathname, search: `?${params}`, hash: location.hash }, { replace: true, state: location.state });
-  }, [location, navigate]);
+  }, [location, navigate, reviewing]);
 
   useEffect(() => {
     document.documentElement.dataset.service = service;
@@ -45,8 +47,8 @@ export function ServiceProvider({ children }) {
       store(service);
       setStored(service);
     }
-    if (!fromUrl) withService(service);
-  }, [service, stored, fromUrl, withService]);
+    if (!fromUrl && !reviewing) withService(service);
+  }, [service, stored, fromUrl, withService, reviewing]);
 
   const setService = useCallback((s) => {
     store(s);

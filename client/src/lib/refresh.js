@@ -83,6 +83,8 @@ export async function signOut() {
   }
 }
 
+export function operatorExpired() { publish({ operator: false,notice: 'sign-in' }); }
+
 const subscribe = (cb) => {
   listeners.add(cb);
   return () => listeners.delete(cb);

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { learnFromExtraction, qualifyExtensionLocalities, removeContributions, resolveLocality, resetLocalityIndex } from '../../src/modules/infrastructure/infrastructure.service.js';
+import { correctBareAreaHeadings, learnFromExtraction, qualifyExtensionLocalities, removeContributions, resolveLocality, resetLocalityIndex } from '../../src/modules/infrastructure/infrastructure.service.js';
 import { prisma, resetDb } from './db.js';
 
 const at = new Date('2026-09-19T12:00:00Z');
@@ -10,6 +10,25 @@ beforeEach(async () => {
   await resetDb();
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "EvidenceContribution", "Locality" CASCADE');
   resetLocalityIndex();
+});
+
+describe('bare area headings in SDC graphics', () => {
+  it('requires a known suburb, an exact source heading and no named station or other equipment', async () => {
+    await prisma.locality.create({ data: { id: 'freedom', canonicalName: 'Freedom Park South', normalizedName: 'freedom park south', active: true, updatedAt: at } });
+    resetLocalityIndex();
+    const fault = { equipment: [{ name: 'Freedom Park South', type: 'SUBSTATION', parent_name: null }], localities: [], status: 'REPAIRING' };
+    const result = { image_text: '- Freedom Park South: Repairs underway.', faults: [fault] };
+    const corrected = await correctBareAreaHeadings(result);
+    expect(corrected.faults[0].equipment).toEqual([]);
+    expect(corrected.faults[0].localities).toEqual([{ name: 'Freedom Park South', state: 'AFFECTED' }]);
+    expect(result.faults[0]).toBe(fault);
+    for (const different of [
+      { ...result, image_text: '- Freedom Park South Substation: Repairs underway.' },
+      { ...result, image_text: 'An outage in Freedom Park South.' },
+      { ...result, faults: [{ ...fault, equipment: [...fault.equipment, { name: 'RMU 359', type: 'OTHER' }] }] },
+      { image_text: '- Unknown Place: Repairs underway.', faults: [{ ...fault, equipment: [{ name: 'Unknown Place', type: 'SUBSTATION' }] }] },
+    ]) expect((await correctBareAreaHeadings(different)).faults[0].equipment).toEqual(different.faults[0].equipment);
+  });
 });
 
 describe('outages identifying only a named customer facility', () => {

@@ -95,7 +95,7 @@ export function buildEffect({ extraction, facts, post, retroactive, expand, revi
     cause: r.cause ?? null,
     eta: r.eta_text ?? null,
     // the extractor's own per-suburb states drive the headline status; the matched ids drive the per-suburb flags
-    headlineLocalities: (r.localities ?? []).map((l) => ({ state: l.state })),
+    headlineLocalities: (r.localities ?? []).map((l) => ({ name: l.name, state: l.state })),
     locs: facts.localityIds.map((id) => ({ id, restored: restoredIds.has(id) })),
     nodeIds: facts.nodes.map((n) => n.id),
     sdcName: facts.sdcNode?.name ?? null,
@@ -189,7 +189,7 @@ export function foldEffects(posts) {
  * effect, so the row is left as it is) or 'folded'.
  */
 /** Pumping or asset recovery in the notice wins over a reading that treated "restored" as customer supply. */
-function noticeEffect(p) {
+export function noticeEffect(p) {
   if (p.post?.serviceType !== 'WATER' || !p.effect) return p.effect;
   // Once a bulletin is split, its headline describes several assets. An explicit state on
   // one fault must not be overwritten by recovery words in the shared post text.

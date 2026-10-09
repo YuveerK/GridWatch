@@ -7,6 +7,7 @@ Every file here is hand-labelled truth about City Power posts. Keys are the **la
 | `holdout-0910/0911/0912/0914/0915.json` | **holdout** | Posts from one day each, labelled blind (from the post text, before looking at the engine's grouping) | **No.** Once a rule is tuned against one it is no longer a holdout; say so in its `_note` and move it to `tuning`. |
 | `links.json` | tuning | The first labelled set, used while the rules were built | Yes |
 | `cases-0921.json` | regression | Hard cases found while checking fresh posts, labelled *after* seeing the engine's grouping | Yes, but it only guards against regressions; it does not measure unseen accuracy |
+| `cases-1001.json` | regression | Freedom Park South restoration and UJ Soweto Campus continuation, kept separate from the Pimville termination and Allandale faults | Yes; source-reviewed after the assignments were inspected |
 | `corrections.json` | regression | One pair per manual correction: two posts that must share an outage (`same: true`) or must not (`same: false`) | Yes |
 | `states.json` | regression | What an outage should look like at the end: status, kind, planned window (Johannesburg time), minimum posts | Yes |
 

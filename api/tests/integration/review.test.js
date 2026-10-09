@@ -156,6 +156,9 @@ describe('B4: the queue', () => {
   it('queues items most urgent first, and a resolved item stays closed unless a NEW reason appears', async () => {
     const a = await post();
     const b = await post({ h: 1 });
+    const o = await outage({ title: 'Valid published incident', localityIds: ['l1'] });
+    await join(o.id, b);
+    await decide(b, 'LINKED', o.id);
     expect(await saveReviewItems({ prisma, suspicions: [susp(a, 'CHANGED_SCOPE'), susp(b, 'NEW_NEAR_ACTIVE', 'KIND_CONFLICT')] })).toBe(2);
     const open = await listReviewItems({ prisma });
     expect(open.map((i) => i.postId)).toEqual([b, a]); // b: 6, a: 1
@@ -292,7 +295,7 @@ describe('a review item whose reason has gone', () => {
     await reconcileReviewItems({ prisma, postIds: [q] });
     expect((await prisma.reviewItem.findUnique({ where: { postId_faultIndex: { postId: q, faultIndex: 0 } } })).status).toBe('OPEN');
 
-    await prisma.outagePost.delete({ where: { outageId_postId: { outageId: dup.id, postId: q } } });
+    await prisma.outagePost.delete({ where: { outageId_postId_faultIndex: { outageId: dup.id, postId: q, faultIndex: 0 } } });
     await join(first.id, q, { role: 'UPDATE' });
     await prisma.linkDecision.update({ where: { postId_faultIndex: { postId: q, faultIndex: 0 } }, data: { outcome: 'LINKED', outageId: first.id } });
     const again = await reconcileReviewItems({ prisma, postIds: [q] });
@@ -338,7 +341,7 @@ describe('a review item whose reason has gone', () => {
     await decide(q, 'NEW', dup.id);
     await reconcileReviewItems({ prisma, postIds: [q] });
     expect((await prisma.reviewItem.findUnique({ where: { postId_faultIndex: { postId: q, faultIndex: 0 } } })).status).toBe('OPEN');
-    await prisma.outagePost.delete({ where: { outageId_postId: { outageId: dup.id, postId: q } } });
+    await prisma.outagePost.delete({ where: { outageId_postId_faultIndex: { outageId: dup.id, postId: q, faultIndex: 0 } } });
     await join(first.id, q, { role: 'UPDATE' });
     const once = await reconcileOpenReviews({ prisma });
     expect(once.resolved).toBe(1);

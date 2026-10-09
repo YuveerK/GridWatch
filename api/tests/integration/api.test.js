@@ -485,3 +485,24 @@ describe('/v1/localities/:id/history', () => {
     expect((await call('/v1/localities/hl/history?days=0')).status).toBe(400);
   });
 });
+
+
+describe('single-terminal built web app',() => {
+  it('serves review deep links and assets while keeping operator APIs protected and API misses as JSON',async () => {
+    const { mkdtemp,writeFile,rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');const { join } = await import('node:path');
+    const root = await mkdtemp(join(tmpdir(),'gridwatch-web-test-'));
+    let web;
+    try {
+      await writeFile(join(root,'index.html'),'<html><body>GridWatch built client</body></html>');
+      await writeFile(join(root,'app.css'),'body { color: black; }');
+      web = createApp({ serveWeb: true,webRoot: root }).listen(0,'127.0.0.1');await new Promise((r) => web.once('listening',r));
+      const url = `http://127.0.0.1:${web.address().port}`;
+      const page = await fetch(`${url}/review/rc_example`,{ headers: { accept: 'text/html' } });expect(page.status).toBe(200);expect(await page.text()).toContain('GridWatch built client');
+      expect((await fetch(`${url}/app.css`)).status).toBe(200);
+      const miss = await fetch(`${url}/v1/nonexistent`,{ headers: { accept: 'text/html' } });expect(miss.status).toBe(404);expect(await miss.json()).toEqual({ error: 'not_found' });
+      expect((await fetch(`${url}/admin/review-cases/summary`)).status).toBe(401);
+      expect((await fetch(`${url}/missing.js`)).status).toBe(404);
+    } finally { if (web) await new Promise((r) => web.close(r));await rm(root,{ recursive: true,force: true }); }
+  });
+});

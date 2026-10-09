@@ -30,6 +30,8 @@ export const schema = z
   .object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
     PORT: int(1, 65535).default(4000),
+    HOST: z.string().min(1).optional(), // leave unset for existing deployments; local launcher binds loopback
+    SERVE_WEB_CLIENT: flag.default('off'), // serve the built React app from the API for single-terminal local use
     DATABASE_URL: z.string().regex(/^postgres(ql)?:\/\//, 'must be a postgresql:// URL'),
     GEMINI_API_KEY: z.string().min(1),
     GEMINI_MODEL: z.string().min(1).default('gemini-3.5-flash-lite'),
@@ -56,6 +58,8 @@ export const schema = z
     REFRESH_TOKEN: z.string().min(16).optional(), // deprecated name for OPERATOR_TOKEN
     OPERATOR_SESSION_HOURS: int(1, 168).default(12),
     ALLOW_LOCAL_OPERATOR: flag.default('off'), // explicit local-development escape hatch; ignored in production
+    REVIEW_CORRECTIONS_ENABLED: flag.default('off'), // enable after guided-review repair/undo acceptance checks
+    REVIEW_REREAD_MAX_REQUESTS_PER_DAY: int(0, 100).default(10),
     // Push notifications to phones (Expo). PUSH_DRY_RUN=on logs what would be sent instead of sending it.
     PUSH_ENABLED: flag.default('on'),
     PUSH_DRY_RUN: flag.default('off'),
@@ -64,6 +68,21 @@ export const schema = z
     VERIFIER_ENABLED: flag.default('off'),
     VERIFIER_MAX_CALLS_PER_DAY: int(0, 5000).default(30),
     VERIFIER_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.03), // share of apparently clean posts spot-checked, when the verifier is on
+    // The self-correction engine (see docs/CLAUDE_SELF_CORRECTING_ENGINE_IMPLEMENTATION.md). off = no shadow records, no mutation
+    // (today's behaviour, unchanged). shadow = proposals are generated and persisted, nothing is ever applied. auto = eligible,
+    // allowlisted policy versions may also be applied, still bounded and reversible. Stays "off" until the release gates pass.
+    SELF_CORRECTION_MODE: z.enum(['off', 'shadow', 'auto']).default('off'),
+    // Comma-separated "policyName@policyVersion" pairs explicitly allowed to auto-apply. Empty = nothing may auto-apply, whatever the mode.
+    SELF_CORRECTION_POLICIES: z.string().default(''),
+    SELF_CORRECTION_MAX_PROPOSALS_PER_CYCLE: int(0, 500).default(10),
+    SELF_CORRECTION_MAX_APPLIES_PER_CYCLE: int(0, 100).default(2),
+    SELF_CORRECTION_MAX_POSTS_PER_REPAIR: int(1, 50).default(5),
+    SELF_CORRECTION_MAX_OUTAGES_PER_REPAIR: int(1, 50).default(3),
+    SELF_CORRECTION_MAX_AI_CALLS_PER_DAY: int(0, 5000).default(30),
+    SELF_CORRECTION_MAX_REREADS_PER_DAY: int(0, 1000).default(0), // original-image rereads disabled initially
+    SELF_CORRECTION_MAX_ATTEMPTS: int(1, 20).default(2),
+    SELF_CORRECTION_CYCLE_BUDGET_MS: int(0, 600_000).default(20_000),
+    SELF_CORRECTION_PROPOSAL_TTL_MINUTES: int(1, 44_640).default(60),
     CORS_ALLOWED_ORIGINS: origins,
     MEDIA_MAX_BYTES: int(1024, 50 * 1024 * 1024).default(10 * 1024 * 1024),
     LINK_HIGH_SCORE: z.coerce.number().min(0).max(1).default(0.7),

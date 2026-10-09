@@ -64,6 +64,14 @@ export function labelledEquipmentName(name, station, type = 'LINE', context = ''
 /** "275kV", "132 kV", "33kV": a voltage class, not a piece of equipment. */
 export const isBareVoltage = (name) => /^\d+(?:[.,]\d+)?\s*kv$/i.test(String(name ?? '').trim());
 
+// A condition and a type do not identify an electrical asset. Keep site names,
+// numbered equipment and routes; discard descriptions shared by unrelated faults.
+const GENERIC_ELECTRICAL_WORDS = new Set(['the', 'a', 'an', 'new', 'old', 'faulty', 'fault', 'failed', 'damaged', 'broken', 'replacement', 'affected', 'existing', 'installed', 'double', 'underground', 'overhead', 'power', 'supply', 'electrical', 'electricity', 'network', 'cable', 'cables', 'line', 'lines', 'feeder', 'feeders', 'transformer', 'transformers', 'termination', 'terminations', 'jumper', 'jumpers', 'mini', 'substation', 'substations', 'sub', 'station', 'pole', 'mounted', 'ground', 'ring', 'main', 'unit']);
+export function isGenericElectricalAsset(name) {
+  const words = baseNormalize(name).split(' ').filter(Boolean);
+  return words.length === 0 || words.every((word) => GENERIC_ELECTRICAL_WORDS.has(word));
+}
+
 // Words that describe a water asset without identifying it: "burst water pipe", "affected pipeline", "400mm pipe".
 const GENERIC_WATER_WORDS = new Set(['burst', 'water', 'pipe', 'pipes', 'pipeline', 'pipelines', 'line', 'main', 'mains', 'affected', 'the', 'a', 'an', 'network', 'reticulation', 'diameter', 'dia', 'mm', 'reservoir', 'outlet', 'inlet', 'station', 'prv', 'valve', 'leak', 'leaking', 'damaged', 'broken', 'supply', 'bulk']);
 

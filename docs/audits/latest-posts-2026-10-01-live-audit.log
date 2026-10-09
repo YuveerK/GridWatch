@@ -1,0 +1,54 @@
+Audit of 842 outages
+
+OK    Live but every suburb is restored: 0   (status says outage, suburbs say power is back)
+OK    Restored but some suburb still unrestored: 0   (status says fixed, a suburb was never restored)
+OK    Live but latest post says restored: 0   (newest post is a restoration, outage still live)
+OK    Live with no update for 48h+ (sweep not run): 0   (looks live but is stale)
+OK    Restored/closed without a restoration time: 0   (cannot show when it ended)
+INFO  INFO: no suburb named by City Power (shown with likely areas from equipment): 304   (not an error: the suburb page lists these under "Possibly affected")
+        - Berea Reservoir [STALE] last update 2026-09-15T17:53 | Update: Status on Central System ^M
+        - Tshepisong [CLOSED] last update 2026-09-15T13:51 | Tshepisong Switching Station – Lines A and D: Power supply has been fully restored to all 
+        - Tshepisong [CLOSED] last update 2026-09-16T09:06 | Tshepisong Switching Station – Line B: Power supply has been fully restored to the affecte
+        - Westgate (Westgate Shopping Centre) [CLOSED] last update 2026-09-14T12:08 | City Power Weekly Maintenance Schedule for 14 September – 20 September 2026 City Power wou
+OK    No equipment and no suburbs: 0   (nothing identifies it)
+OK    Planned outage past its window, still "Planned": 0   (the stored window ended over 6 hours ago (or, with no window, nothing for 10 days))
+OK    Very large unplanned outage (25+ suburbs): 0   (likely a merged umbrella of several faults)
+INFO  Large planned outage (25+ suburbs): 1   (one announced isolation with a wide footprint; not treated as a failed merge)
+        - Sebenza (Greenstone Hill, Blackrock) [PLANNED] last update 2026-10-01T06:47 | The Service Delivery Centre (SDC) currently has 1048 open calls. ^KM
+OK    Water post joined to an electricity outage, or the reverse: 0   (services must stay isolated)
+OK    Water equipment stored as an electricity type: 0   (reservoirs and towers must not use electricity types)
+OK    Pumping or levels recovering marked the incident restored: 0   (customer supply was not confirmed)
+OK    Very large water incident: 0   (several assets or operating conditions were kept as one incident)
+INFO  Large explicit water supply zone: 1   (one asset, one condition, suburbs named by the source)
+        - Olivedale Reservoir [STALE] last update 2026-09-17T10:19 | 
+
+WARN  Readings made with older instructions or another model: 1794 of 3046   (run: npm run reread)
+Posts needing review/errored: 0   Unprocessed posts: 0   Stuck in PROCESSING: 0
+
+AUDIT SUMMARY
+
+ELECTRICITY
+  hard failures:   0
+  warnings:        1794
+  informational:   51
+
+WATER
+  hard failures:   0
+  warnings:        0
+  informational:   255
+
+CROSS-SERVICE
+  hard failures:   0
+  warnings:        0
+  informational:   0
+
+PIPELINE
+  unprocessed:        0
+  stuck:              0
+  processing errors:  0
+  needs review:       0
+
+RESULT
+  PASS
+
+◇ injected env (6) from .env

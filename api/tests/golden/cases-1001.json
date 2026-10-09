@@ -1,0 +1,10 @@
+{
+  "_note": "Regression cases found during the 1 October 2026 checkpoint review. Labels come from the exact stored source text and image transcription after the engine's assignments were inspected, so these are regression evidence, not blind holdouts. Freedom Park South's faulty-jumper restoration must continue its earlier area-only report. UJ Soweto Campus repairs continue the double cable faults reported 28 September; the separate Pimville termination fault and Allandale cable repairs must stay apart. Full X ids avoid suffix collisions.",
+  "_kind": "regression",
+  "2105173024878034968": "freedom_park_jumpers",
+  "2105400598094922147": "freedom_park_jumpers",
+  "2104926270844793317": "uj_soweto_cable",
+  "2105578867507278264": "uj_soweto_cable",
+  "2105578284150923347": "pimville_termination",
+  "2105606227828871193": "allandale_cable"
+}

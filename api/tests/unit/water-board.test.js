@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boardState, deliberateClosure, isThrottlingSchedule, isUnsplitWaterBoard, parseStatusBoard, statusBoardFaults, statusListLike, waterFaultItems } from '../../src/modules/ai/readers/water.reader.js';
+import { boardState, deliberateClosure, isSummaryWorthyItem, isThrottlingSchedule, isUnsplitWaterBoard, parseStatusBoard, statusBoardFaults, statusListLike, waterFaultItems } from '../../src/modules/ai/readers/water.reader.js';
 
 // Real Johannesburg Water status boards, as transcribed by the reader (25 September 2026).
 const COMMANDO = 'SYSTEM UPDATES 25 September 2026 - 19:20 Commando System Reservoir/ Tower Status Crosby Reservoir Supplying fairly. Crosby Pump Station Supplying failry. Brixton 1 Reservoir Supplying fairly. Brixton 1 Tower Supplying fairly. Hursthill 1 Reservoir On bypass. Supplying fairly. Poor pressure to no water may occur in some areas. Hursthill 2 Reservoir On bypass. Supplying fairly. Poor pressure to no water may occur in some areas. Indicators Adequate supply Critically low Fair supply On bypass Throttling in your area Vikela Amanzi, Protect Our Tomorrow';
@@ -111,6 +111,32 @@ describe('the daily "Management of Systems" throttling schedule is always a noti
   it('a notice naming real affected suburbs is not the schedule', () => {
     expect(isThrottlingSchedule(schedule(['Melville', 'Emmarentia', 'Greenside']))).toBe(false);
     expect(isThrottlingSchedule({ image_text: 'Customer Notice: throttling at Hursthill 2 Reservoir affecting Melville', entities: [], localities: [] })).toBe(false);
+  });
+});
+
+describe('isSummaryWorthyItem: a daily multi-region rollup needs no summary at all (2 Oct 2026)', () => {
+  // "Overall Johannesburg Water Systems Update": prose per region, not a tabular board, so statusBoardFaults/
+  // parseStatusBoard find nothing to split on and the AI's own per-system faults[] decide the split instead.
+  // Every system here is framed as "supplying adequately/fairly" even where it names a struggling asset
+  // (Illovo "low and recovering", Grand Central "critically low") - those specific assets already have their
+  // own tracked incidents from their own dedicated posts; this rollup restates known conditions, nothing new.
+  const ROLLUP = 'Overall Johannesburg Water Systems Update. Randburg: supplying adequately. Sandton: supplying adequately, however the Illovo reservoir and tower are low and recovering.';
+  const faults = [
+    { water_state: 'STABLE', entities: [], localities: [], systems: ['Randburg'] },
+    { water_state: 'STABLE', entities: [{ type: 'RESERVOIR', name: 'Illovo reservoir' }, { type: 'WATER_TOWER', name: 'Illovo tower' }], localities: [], systems: ['Sandton'] },
+  ];
+  const rollup = (relevance) => ({ relevance, result: { relevance, water_state: 'STABLE', customer_supply: null, image_text: ROLLUP, entities: [], localities: [], faults } });
+
+  it('every split item inherits the rollup\'s own GENERAL_NOTICE relevance, entities notwithstanding', () => {
+    const items = waterFaultItems(rollup('GENERAL_NOTICE'));
+    expect(items).toHaveLength(2);
+    expect(items.every((i) => i.extraction.relevance === 'GENERAL_NOTICE')).toBe(true);
+    expect(items.some(isSummaryWorthyItem)).toBe(false);
+  });
+
+  it('the same rollup framed as an UPDATE is summary-worthy instead - the top-level relevance is what decides it, not entity presence alone', () => {
+    const items = waterFaultItems(rollup('UPDATE'));
+    expect(items.some(isSummaryWorthyItem)).toBe(true);
   });
 });
 

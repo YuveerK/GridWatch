@@ -10,6 +10,7 @@ const { prisma } = await import('../src/db/prisma.js');
 const { markRestoredPlaces } = await import('../src/lib/restored-places.js');
 const { scheduleWindow } = await import('../src/lib/schedule.js');
 const { oneEditApart } = await import('../src/lib/normalize.js');
+const { acceptedExtraction, readingFaultItems } = await import('../src/modules/processing/quality.js');
 const { faultItems, reprocessPost } = await import('../src/modules/processing/processor.service.js');
 
 const apply = process.argv.includes('--apply');
@@ -18,22 +19,23 @@ const windows = []; // planned outages whose announced window changes: { id, tit
 const add = (id, reason) => why.set(id, [...(why.get(id) ?? []), reason]);
 
 // 1. "restored to X" places
-const posts = await prisma.sourcePost.findMany({ where: { linkDecisions: { some: {} } }, select: { id: true, text: true, noteTweetText: true, publishedAt: true, extractions: { where: { status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' }, take: 1 } } });
+const posts = await prisma.sourcePost.findMany({ where: { linkDecisions: { some: {} } }, select: { id: true, serviceType: true,readingOverride: true, PostMedia: true,text: true, noteTweetText: true, publishedAt: true, extractions: { where: { status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' } } } });
 for (const p of posts) {
-  const ex = p.extractions[0];
-  if (!ex?.result) continue;
+  const ex = acceptedExtraction(p);
+  if (!ex?.result || ex.human) continue;
   const text = p.noteTweetText || p.text;
   const extraction = { ...ex, result: ex.result };
   if (markRestoredPlaces(extraction.result, text) !== extraction.result) add(p.id, 'a place is named in a "restored to" sentence');
 }
 
 // 2. planned windows that differ from what the current rule reads
-const planned = await prisma.outage.findMany({ where: { kind: 'PLANNED' }, select: { id: true, title: true, scheduledStart: true, scheduledEnd: true, posts: { orderBy: { postedAt: 'desc' }, take: 1, select: { postId: true, post: { select: { text: true, noteTweetText: true, publishedAt: true, extractions: { where: { status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' }, take: 1 } } } } } } });
+const planned = await prisma.outage.findMany({ where: { kind: 'PLANNED' }, select: { id: true, title: true, scheduledStart: true, scheduledEnd: true, posts: { orderBy: { postedAt: 'desc' }, take: 1, select: { postId: true,faultIndex: true, post: { select: { serviceType: true,readingOverride: true, PostMedia: true,text: true, noteTweetText: true, publishedAt: true, extractions: { where: { status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' } } } } } } } });
 for (const o of planned) {
   const last = o.posts[0];
-  const ex = last?.post.extractions[0];
+  const ex = last ? acceptedExtraction(last.post) : null;
   if (!last || !ex?.result) continue;
-  const item = faultItems({ ...ex, result: ex.result })[0];
+  const item = readingFaultItems(last.post,ex,faultItems).find((f) => f.faultIndex === last.faultIndex);
+  if (!item || ex.human) continue;
   const w = scheduleWindow(item.extraction, item.fromDigest ? '' : last.post.noteTweetText || last.post.text, last.post.publishedAt);
   if (w && (!o.scheduledStart || +new Date(w.start) !== +o.scheduledStart || +new Date(w.end) !== +o.scheduledEnd)) windows.push({ id: o.id, title: o.title, start: new Date(w.start), end: new Date(w.end) });
 }

@@ -1,11 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
+import { operatorExpired } from './refresh.js';
 
 const BASE = import.meta.env.VITE_API_URL ?? '';
 
 export async function get(path) {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetch(`${BASE}${path}`,path.startsWith('/admin/') ? { credentials: 'include' } : {});
+  if (res.status === 401 && path.startsWith('/admin/')) operatorExpired();
   if (!res.ok) throw new Error(res.status === 404 ? 'Not found' : `Request failed (${res.status})`);
   return res.json();
+}
+
+export async function operatorRequest(path,body,method = 'POST') {
+  const res = await fetch(`${BASE}${path}`,{ method,credentials: 'include',headers: { 'content-type': 'application/json' },body: body == null ? undefined : JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) operatorExpired();
+  if (!res.ok) throw Object.assign(new Error(data.message || (res.status === 401 ? 'Your operator session expired. Sign in again.' : `Request failed (${res.status}).`)),{ code: data.error,status: res.status });
+  return data;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { WATER_PROMPT_VERSION, buildWaterSystemPrompt, buildWaterUserText } from '../prompts/water.prompt.js';
 import { prepareWaterReading, waterExtractionJsonSchema, waterExtractionSchema } from '../schemas/water-extraction.schema.js';
 import { namedAfter } from '../../../lib/normalize.js';
+import { humanFaultItems } from '../../review/effective-reading.js';
 
 const RELEVANCE = {
   INTERRUPTION: 'OUTAGE',
@@ -307,7 +308,14 @@ function expandIndependentZoneAssets(fault) {
   return zones.map((zone) => ({ ...fault, entities: [zone], systems: [] }));
 }
 
+/** One item from waterFaultItems() actually needs its own summary - the single source of truth for that question,
+ * so extraction.service.js's ensureWaterSummaries and anything diagnosing "should this post have a written
+ * summary" (npm run batch) can never independently drift from each other. */
+export const isSummaryWorthyItem = (item) => !['GENERAL_NOTICE', 'IRRELEVANT'].includes(item.extraction.relevance);
+
 export function waterFaultItems(extraction) {
+  const human = humanFaultItems(extraction);
+  if (human) return human;
   if (isThrottlingSchedule(extraction.result)) return asNotice(extraction);
   const board = statusBoardFaults(extraction.result);
   if (board) {

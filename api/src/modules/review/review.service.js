@@ -20,7 +20,7 @@ export async function detectSuspicious({ prisma, postIds, now = new Date() }) {
   const posts = await prisma.sourcePost.findMany({
     where: { id: { in: postIds } },
     select: {
-      id: true, processingStatus: true, serviceType: true, text: true, noteTweetText: true,
+      id: true, processingStatus: true, serviceType: true, text: true, noteTweetText: true, readingOverride: true, PostMedia: true,
       extractions: { where: { status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' } },
       linkDecisions: { select: { faultIndex: true, outcome: true, outageId: true, reason: true } },
       retries: { select: { faultIndex: true, nextRetryAt: true, kind: true } },
@@ -48,7 +48,7 @@ export async function detectSuspicious({ prisma, postIds, now = new Date() }) {
     // an uncertain reading, or one the reader itself flagged
     const offService = unsupportedService({ serviceType: x.serviceType ?? 'ELECTRICITY', text: x.noteTweetText || x.text, result });
     const actionable = !['IRRELEVANT', 'GENERAL_NOTICE'].includes(result?.relevance);
-    if (!offService && (x.processingStatus === 'NEEDS_REVIEW' || (actionable && result && (result.confidence < 0.75 || result.review_reason)))) add(x.id, 0, 'UNCERTAIN_READING', result?.review_reason ? `the reader said: ${String(result.review_reason).slice(0, 100)}` : `confidence ${result?.confidence ?? 'n/a'}`);
+    if (!offService && (x.processingStatus === 'NEEDS_REVIEW' || (!e?.human && actionable && result && (result.confidence < 0.75 || result.review_reason)))) add(x.id, 0, 'UNCERTAIN_READING', result?.review_reason ? `the reader said: ${String(result.review_reason).slice(0, 100)}` : `confidence ${result?.confidence ?? 'n/a'}`);
     for (const r of x.retries) if (r.nextRetryAt.getUTCFullYear() >= 9000) add(x.id, r.faultIndex, 'TIEBREAK_GAVE_UP', 'automatic retries are used up');
 
     if (e?.result) {
@@ -147,8 +147,12 @@ export async function saveReviewItems({ prisma, suspicions }) {
     const oldCodes = new Set(existing.reasons.map((r) => r.code));
     const fresh = s.reasons.some((r) => !oldCodes.has(r.code));
     if (existing.status === 'OPEN') await prisma.reviewItem.update({ where: key, data: { reasons: s.reasons, priority: priority + (existing.verifier?.verdict === 'DISAGREE' ? 5 : 0) } });
-    else if (fresh) {
-      await prisma.reviewItem.update({ where: key, data: { status: 'OPEN', resolvedAt: null, resolution: null, reasons: s.reasons, priority } });
+    else if (fresh || existing.status === 'RESOLVED' && existing.resolution === 'condition no longer present' || (existing.evidenceFingerprint && await (async () => {
+      const { postInclude, postFingerprint } = await import('./cases.js');
+      const post = await prisma.sourcePost.findUnique({ where: { id: s.postId }, include: postInclude });
+      return post && postFingerprint(post) !== existing.evidenceFingerprint;
+    })())) {
+      await prisma.reviewItem.update({ where: key, data: { status: 'OPEN', resolvedAt: null, resolution: null, evidenceFingerprint: null, reasons: s.reasons, priority } });
       opened += 1;
     }
   }
@@ -214,93 +218,42 @@ export async function listReviewItems({ prisma, status = 'OPEN', limit = 200, se
 }
 
 /** Read everything a person needs to judge one review item. Does not write. */
-export async function loadReviewInspection({ prisma, id }) {
-  const item = await prisma.reviewItem.findUnique({
-    where: { id },
-    include: {
-      post: {
-        select: {
-          id: true, externalId: true, publishedAt: true, text: true, noteTweetText: true, serviceType: true, sourceAccount: true,
-          extractions: { where: { status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' }, take: 1 },
-          linkDecisions: true,
-          outagePosts: { include: { outage: { select: { id: true, title: true, status: true, kind: true, startedAt: true, lastUpdateAt: true, nodes: { select: { node: { select: { id: true, name: true, type: true, normalizedKey: true, evidenceCount: true, aliases: { select: { alias: true } }, parents: { select: { parent: { select: { name: true } } } } } } } }, localities: { select: { locality: { select: { canonicalName: true } } } } } } } },
-        },
-      },
-    },
-  });
+export async function loadReviewInspectionData({ prisma, id }) {
+  const item = await prisma.reviewItem.findUnique({ where: { id } });
   if (!item) return null;
-  const decision = item.post.linkDecisions.find((d) => d.faultIndex === item.faultIndex) ?? item.post.linkDecisions[0];
-  const reading = item.post.extractions[0]?.result ?? {};
-  const stored = Array.isArray(decision?.candidates) ? decision.candidates : [];
-  const ids = stored.map((c) => c.id).filter(Boolean);
-  const rows = ids.length
-    ? await prisma.outage.findMany({
-      where: { id: { in: ids } },
-      select: {
-        id: true, title: true, status: true, kind: true, startedAt: true, lastUpdateAt: true,
-        nodes: { select: { node: { select: { name: true, type: true } } } },
-        localities: { select: { locality: { select: { canonicalName: true } } } },
-        posts: { orderBy: { postedAt: 'asc' }, take: 1, select: { post: { select: { externalId: true } } } },
-      },
-    })
-    : [];
-  const byId = new Map(rows.map((o) => [o.id, o]));
-  const candidates = stored.map((c) => {
-    const o = byId.get(c.id);
-    const age = o ? `${Math.round((item.post.publishedAt - o.startedAt) / 3_600_000)}h after it opened` : '-';
-    return {
-      id: c.id,
-      score: c.score,
-      reasons: c.reasons,
-      title: o?.title,
-      status: o?.status,
-      kind: o?.kind,
-      equipment: (o?.nodes ?? []).map((n) => n.node.name),
-      localities: (o?.localities ?? []).map((l) => l.locality.canonicalName).slice(0, 12),
-      age,
-      openedBy: o?.posts[0]?.post.externalId,
-    };
-  });
-  const own = item.post.outagePosts.find((p) => p.faultIndex === item.faultIndex);
-  const names = (reading.entities ?? []).map((e) => e.name);
-  const identity = [];
-  for (const n of own?.outage.nodes ?? []) {
-    identity.push({
-      name: n.node.name,
-      type: n.node.type,
-      aliases: n.node.aliases.map((a) => a.alias),
-      parents: n.node.parents.map((e) => e.parent.name),
-    });
-  }
-  const detail = {
-    id: item.id,
-    priority: item.priority,
-    reasons: item.reasons,
-    serviceType: item.post.serviceType,
-    sourceAccount: item.post.sourceAccount,
-    postId: item.post.id,
-    externalId: item.post.externalId,
-    publishedAt: item.post.publishedAt.toISOString(),
-    text: item.post.noteTweetText || item.post.text,
-    imageText: item.post.extractions[0]?.imageText || reading.image_text || null,
-    reading,
-    faultIndex: item.faultIndex,
-    kind: own?.outage.kind ?? null,
-    equipment: names,
-    localities: (reading.localities ?? []).map((l) => l.name),
-    window: reading.eta_text ?? null,
-    decision: decision ? { outcome: decision.outcome, reason: decision.reason, topScore: decision.topScore } : null,
-    candidates,
-    preceding: (item.reasons ?? []).map((r) => r.detail).filter(Boolean),
-    timeline: own ? `${own.role} on ${own.outage.title} [${own.outage.status}]` : '-',
-    restorationEvidence: reading.update_summary || reading.status || null,
-    identity,
-    identityEvidence: (item.reasons ?? []).find((r) => r.code === 'EQUIPMENT_IDENTITY')?.detail ?? null,
-  };
-  return formatReviewInspection(detail);
+  const { inspectPost, incidentCard } = await import('./inspection.js');
+  const d = await inspectPost(item.postId, item.faultIndex, prisma);
+  const reading = d.item?.extraction.result ?? {};
+  const own = d.post.outagePosts.find((p) => p.faultIndex === item.faultIndex);
+  const outage = d.outages.find((o) => o.id === own?.outageId);
+  return { id, priority: item.priority, reasons: item.reasons, serviceType: d.post.serviceType, sourceAccount: d.post.sourceAccount,
+    postId: d.post.id, externalId: d.post.externalId, publishedAt: d.post.publishedAt.toISOString(), text: d.post.noteTweetText || d.post.text,
+    imageText: d.extraction?.imageText ?? d.extraction?.result?.image_text ?? null, media: d.post.PostMedia, reading, missingSelectedFault: !d.item, faultIndex: item.faultIndex,
+    kind: outage?.kind, equipment: (reading.entities ?? []).map((e) => e.name), localities: (reading.localities ?? []).map((l) => l.name), window: reading.eta_text,
+    decision: d.decision, retries: d.post.retries, overrides: d.overrides, effects: d.post.outagePosts, verifier: item.verifier,
+    candidates: (d.decision?.candidates ?? []).map((c) => {
+      const o = d.outages.find((o) => o.id === c.id);
+      return { ...c, title: o?.title, status: o?.status, kind: o?.kind, equipment: o?.nodes.map((n) => n.node.name) ?? [], localities: o?.localities.map((l) => l.locality.canonicalName) ?? [],
+        age: o ? `${Math.round((d.post.publishedAt-o.startedAt)/3600000)}h after it opened` : 'missing', openedBy: o?.posts[0]?.post.externalId };
+    }), preceding: item.reasons.map((r) => r.detail).filter(Boolean), timeline: own ? `${own.role} on ${outage?.title ?? own.outageId} [${outage?.status ?? 'missing'}]` : '-',
+    restorationEvidence: reading.update_summary || reading.status, identity: [], identityEvidence: item.reasons.find((r) => r.code === 'EQUIPMENT_IDENTITY')?.detail,
+    incidents: d.outages.map(incidentCard) };
+}
+
+export async function loadReviewInspection(args) {
+  const detail = await loadReviewInspectionData(args);
+  return detail ? formatReviewInspection(detail) : null;
 }
 
 export async function resolveReviewItem({ prisma, id, status = 'RESOLVED', resolution = null, now = new Date() }) {
   if (!['RESOLVED', 'DISMISSED'].includes(status)) throw new Error('status must be RESOLVED or DISMISSED');
-  return prisma.reviewItem.update({ where: { id }, data: { status, resolution, resolvedAt: now } });
+  const item = await prisma.reviewItem.findUnique({ where: { id } });
+  if (!item) return prisma.reviewItem.findUniqueOrThrow({ where: { id } });
+  const { postInclude, casesForPost, postFingerprint } = await import('./cases.js');
+  const post = await prisma.sourcePost.findUnique({ where: { id: item.postId }, include: postInclude });
+  if (post && casesForPost(post, null, now).some((c) => c.blocked && (c.faultIndex == null || c.faultIndex === item.faultIndex))) {
+    const { ReviewError } = await import('./contracts.js');
+    throw new ReviewError('still_blocked', 'A blocked fault cannot be hidden by resolving its review flag. Correct its reading or association first.');
+  }
+  return prisma.reviewItem.update({ where: { id }, data: { status, resolution, resolvedAt: now, evidenceFingerprint: post ? postFingerprint(post) : null } });
 }

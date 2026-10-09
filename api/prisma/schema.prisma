@@ -69,20 +69,24 @@ model SourcePost {
   processingStartedAt DateTime?
   noteTweetText       String?
 
-  IngestionRunPost IngestionRunPost[]
-  PostMedia        PostMedia[]
-  extractions      PostExtraction[]
-  outagePosts      OutagePost[]
-  linkDecisions    LinkDecision[]
-  notifications    NotificationEvent[]
-  overrides        LinkOverride[]         @relation("OverridePost")
-  contrastedBy     LinkOverride[]         @relation("OverrideContrast")
-  retries          RetryAttempt[]
-  reviewItems      ReviewItem[]
-  readingRevisions ReadingRevision[]
-  anchoredBy       LinkOverride[]         @relation("OverrideAnchor")
-  summaries        PostSummary[]
-  evidence         EvidenceContribution[]
+  IngestionRunPost     IngestionRunPost[]
+  PostMedia            PostMedia[]
+  extractions          PostExtraction[]
+  outagePosts          OutagePost[]
+  linkDecisions        LinkDecision[]
+  notifications        NotificationEvent[]
+  overrides            LinkOverride[]            @relation("OverridePost")
+  contrastedBy         LinkOverride[]            @relation("OverrideContrast")
+  retries              RetryAttempt[]
+  reviewItems          ReviewItem[]
+  readingRevisions     ReadingRevision[]
+  anchoredBy           LinkOverride[]            @relation("OverrideAnchor")
+  summaries            PostSummary[]
+  evidence             EvidenceContribution[]
+  repairProposals      RepairProposal[]
+  autoRepairDirectives AutoRepairDirective[]
+  lessonSupports       CorrectionLessonSupport[]
+  readingOverride      ReadingOverride?
 
   @@unique([platform, externalId])
   @@index([processingStatus, publishedAt])
@@ -422,12 +426,12 @@ model NodeLocality {
 }
 
 model KnowledgeSource {
-  id          String              @id @default(cuid())
+  id          String                   @id @default(cuid())
   sourceType  KnowledgeSourceType
   title       String?
   url         String
   publishedAt DateTime?
-  fetchedAt   DateTime            @default(now())
+  fetchedAt   DateTime                 @default(now())
   metadata    Json?
   evidence    InfrastructureEvidence[]
 
@@ -480,10 +484,10 @@ enum LinkOutcome {
 }
 
 model Outage {
-  id                 String       @id @default(cuid())
-  kind               OutageKind   @default(UNPLANNED)
-  status             OutageStatus @default(ACTIVE)
-  serviceType        ServiceType  @default(ELECTRICITY)
+  id                 String                 @id @default(cuid())
+  kind               OutageKind             @default(UNPLANNED)
+  status             OutageStatus           @default(ACTIVE)
+  serviceType        ServiceType            @default(ELECTRICITY)
   waterState         WaterOperationalState?
   title              String
   sdcName            String?
@@ -494,16 +498,16 @@ model Outage {
   /// Set from the opening post's account at creation. Nullable (legacy rows, or a caller with no account context) - a null
   /// value is never treated as a mismatch, only as "not scoped yet"; see loadCandidates in linker.service.js.
   municipalityId     String?
-  retroactive        Boolean      @default(false)
-  digest             Boolean      @default(false)
+  retroactive        Boolean                @default(false)
+  digest             Boolean                @default(false)
   startedAt          DateTime
   lastUpdateAt       DateTime
   restoredAt         DateTime?
   // announced window for planned work (UTC instants), when the posts gave one
   scheduledStart     DateTime?
   scheduledEnd       DateTime?
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
 
   primaryNode  InfraNode?       @relation(fields: [primaryNodeId], references: [id])
   Municipality Municipality?    @relation(fields: [municipalityId], references: [id])
@@ -528,12 +532,12 @@ model OutageNode {
 }
 
 model OutageLocality {
-  outageId   String
-  localityId String
-  restored   Boolean     @default(false)
+  outageId    String
+  localityId  String
+  restored    Boolean     @default(false)
   impactBasis ImpactBasis @default(EXPLICIT_SOURCE)
-  outage     Outage      @relation(fields: [outageId], references: [id], onDelete: Cascade)
-  locality   Locality    @relation(fields: [localityId], references: [id], onDelete: Cascade)
+  outage      Outage      @relation(fields: [outageId], references: [id], onDelete: Cascade)
+  locality    Locality    @relation(fields: [localityId], references: [id], onDelete: Cascade)
 
   @@id([outageId, localityId])
   @@index([localityId])
@@ -552,7 +556,7 @@ model OutagePost {
   outage     Outage         @relation(fields: [outageId], references: [id], onDelete: Cascade)
   post       SourcePost     @relation(fields: [postId], references: [id], onDelete: Cascade)
 
-  @@id([outageId, postId])
+  @@id([outageId, postId, faultIndex])
   @@index([outageId, postedAt])
   @@index([postId])
 }
@@ -729,10 +733,72 @@ model ReviewItem {
   resolution String?
   createdAt  DateTime   @default(now())
   resolvedAt DateTime?
+  evidenceFingerprint String?
   post       SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@unique([postId, faultIndex])
   @@index([status, priority])
+}
+
+/// Workflow index only. Live diagnostic records remain the source of truth.
+model ReviewCase {
+  id          String   @id
+  subjectKey  String   @unique
+  postId      String?
+  faultIndex  Int?
+  source      String?
+  stage       String?
+  workflow    String   @default("OPEN")
+  fingerprint String
+  note        String?
+  summary     Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  actions     ReviewAction[]
+
+  @@index([workflow, updatedAt])
+  @@index([postId])
+}
+
+/// One explicit human interpretation; machine extractions are never overwritten.
+model ReadingOverride {
+  postId          String   @id
+  schemaVersion   Int      @default(1)
+  serviceType     ServiceType
+  sourceHash      String
+  baseReadingHash String?
+  payload         Json
+  evidence        Json
+  note            String
+  revision        Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  post            SourcePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+}
+
+/// Durable request journal and database snapshot. No browser repair relies on local files.
+model ReviewAction {
+  id            String   @id @default(cuid())
+  caseId        String
+  requestId     String   @unique
+  type          String
+  state         String
+  operator      String
+  note          String
+  evidence      Json
+  input         Json
+  fingerprint   String
+  before        Json?
+  after         Json?
+  snapshot      Json?
+  validation    Json?
+  result        Json?
+  createdAt     DateTime @default(now())
+  finishedAt    DateTime?
+  case          ReviewCase @relation(fields: [caseId], references: [id])
+
+  @@index([caseId, createdAt])
+  @@index([state])
 }
 
 /// A reading that a later, accepted re-read replaced. Kept so a repair can be undone.
@@ -754,6 +820,230 @@ model VerifierCall {
   id         String   @id @default(cuid())
   day        String
   itemId     String
+  postId     String
+  reservedAt DateTime @default(now())
+  outcome    String?
+  error      String?
+
+  @@index([day])
+}
+
+// ───────────── Self-correction engine ─────────────
+// docs/CLAUDE_SELF_CORRECTING_ENGINE_IMPLEMENTATION.md. Detect a questionable engine decision, propose a specific,
+// typed repair, verify it, and (only for allowlisted, gated policies) apply it reversibly under the pipeline lease.
+// A RepairProposal never mutates anything by existing; only a RepairAttempt, made under the lease with a snapshot
+// first, does. CorrectionLesson is reviewed, reusable knowledge - structured data, never executable instructions.
+
+enum RepairAction {
+  REPROCESS_STORED
+  JOIN_FAULT
+  SPLIT_FAULT
+  PROPOSE_READING_REVISION
+  PROPOSE_LESSON
+}
+
+enum RepairProposalStatus {
+  PROPOSED
+  SHADOW_EVALUATED
+  VERIFYING
+  ELIGIBLE
+  NEEDS_REVIEW
+  REJECTED
+  DEFERRED
+  APPLYING
+  APPLIED
+  ROLLED_BACK
+  RECOVERY_REQUIRED
+  SUPERSEDED
+  EXPIRED
+}
+
+enum RepairAttemptOutcome {
+  APPLIED
+  FAILED
+  ROLLED_BACK
+  RECOVERY_REQUIRED
+}
+
+enum LessonKind {
+  INCIDENT_CONTINUATION
+  INCIDENT_SEPARATION
+  EQUIPMENT_ALIAS
+  LOCALITY_CONTEXT
+  PLANNED_RESCHEDULE
+  READING_PATTERN
+}
+
+enum LessonStatus {
+  CANDIDATE
+  REVIEWED
+  ACTIVE
+  SUSPENDED
+  RETIRED
+}
+
+/// One detected-and-proposed repair for one (post, fault). Never mutates anything by existing - only an ELIGIBLE
+/// proposal's RepairAttempt, made under the pipeline lease, does. `idempotencyKey` is a hash of subject + evidence
+/// fingerprint + policy version + action/target, so the same underlying problem can never queue two live proposals.
+model RepairProposal {
+  id                        String               @id @default(cuid())
+  postId                    String
+  faultIndex                Int                  @default(0)
+  reviewItemId              String?
+  serviceType               ServiceType
+  municipalityId            String?
+  sourceAccount             String
+  action                    RepairAction
+  generatorName             String
+  generatorVersion          String
+  policyName                String
+  policyVersion             String
+  triggerFamily             String
+  // fingerprints: does the evidence this proposal was built on still hold?
+  sourceContentHash         String
+  sourceLayoutHash          String
+  lessonSetFingerprint      String
+  candidateStateFingerprint String
+  // target, expressed by stable anchor post/fault (outage ids are not stable across a rebuild)
+  targetAnchorPostId        String?
+  targetAnchorFaultIndex    Int?
+  observedOutageIds         Json?
+  evidence                  Json
+  expectedEffect            Json
+  affectedManifest          Json
+  beforePreview             Json
+  afterPreview              Json?
+  verification              Json?
+  eligibility               Json
+  status                    RepairProposalStatus @default(PROPOSED)
+  createdAt                 DateTime             @default(now())
+  expiresAt                 DateTime
+  attemptCount              Int                  @default(0)
+  terminalReason            String?
+  idempotencyKey            String               @unique
+
+  post      SourcePost           @relation(fields: [postId], references: [id], onDelete: Cascade)
+  attempts  RepairAttempt[]
+  directive AutoRepairDirective?
+
+  @@index([status, createdAt])
+  @@index([postId, faultIndex])
+}
+
+/// Append-only account of each application attempt of one proposal. An applied proposal must never exist without
+/// a recoverable attempt record - `snapshotRef` names the repair-files.js snapshot taken before the mutation.
+model RepairAttempt {
+  id                    String               @id @default(cuid())
+  proposalId            String
+  attemptNumber         Int
+  workerOwner           String
+  startedAt             DateTime             @default(now())
+  endedAt               DateTime?
+  inputFingerprint      String
+  affectedManifest      Json
+  snapshotRef           String?
+  snapshotFormatVersion Int                  @default(1)
+  snapshotIntegrityHash String?
+  beforeSignature       String?
+  afterSignature        String?
+  operation             String
+  validation            Json?
+  outcome               RepairAttemptOutcome
+  providerReservations  Json?
+  errorClass            String?
+  recoveryOutcome       String?
+  followUpReviewIds     Json?
+
+  proposal RepairProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+
+  @@index([proposalId, attemptNumber])
+}
+
+/// Reviewed, reusable knowledge, kept apart from exact-case memory (RepairProposal/AutoRepairDirective). Status only
+/// moves CANDIDATE -> REVIEWED -> ACTIVE by an explicit operator action (never automatically); a case this engine
+/// itself repaired can supply a CANDIDATE but can never promote it. `claim`/`applicabilityPredicate` are typed JSON,
+/// never a prompt blob or executable instructions.
+model CorrectionLesson {
+  id                      String       @id @default(cuid())
+  kind                    LessonKind
+  status                  LessonStatus @default(CANDIDATE)
+  serviceType             ServiceType
+  municipalityId          String?
+  sourceAccountScope      String?
+  assetTypeScope          Json?
+  temporalScope           Json?
+  claim                   Json
+  applicabilityPredicate  Json
+  exclusions              Json?
+  counterexamples         Json?
+  establishedBy           String
+  independentSupportCount Int          @default(1)
+  effectiveAt             DateTime     @default(now())
+  reviewedAt              DateTime?
+  expiresAt               DateTime?
+  version                 Int          @default(1)
+  supersedesId            String?      @unique
+  validationEvidence      Json?
+  revocationReason        String?
+  createdAt               DateTime     @default(now())
+
+  supports     CorrectionLessonSupport[]
+  supersedes   CorrectionLesson?         @relation("LessonSupersession", fields: [supersedesId], references: [id])
+  supersededBy CorrectionLesson?         @relation("LessonSupersession")
+
+  @@index([status, serviceType, municipalityId])
+}
+
+/// Foreign-keyed, so retiring/deleting a source post is never silently orphaned truth: it must invalidate whatever
+/// lesson depended on it. `role` is SUPPORT or CONTRADICT (a stored counterexample, e.g. LinkOverride.contrastPostId).
+model CorrectionLessonSupport {
+  lessonId   String
+  postId     String
+  faultIndex Int      @default(0)
+  role       String
+  createdAt  DateTime @default(now())
+
+  lesson CorrectionLesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  post   SourcePost       @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([lessonId, postId, faultIndex, role])
+}
+
+/// An automatic repair's assignment that must survive relink/reprocess, WITHOUT being mistaken for a person's
+/// decision (LinkOverride). Same key shape as LinkOverride ([postId, faultIndex]) so the precedence check in
+/// linker.service.js is a symmetric lookup; LinkOverride is always checked first and always wins.
+model AutoRepairDirective {
+  postId                 String
+  faultIndex             Int       @default(0)
+  proposalId             String    @unique
+  attemptId              String
+  /// JOIN or SPLIT - same two actions LinkOverride supports. targetAnchorPostId is required for JOIN, null for SPLIT.
+  action                 String
+  targetAnchorPostId     String?
+  targetAnchorFaultIndex Int?
+  policyName             String
+  policyVersion          String
+  evidenceFingerprint    String
+  status                 String    @default("ACTIVE")
+  validSince             DateTime  @default(now())
+  revalidateAt           DateTime?
+  invalidationReason     String?
+  createdAt              DateTime  @default(now())
+
+  post     SourcePost     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  proposal RepairProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+
+  @@id([postId, faultIndex])
+}
+
+/// Reservation ledger for self-correction's own AI purposes (verify / reread), same pattern as VerifierCall: reserved
+/// under one advisory lock before the provider is contacted, counted whether the call succeeds, fails or is interrupted.
+model SelfCorrectionCall {
+  id         String   @id @default(cuid())
+  day        String
+  purpose    String
+  proposalId String?
+  attemptId  String?
   postId     String
   reservedAt DateTime @default(now())
   outcome    String?

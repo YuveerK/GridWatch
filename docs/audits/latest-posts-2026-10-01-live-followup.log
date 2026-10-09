@@ -1,0 +1,36 @@
+RECHECK  2026-10-01T14:19:17.984Z -> 2026-10-01T15:21:09.709Z (read-only; checkpoint unchanged)
+
+BATCH: 0 posts
+  read as   : {}
+  outcome   : {}
+  outages   : 0 new, 0 updated | LLM tie-breaks: 0
+  cost      : X $0.000 + Gemini $0.0000 (n/a) = $0.000  ($0/post)
+
+AUTOMATIC CHECKS
+  ok    every post extracted successfully
+  ok    every post processed (none stuck)
+  ok    no customer replies fetched (they cost money and are unused)
+  ok    every post has a link decision
+  ok    every expected fault has exactly one accepted disposition
+  ok    no linkable fault silently produced no outage
+  ok    every timeline entry was built from the current reading
+  ok    faults of one graphic never share an outage
+  ok    no outage marked RESTORED while a percentage below 100 is stated
+  ok    outage-type posts are linked to an outage
+  ok    summaries written and sensible
+  ok    no weak outage titles
+  ok    nothing waiting for human review
+  ok    touched outages: none live with every suburb restored
+  ok    touched outages: none restored with an unrestored suburb
+
+POST BY POST
+
+(0 posts raised no concern; use --all to list them)
+
+RESULT: PIPELINE OK | 0 post(s) flagged for a closer look
+BY SOURCE
+  ELECTRICITY CityPowerJhb   no new posts
+  ELECTRICITY CityTshwane    no new posts
+  WATER       JHBWater       no new posts
+
+◇ injected env (6) from .env

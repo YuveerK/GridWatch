@@ -20,6 +20,7 @@ function TimelineItem({ t, last, utility, service, operator }) {
         {last && <span className="badge tone-plan" style={{ padding: '1px 8px', fontSize: 11 }}>Latest</span>}
       </div>
       <p className="sum">{t.summary || firstSentence(text)}</p>
+      {t.sections?.length > 1 && <ul className="small muted">{t.sections.map((s) => <li key={s.faultIndex}>{roleLabel(s.role,service)}: {s.summary || "Source section contributes to this incident"}</li>)}</ul>}
       <details className="orig">
         <summary>
           <Icon name="eye" /> {utility}'s original post{t.images.length > 0 ? ` · ${plural(t.images.length, 'image')}` : ''}

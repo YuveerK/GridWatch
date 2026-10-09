@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../../db/prisma.js';
 import { assertLeaseInTx } from '../coordination/lease.js';
-import { differsByLabel, infraKey, isBareVoltage, isGenericWaterAsset, isNotSuburbName, labelledEquipmentName, likelyTypo, localityKey, namedAfter, sameStationBySuffix, sameStationWithAreaWord, similarity, tailPlace, oneEditApart, waterAssetAliasKey } from '../../lib/normalize.js';
+import { differsByLabel, infraKey, isBareVoltage, isGenericElectricalAsset, isGenericWaterAsset, isNotSuburbName, labelledEquipmentName, likelyTypo, localityKey, namedAfter, sameStationBySuffix, sameStationWithAreaWord, similarity, tailPlace, oneEditApart, waterAssetAliasKey } from '../../lib/normalize.js';
 import { decodeEdgeEvidenceRef, edgeEvidenceRef } from '../../lib/evidence-edge.js';
+import { identityId } from '../review/contracts.js';
 
 const FUZZY_NODE = 0.9;
 const FUZZY_LOCALITY = 0.92;
@@ -17,11 +18,11 @@ let localityIndex = null;
 
 // Every authoritative write to the graph runs in a transaction that first proves the caller still holds the pipeline lease (a worker that
 // lost it, and has not noticed yet, must not write). `ctx` is that lease; without one (scripts, tests) nothing is checked.
-const fenced = (ctx, fn) =>
+const fenced = (ctx, fn, db = prisma) => db === prisma ?
   prisma.$transaction(async (tx) => {
     await assertLeaseInTx(tx, ctx);
     return fn(tx);
-  });
+  }) : fn(db);
 
 // ── idempotent evidence ──────────────────────────────────────────────────────────────────────
 // Each fact a post teaches the graph (this equipment exists, this feeds that, this serves that suburb) is recorded once per
@@ -39,11 +40,11 @@ async function shouldCount(db, source, kind, refA, refB = '', mode = 'count') {
 /** Take back everything one source taught the graph (before it is learned again, or when it is removed).
  * `kinds` (e.g. ['NODE_LOCALITY']) limits it to those facts and `match(record)` to particular records; the rest of what the
  * source taught is left alone. */
-export async function removeContributions(postId, faultIndex = null, { ctx, kinds = null, match = null } = {}) {
+export async function removeContributions(postId, faultIndex = null, { ctx, kinds = null, match = null, db = prisma } = {}) {
   const where = { postId, ...(faultIndex == null ? {} : { faultIndex }), ...(kinds ? { kind: { in: kinds } } : {}) };
-  const rows = (await prisma.evidenceContribution.findMany({ where })).filter((r) => !match || match(r));
+  const rows = (await db.evidenceContribution.findMany({ where })).filter((r) => !match || match(r));
   if (!rows.length) return { removed: 0 };
-  await prisma.$transaction(async (tx) => {
+  await fenced(ctx, async (tx) => {
     await assertLeaseInTx(tx, ctx);
     for (const r of rows) {
       if (r.kind === 'NODE') {
@@ -75,18 +76,18 @@ export async function removeContributions(postId, faultIndex = null, { ctx, kind
     }
     if (match) for (const r of rows) await tx.evidenceContribution.delete({ where: { postId_faultIndex_kind_refA_refB: { postId: r.postId, faultIndex: r.faultIndex, kind: r.kind, refA: r.refA, refB: r.refB } } });
     else await tx.evidenceContribution.deleteMany({ where });
-  });
+  }, db);
   return { removed: rows.length };
 }
 
 const baseName = (key) => key.replace(/\s+ext(\s+\d+)*(\s+and\s+\d+)*$/, '').trim();
 
 /** name → [Locality] built from canonical names + aliases (loaded once; geography is static). */
-async function getLocalityIndex() {
-  if (localityIndex) return localityIndex;
+async function getLocalityIndex(db = prisma) {
+  if (localityIndex && db === prisma) return localityIndex;
   const [locs, aliases] = await Promise.all([
-    prisma.locality.findMany({ where: { active: true }, include: { Region: true }, orderBy: [{ canonicalName: 'asc' }, { regionId: 'asc' }, { sourceLine: 'asc' }] }),
-    prisma.localityAlias.findMany({ where: { status: { not: 'REJECTED' } }, orderBy: [{ normalizedAlias: 'asc' }, { alias: 'asc' }] }),
+    db.locality.findMany({ where: { active: true }, include: { Region: true }, orderBy: [{ canonicalName: 'asc' }, { regionId: 'asc' }, { sourceLine: 'asc' }] }),
+    db.localityAlias.findMany({ where: { status: { not: 'REJECTED' } }, orderBy: [{ normalizedAlias: 'asc' }, { alias: 'asc' }] }),
   ]);
   const byId = new Map(locs.map((l) => [l.id, l]));
   const map = new Map();
@@ -106,8 +107,9 @@ async function getLocalityIndex() {
     if (base && !map.has(base)) add(base, l);
   }
   for (const a of aliases) if (byId.has(a.localityId)) add(a.normalizedAlias, byId.get(a.localityId));
-  localityIndex = { map, keys: [...map.keys()] };
-  return localityIndex;
+  const index = { map, keys: [...map.keys()] };
+  if (db === prisma) localityIndex = index;
+  return index;
 }
 
 export function resetLocalityIndex() {
@@ -118,8 +120,8 @@ export function resetLocalityIndex() {
  * When `municipalityId` is known, a candidate is only ever returned if it belongs to that municipality or has never been
  * attributed to any municipality - a candidate known to belong to a DIFFERENT municipality is never returned, not even as a
  * last resort (a same-named suburb in two tracked utilities is not the same place without explicit evidence). */
-export async function resolveLocality(name, preferIds = new Set(), municipalityId = null) {
-  const { map, keys } = await getLocalityIndex();
+export async function resolveLocality(name, preferIds = new Set(), municipalityId = null, db = prisma) {
+  const { map, keys } = await getLocalityIndex(db);
   const key = localityKey(name);
   const inScope = (list) => {
     if (!list?.length || municipalityId == null) return list ?? null;
@@ -174,17 +176,18 @@ export async function qualifyExtensionLocalities(result, text, municipalityId = 
 
 /** Suburbs missing from the supplied list are learned as candidates (streets/facilities are ignored). A learned locality is
  * tagged with the resolving municipality when known, so a later post from a different municipality never reuses it. */
-async function learnLocality(name, ctx, municipalityId = null) {
+async function learnLocality(name, ctx, municipalityId = null, mode = 'count', db = prisma) {
   const clean = name.trim();
   const key = localityKey(clean);
   if (key.length < 3 || isNotSuburbName(clean)) return null;
   const scope = municipalityId != null ? { OR: [{ municipalityId }, { municipalityId: null }] } : {};
-  let loc = await prisma.locality.findFirst({ where: { normalizedName: key, regionId: null, ...scope } });
+  let loc = await db.locality.findFirst({ where: { normalizedName: key, regionId: null, ...scope } });
+  if (!loc && mode === 'preview') return { id: identityId(['locality', municipalityId, key]), canonicalName: clean, normalizedName: key, municipalityId, proposed: true };
   if (!loc) {
     loc = await fenced(ctx, (tx) =>
       tx.locality.create({
-        data: { id: randomUUID(), canonicalName: clean, normalizedName: key, municipalityId, sourceLabel: 'learned-from-posts', updatedAt: new Date() },
-      }),
+        data: { id: mode === 'review' ? identityId(['locality', municipalityId, key]) : randomUUID(), canonicalName: clean, normalizedName: key, municipalityId, sourceLabel: 'learned-from-posts', updatedAt: new Date() },
+      }), db,
     );
   }
   resetLocalityIndex();
@@ -194,10 +197,11 @@ async function learnLocality(name, ctx, municipalityId = null) {
 /** Find or create a node; bumps evidence and promotes to CONFIRMED. */
 const JUNK_NAME = /^(affected|unspecified|unspecific|unnamed|tbc|unknown|customers?|areas?|surrounding( areas)?|n\/a|none|the|a|an|feeder|line|cable|mini[- ]?substation|substation|distributor|pole[- ]?mounted)$/i;
 
-export async function resolveNode({ type, name, at, source = null, mode = 'count', ctx, municipalityId = null, serviceType = 'ELECTRICITY' }) {
+export async function resolveNode({ type, name, at, source = null, mode = 'count', ctx, municipalityId = null, serviceType = 'ELECTRICITY', db = prisma }) {
   if (!name || JUNK_NAME.test(name.trim())) return null;
   // "burst water pipe" describes an asset without naming one: as a node it tied every burst in the city together
   if (serviceType === 'WATER' && isGenericWaterAsset(name)) return null;
+  if (serviceType === 'ELECTRICITY' && type !== 'SDC' && isGenericElectricalAsset(name)) return null;
   // "275kV" or "132 kV" is a voltage class: as a node it tied every 275kV cable (and its 40 suburbs) together
   if (serviceType !== 'WATER' && isBareVoltage(name)) return null;
   // "Inner City", "InnerCity" and "InnerCitySDC" are one service delivery centre
@@ -209,14 +213,14 @@ export async function resolveNode({ type, name, at, source = null, mode = 'count
   // the caller doesn't know the municipality (tests, or a code path with no account context), lookups stay global/unscoped,
   // exactly as before this existed.
   const scope = { serviceType, ...(municipalityId != null ? { municipalityId } : {}) };
-  let node = await prisma.infraNode.findFirst({ where: { type, normalizedKey: key, ...scope } });
+  let node = await db.infraNode.findFirst({ where: { type, normalizedKey: key, ...scope } });
   // "Grand Central Res" already stored, and a later board line says "Grand Central Reservoir".
   const alias = !node && serviceType === 'WATER' && (type === 'RESERVOIR' || type === 'WATER_TOWER') ? waterAssetAliasKey(key) : null;
-  if (alias) node = await prisma.infraNode.findFirst({ where: { type, normalizedKey: alias, ...scope } });
+  if (alias) node = await db.infraNode.findFirst({ where: { type, normalizedKey: alias, ...scope } });
   // "Lenasia Ext 4" is the already-known "Lenasia South Ext 4" when the longer name only adds a compass word and has
   // been seen more often. A station that is itself the better-known name is left alone.
   if (node && STATION_TYPES.includes(node.type)) {
-    const stronger = await prisma.infraNode.findMany({
+    const stronger = await db.infraNode.findMany({
       where: { type: { in: STATION_TYPES }, ...scope, id: { not: node.id }, evidenceCount: { gt: node.evidenceCount } },
       orderBy: [{ evidenceCount: 'desc' }, { normalizedKey: 'asc' }],
     });
@@ -225,22 +229,22 @@ export async function resolveNode({ type, name, at, source = null, mode = 'count
   }
   // "X Substation" and "X Switching Station" are written interchangeably for the same site.
   if (!node && STATION_TYPES.includes(type)) {
-    node = await prisma.infraNode.findFirst({ where: { normalizedKey: key, type: { in: STATION_TYPES }, ...scope }, orderBy: { evidenceCount: 'desc' } });
+    node = await db.infraNode.findFirst({ where: { normalizedKey: key, type: { in: STATION_TYPES }, ...scope }, orderBy: { evidenceCount: 'desc' } });
   }
   if (!node && serviceType !== 'WATER' && MINOR_TYPES.includes(type)) {
-    node = await prisma.infraNode.findFirst({ where: { normalizedKey: key, type: { in: MINOR_TYPES }, ...scope }, orderBy: [{ evidenceCount: 'desc' }, { firstSeenAt: 'asc' }] });
+    node = await db.infraNode.findFirst({ where: { normalizedKey: key, type: { in: MINOR_TYPES }, ...scope }, orderBy: [{ evidenceCount: 'desc' }, { firstSeenAt: 'asc' }] });
   }
   // "Roosevelt Park" and "Roosevelt" (one plain-word suffix) are the same substation.
   if (!node && STATION_TYPES.includes(type) && key.length >= 4) {
-    const stations = await prisma.infraNode.findMany({ where: { type: { in: STATION_TYPES }, ...scope }, orderBy: [{ evidenceCount: 'desc' }, { normalizedKey: 'asc' }] });
+    const stations = await db.infraNode.findMany({ where: { type: { in: STATION_TYPES }, ...scope }, orderBy: [{ evidenceCount: 'desc' }, { normalizedKey: 'asc' }] });
     node = stations.find((n) => sameStationBySuffix(n.normalizedKey, key) || sameStationWithAreaWord(n.normalizedKey, key)) ?? null;
   }
   if (!node) {
-    const alias = await prisma.nodeAlias.findFirst({ where: { normalizedKey: key, node: { type, ...scope } }, include: { node: true } });
+    const alias = await db.nodeAlias.findFirst({ where: { normalizedKey: key, node: { type, ...scope } }, include: { node: true } });
     node = alias?.node ?? null;
   }
   if (!node && key.length >= 5) {
-    const peers = await prisma.infraNode.findMany({ where: { type, ...scope }, select: { id: true, normalizedKey: true }, orderBy: { normalizedKey: 'asc' } });
+    const peers = await db.infraNode.findMany({ where: { type, ...scope }, select: { id: true, normalizedKey: true }, orderBy: { normalizedKey: 'asc' } });
     let best = null;
     let bestScore = 0;
     for (const p of peers) {
@@ -249,27 +253,28 @@ export async function resolveNode({ type, name, at, source = null, mode = 'count
       if (s > bestScore) [best, bestScore] = [p, s];
     }
     if (best && bestScore >= FUZZY_NODE) {
-      node = await prisma.infraNode.findUnique({ where: { id: best.id } });
-      await fenced(ctx, (tx) =>
+      node = await db.infraNode.findUnique({ where: { id: best.id } });
+      if (mode !== 'preview') await fenced(ctx, (tx) =>
         tx.nodeAlias.upsert({
           where: { nodeId_normalizedKey: { nodeId: node.id, normalizedKey: key } },
           create: { nodeId: node.id, alias: name, normalizedKey: key },
           update: {},
         }),
-      );
+        db);
     }
   }
   // a station name that is one letter off, or the same letters scrambled, is a misspelling of a known station (only when exactly one fits)
   if (!node && STATION_TYPES.includes(type) && key.length >= 7) {
-    const stations = await prisma.infraNode.findMany({ where: { type: { in: STATION_TYPES }, ...scope }, select: { id: true, normalizedKey: true } });
+    const stations = await db.infraNode.findMany({ where: { type: { in: STATION_TYPES }, ...scope }, select: { id: true, normalizedKey: true } });
     const near = stations.filter((n) => !differsByLabel(key, n.normalizedKey) && likelyTypo(key, n.normalizedKey));
     if (near.length === 1) {
-      node = await prisma.infraNode.findUnique({ where: { id: near[0].id } });
-      await fenced(ctx, (tx) => tx.nodeAlias.upsert({ where: { nodeId_normalizedKey: { nodeId: node.id, normalizedKey: key } }, create: { nodeId: node.id, alias: name, normalizedKey: key }, update: {} }));
+      node = await db.infraNode.findUnique({ where: { id: near[0].id } });
+      if (mode !== 'preview') await fenced(ctx, (tx) => tx.nodeAlias.upsert({ where: { nodeId_normalizedKey: { nodeId: node.id, normalizedKey: key } }, create: { nodeId: node.id, alias: name, normalizedKey: key }, update: {} }), db);
     }
   }
   // The contribution record and the counter move together or not at all: a failure between them used to leave the record written and the
   // counter unmoved, so a retry saw "already counted" and the evidence was lost for good.
+  if (mode === 'preview') return node ?? { id: identityId(['node', serviceType, municipalityId, type, key]), type, name: name.trim(), normalizedKey: key, municipalityId, serviceType, firstSeenAt: at, lastSeenAt: at, evidenceCount: 0, proposed: true };
   if (node) {
     return fenced(ctx, async (tx) => {
       const count = await shouldCount(tx, source, 'NODE', node.id, '', mode);
@@ -283,19 +288,20 @@ export async function resolveNode({ type, name, at, source = null, mode = 'count
       });
       if (updated.lifecycle === 'CANDIDATE' && updated.evidenceCount >= CONFIRM_AT) return tx.infraNode.update({ where: { id: node.id }, data: { lifecycle: 'CONFIRMED' } });
       return updated;
-    });
+    }, db);
   }
   return fenced(ctx, async (tx) => {
-    const created = await tx.infraNode.create({ data: { type, name: name.trim(), normalizedKey: key, municipalityId, serviceType, firstSeenAt: at, lastSeenAt: at } });
+    const created = await tx.infraNode.create({ data: { ...(mode === 'review' ? { id: identityId(['node', serviceType, municipalityId, type, key]) } : {}), type, name: name.trim(), normalizedKey: key, municipalityId, serviceType, firstSeenAt: at, lastSeenAt: at } });
     await shouldCount(tx, source, 'NODE', created.id, '', 'record-only'); // its first evidence is already the initial 1
     return created;
-  });
+  }, db);
 }
 
-async function bumpEdge(parentId, childId, at, source, mode, ctx, relationType = 'LEGACY_PARENT') {
+async function bumpEdge(parentId, childId, at, source, mode, ctx, relationType = 'LEGACY_PARENT', db = prisma) {
+  if (mode === 'preview') return;
   if (parentId === childId) return; // never a self-link
   const refB = edgeEvidenceRef(childId, relationType);
-  await prisma.$transaction(async (tx) => {
+  await fenced(ctx, async (tx) => {
     await assertLeaseInTx(tx, ctx);
     const count = await shouldCount(tx, source, 'EDGE', parentId, refB, mode);
     await tx.infraEdge.upsert({
@@ -303,11 +309,12 @@ async function bumpEdge(parentId, childId, at, source, mode, ctx, relationType =
       create: { parentId, childId, relationType, lastSeenAt: at },
       update: { ...(count ? { evidenceCount: { increment: 1 } } : {}), lastSeenAt: at },
     });
-  });
+  }, db);
 }
 
-async function bumpNodeLocality(nodeId, localityId, at, source, mode, ctx) {
-  await prisma.$transaction(async (tx) => {
+async function bumpNodeLocality(nodeId, localityId, at, source, mode, ctx, db = prisma) {
+  if (mode === 'preview') return;
+  await fenced(ctx, async (tx) => {
     await assertLeaseInTx(tx, ctx);
     const count = await shouldCount(tx, source, 'NODE_LOCALITY', nodeId, localityId, mode);
     await tx.nodeLocality.upsert({
@@ -315,7 +322,7 @@ async function bumpNodeLocality(nodeId, localityId, at, source, mode, ctx) {
       create: { nodeId, localityId, lastSeenAt: at },
       update: { ...(count ? { evidenceCount: { increment: 1 } } : {}), lastSeenAt: at },
     });
-  });
+  }, db);
 }
 
 // Which type may be the parent of which (lower number = higher in the chain). A name that matches several nodes of different
@@ -366,15 +373,38 @@ export function localityTargets({ rootCount, nodes, leaves, parentOf = new Map()
   return allLocalityNames.length >= 3 && echoes * 2 > allLocalityNames.length ? [] : leaves;
 }
 
+/** An SDC graphic's bare area heading is not a station. Correct only an exact
+ * source heading that resolves to a known suburb and names no other equipment. */
+export async function correctBareAreaHeadings(result, municipalityId = null) {
+  if (!result?.faults?.length || !result.image_text) return result;
+  const headings = new Set(result.image_text.split(/\r?\n/).map((line) => {
+    const match = line.match(/^\s*[-•]?\s*([^:]+):/);
+    return match ? localityKey(match[1]) : null;
+  }).filter(Boolean));
+  const faults = [];
+  for (const fault of result.faults) {
+    const equipment = fault.equipment ?? [];
+    const entity = equipment.length === 1 ? equipment[0] : null;
+    if (!entity || !STATION_TYPES.includes(entity.type) || entity.parent_name ||
+        fault.localities?.length || !headings.has(localityKey(entity.name))) {
+      faults.push(fault);
+      continue;
+    }
+    const locality = await resolveLocality(entity.name, new Set(), municipalityId);
+    faults.push(locality ? { ...fault, equipment: [], localities: [{ name: locality.canonicalName, state: fault.status === 'RESTORED' ? 'RESTORED' : 'AFFECTED' }] } : fault);
+  }
+  return { ...result, faults };
+}
+
 /**
  * Learn from one extraction. Returns the facts the linker needs:
  * { sdcNode, nodes: [InfraNode] (non-SDC, most specific last), localityIds: [], restoredLocalityIds: [], unmatched: [] }
  */
-export async function learnFromExtraction(extraction, at, { source = null, mode = 'count', ctx, municipalityId = null, serviceType = 'ELECTRICITY' } = {}) {
+export async function learnFromExtraction(extraction, at, { source = null, mode = 'count', ctx, municipalityId = null, serviceType = 'ELECTRICITY', db = prisma } = {}) {
   const result = extraction.result;
   const listed = result.entities ?? [];
   const sdcName = result.sdc ?? listed.find((e) => e.type === 'SDC')?.name ?? null;
-  const sdcNode = sdcName && serviceType !== 'WATER' ? await resolveNode({ type: 'SDC', name: sdcName, at, source, mode, ctx, municipalityId, serviceType }) : null;
+  const sdcNode = sdcName && serviceType !== 'WATER' ? await resolveNode({ type: 'SDC', name: sdcName, at, source, mode, ctx, municipalityId, serviceType, db }) : null;
 
   // A bare line/feeder label ("A", "D", "1B", "Line D") is only meaningful with its station: "Tshepisong D". Without one it is
   // not stored at all (labelledEquipmentName).
@@ -395,7 +425,7 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
   const byName = new Map(); // infraKey(name) → [{ node }]  (every node that name could mean)
   for (const e of entities) {
     if (serviceType === 'WATER' && !WATER_TYPES.has(e.type)) continue;
-    const node = await resolveNode({ type: e.type, name: e.name, at, source, mode, ctx, municipalityId, serviceType });
+    const node = await resolveNode({ type: e.type, name: e.name, at, source, mode, ctx, municipalityId, serviceType, db });
     if (!node) continue;
     const cur = resolved.get(node.id) ?? { node, entities: [] };
     cur.entities.push(e);
@@ -413,13 +443,13 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
     const named = es.find((x) => x.parent_name);
     const parent = named ? pickParent(node, byName.get(infraKey(named.parent_name)) ?? []) : null;
     if (parent) {
-      await bumpEdge(parent.node.id, node.id, at, source, mode, ctx, serviceType === 'WATER' ? named.relationType ?? 'SUPPLIES' : 'LEGACY_PARENT');
+      await bumpEdge(parent.node.id, node.id, at, source, mode, ctx, serviceType === 'WATER' ? named.relationType ?? 'SUPPLIES' : 'LEGACY_PARENT', db);
       children.add(parent.node.id);
       hasParent.add(node.id);
       parentOf.set(node.id, parent.node.id);
     } else if (sdcNode) {
       // no parent named, or a named parent that could not be resolved unambiguously: attach to the service centre rather than guess
-      await bumpEdge(sdcNode.id, node.id, at, source, mode, ctx);
+      await bumpEdge(sdcNode.id, node.id, at, source, mode, ctx, 'LEGACY_PARENT', db);
     }
   }
 
@@ -429,7 +459,7 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
 
   const preferIds = new Set();
   for (const n of nodes) {
-    const known = await prisma.nodeLocality.findMany({ where: { nodeId: n.id }, select: { localityId: true } });
+    const known = await db.nodeLocality.findMany({ where: { nodeId: n.id }, select: { localityId: true } });
     known.forEach((k) => preferIds.add(k.localityId));
   }
   // Independent branches: a normal substation → distributor chain is 1; a multi-fault digest image is 3+.
@@ -438,15 +468,15 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
   const restoredLocalityIds = [];
   const unmatched = [];
   for (const l of result.localities) {
-    let loc = (await resolveLocality(l.name, preferIds, municipalityId)) ?? (await learnLocality(l.name, ctx, municipalityId));
-    if (!loc && tailPlace(l.name)) loc = (await resolveLocality(tailPlace(l.name), preferIds, municipalityId)) ?? (await learnLocality(tailPlace(l.name), ctx, municipalityId));
+    let loc = (await resolveLocality(l.name, preferIds, municipalityId, db)) ?? (await learnLocality(l.name, ctx, municipalityId, mode, db));
+    if (!loc && tailPlace(l.name)) loc = (await resolveLocality(tailPlace(l.name), preferIds, municipalityId, db)) ?? (await learnLocality(tailPlace(l.name), ctx, municipalityId, mode, db));
     if (!loc) {
       unmatched.push(l.name);
       continue;
     }
     if (!localityIds.includes(loc.id)) localityIds.push(loc.id);
     if (l.state === 'RESTORED') restoredLocalityIds.push(loc.id);
-    for (const node of localityTargets({ rootCount, nodes, leaves, parentOf }, l.name, result.localities.map((x) => x.name))) await bumpNodeLocality(node.id, loc.id, at, source, mode, ctx);
+    for (const node of localityTargets({ rootCount, nodes, leaves, parentOf }, l.name, result.localities.map((x) => x.name))) await bumpNodeLocality(node.id, loc.id, at, source, mode, ctx, db);
   }
   // A notice can identify only a named customer site (for example a hospital).
   // Retain that exact site as an OTHER identity; do not invent a suburb-wide
@@ -458,7 +488,7 @@ export async function learnFromExtraction(extraction, at, { source = null, mode 
       if (!match) continue;
       const specific = match[1].split(/\s+/).filter((word) => !/^(the|a|an|local|public|private|nearby|surrounding|affected|all|some|other|and)$/i.test(word));
       if (specific.join(' ').replace(/[^a-z]/gi, '').length < 3) continue;
-      const node = await resolveNode({ type: 'OTHER', name: name.trim(), at, source, mode, ctx, municipalityId, serviceType });
+      const node = await resolveNode({ type: 'OTHER', name: name.trim(), at, source, mode, ctx, municipalityId, serviceType, db });
       if (node && !nodes.some((n) => n.id === node.id)) nodes.push(node);
     }
   }

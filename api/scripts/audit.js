@@ -4,7 +4,10 @@ import { env } from '../src/config/env.js';
 import { prisma } from '../src/db/prisma.js';
 import { isStale } from '../src/modules/ai/extraction.service.js';
 import { readerFor } from '../src/modules/ai/reader-registry.js';
-import { auditSummary, crossServiceLinks, giantWaterIncidents, ingestionProblems, largeUnplannedOutages, legitimateLargeWaterIncidents, plannedOverdue, recoveringMarkedRestored, stuckProcessing, waterNodesWithElectricityTypes } from '../src/modules/processing/quality.js';
+import { acceptedExtraction, readingFaultItems, auditSummary, crossServiceLinks, giantWaterIncidents, ingestionProblems, largeUnplannedOutages, legitimateLargeWaterIncidents, plannedOverdue, recoveringMarkedRestored, stuckProcessing, waterNodesWithElectricityTypes } from '../src/modules/processing/quality.js';
+
+import { faultItems } from '../src/modules/processing/processor.service.js';
+import { effectiveExtraction } from '../src/modules/review/effective-reading.js';
 
 const HOUR = 3_600_000;
 const now = Date.now();
@@ -14,7 +17,7 @@ const outages = await prisma.outage.findMany({
   include: {
     localities: { include: { locality: { select: { canonicalName: true } } } },
     nodes: true,
-    posts: { orderBy: { postedAt: 'asc' }, include: { post: { select: { externalId: true, text: true, noteTweetText: true, extractions: { where: { status: 'SUCCEEDED' }, take: 1, select: { result: true } } } } } },
+    posts: { orderBy: { postedAt: 'asc' }, include: { post: { select: { externalId: true, text: true, noteTweetText: true, serviceType: true, readingOverride: true, PostMedia: true, extractions: { where: { status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' } } } } } },
   },
 });
 
@@ -39,7 +42,9 @@ check(
   outages.filter((o) => {
     if (!live(o)) return false;
     if (o.serviceType === 'WATER' && o.waterState && o.waterState !== 'NORMAL') return false;
-    const last = o.posts.at(-1)?.post.extractions[0]?.result;
+    const entry = o.posts.at(-1);
+    const e = entry ? acceptedExtraction(entry.post) : null;
+    const last = e?.result ? readingFaultItems(entry.post,e,faultItems).find((f) => f.faultIndex === entry.faultIndex)?.extraction.result : null;
     return last && last.status === 'RESTORED' && o.posts.at(-1).role === 'RESTORATION';
   }),
 );
@@ -148,9 +153,9 @@ for (const c of checks) {
   if (water.length) split.push({ ...c, scope: 'WATER', hits: water });
   split.push({ ...c, hits: elec });
 }
-const allReadings = await prisma.postExtraction.findMany({ select: { promptVersion: true, model: true, result: true, post: { select: { sourceAccount: true, serviceType: true } } } });
+const allReadings = await prisma.postExtraction.findMany({ select: { promptVersion: true, model: true, result: true, post: { select: { sourceAccount: true, serviceType: true, text: true, noteTweetText: true, readingOverride: true, PostMedia: true } } } });
 const readings = allReadings.filter((r) => r.promptVersion === (readerFor(r.post.serviceType).promptVersion ?? env.AI_PROMPT_VERSION));
-const staleRows = readings.filter((r) => isStale(r, r.post.sourceAccount, r.post.serviceType));
+const staleRows = readings.filter((r) => !effectiveExtraction(r.post,r)?.human && isStale(r, r.post.sourceAccount, r.post.serviceType));
 const staleBy = { ELECTRICITY: 0, WATER: 0 };
 for (const r of staleRows) {
   const svc = r.post.serviceType === 'WATER' ? 'WATER' : 'ELECTRICITY';

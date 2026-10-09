@@ -4,12 +4,16 @@ Tracks City Power (Johannesburg) outages from their posts on X.
 
 ## Run locally
 
+On this prepared Windows workspace, double-click **Start-GridWatch.cmd** at the repository root, then open **http://localhost:4000/review**. The built web app and API run in the same foreground window. Press Ctrl+C to stop them. Automatic fetching is paused in this launcher; the existing **Fetch latest posts** control remains available. Local operator access and guided corrections are configured for this machine.
+
+For a fresh setup or separate development servers:
+
 ```
 cd api && npm install && cp .env.example .env   # then fill in DATABASE_URL, GEMINI_API_KEY, X_API_BEARER_TOKEN and an OPERATOR_TOKEN
 npx prisma migrate deploy
 npm run seed:geography          # empty database only: loads the Johannesburg suburbs (add -- --dry-run to preview)
 SCHEDULER=off npm start          # API on :4000 (omit SCHEDULER=off to poll X every few minutes)
-cd ../client && npm install && npm run dev   # UI on :5173, proxies /v1 to the API
+cd ../client && npm install && npm run dev   # UI on :5173, proxies /v1 and /admin to the API
 ```
 
 Useful scripts (in `api/`): `npm run ingest -- --process` (fetch new posts and process them),
@@ -42,6 +46,18 @@ Fetching, reading, linking, sweeping and admin actions all take one database lea
 To use the scheduler instead, start the API without `SCHEDULER=off`; it runs the same single-flight cycle every few minutes.
 
 X fetches leave out replies by default (`X_INCLUDE_REPLIES=off`). They are City Power answering individual customers, which is never outage news, and X charges per post returned.
+
+## Reviewing exceptions
+
+The pipeline is: **Fetch posts → read their meaning → separate faults → associate incidents → recompute timelines → check results → review exceptions.**
+
+Open **`/review`** and use the existing operator sign-in. Signed-in operators also have a **Needs review** navigation link. The inbox covers Electricity, Water and all active sources, independently of the public map filters. Its tabs separate decisions, automatic waiting, engineering and history; source freshness remains visible even with no queued decisions.
+
+Open an issue, inspect the complete utility evidence and current incident, choose a guided action, supply a short reason and source quote, then preview and apply. Joining, separating, changing a reading or classifying a notice recomputes source-post effects. Human readings and links survive reprocessing and rebuilds. Ordinary inspection and previews make no provider calls. A requested AI reread is a proposal until separately reviewed and applied. Water pumping or equipment recovery is not customer supply restoration.
+
+Successful repairs show validation and remaining concerns. **Preview undo** refuses to overwrite newer processing. An interrupted action stays visible for recovery. **Copy investigation brief** prepares a handoff without sending it or resolving the case. **Export regression evidence** downloads reviewed labels; engineering reviews and commits fixtures separately.
+
+Correction writes default to disabled (`REVIEW_CORRECTIONS_ENABLED=off`). See [the review rollout guide](docs/GUIDED_REVIEW.md) for migration, coverage comparison, acceptance tests and enabling controls. Visiting the page never advances `api/data/check-checkpoint.json`.
 
 ## The map
 
@@ -95,6 +111,7 @@ npm run eval:all -- --details # lists every post with a disposition mismatch, gr
 node scripts/reconcile-dispositions.js # preview targeted repairs; --apply snapshots and repairs under the pipeline lease
 npm run audit                 # data health, exit status 1 on any contradiction, review/error/stuck work or unhealthy ingestion
 npm run batch                 # the latest fetch, post by post (exit 1 checks failed, 2 degraded)
+npm run batch -- --from=<ISO> --to=<ISO> # recheck a repaired window without advancing the local checkpoint
 ```
 
 Disposition reconciliation reuses stored readings; ambiguous links may require Gemini tie-breaks (bounded by `GRIDWATCH_AI_MAX_CALLS`, default 100). Posts referenced by manual overrides are held for inspection unless `--include-overrides` is supplied. `--post=<externalId>` limits the repair to one post. A processing failure restores the batch snapshot automatically, and the printed undo command remains available afterward.
@@ -105,6 +122,32 @@ Disposition reconciliation reuses stored readings; ambiguous links may require G
 - **Corrections become tests**: `node scripts/correct-link.js <post> --join <anchor> --apply` (or `--split --from <post>`) saves a snapshot, applies the correction and adds a case to `api/tests/golden/corrections.json`. Commit that file. See `api/tests/golden/README.md` for what each labelled set is and which may be tuned on.
 - **Undoing a repair**: `reprocess.js`, `correct-link.js` and `merge-nodes.js` save a snapshot to `api/data/backups/repair-*.json` first and print the undo command: `node scripts/restore-repair.js <file> --apply`. `reprocess.js --preview` shows where posts are now without changing anything. A reading that a re-read replaces is kept in `ReadingRevision`.
 - **Rebuilding everything**: `node scripts/rebuild-history.js --confirm` (with `GRIDWATCH_AI_MAX_CALLS` to cap the small tie-break calls). It holds the pipeline lease throughout and writes a backup first.
+
+### Self-correction (off by default)
+
+A bounded, evidence-based engine that detects specific, narrow pipeline defects (a stored disposition that no longer
+matches the current reading; an unresolved restoration that quotes exactly one earlier, compatible incident),
+proposes a typed repair, and - only for explicitly allowlisted policies in `auto` mode - applies it reversibly under
+the pipeline lease, with a snapshot and postcondition checks. See
+`docs/CLAUDE_SELF_CORRECTING_ENGINE_IMPLEMENTATION.md` for the full design and `docs/audits/self-correction-phase0-baseline-2026-09-30.md`
+for the baseline it was built against.
+
+```
+node scripts/self-correct.js --preview [--service=WATER] [--post=<externalId>]   # read-only, provider-free
+node scripts/self-correct.js --shadow                                           # persists proposal records only (SELF_CORRECTION_MODE != off)
+node scripts/self-correct.js --inspect=<proposalId>
+node scripts/self-correct.js --report [--since=<ISO-time>]
+node scripts/self-correct.js --apply --proposal=<id>                            # SELF_CORRECTION_MODE=auto and the policy must be allowlisted
+node scripts/self-correct.js --recover --attempt=<id>
+node scripts/correction-lessons.js --import-existing [--apply]                  # human LinkOverride corrections -> CANDIDATE lessons
+node scripts/correction-lessons.js --list | --inspect=<id> | --promote=<id> --to=REVIEWED|ACTIVE | --retire=<id> --reason="..."
+```
+
+- **Modes** (`SELF_CORRECTION_MODE`): `off` (default; no records, no mutation - identical to today's behaviour), `shadow` (proposals are generated and persisted, nothing is ever applied), `auto` (an eligible, allowlisted policy version may also be applied). `SELF_CORRECTION_POLICIES` is the explicit `policyName@version` allowlist; empty means nothing can auto-apply, whatever the mode. Every other `SELF_CORRECTION_*` budget/limit is documented in `.env.example`.
+- **What can run today**: two deterministic, no-AI generators - `disposition-layout-repair` (reprocesses a post from its stored reading when the current dispositions/timeline no longer match it) and `quote-restoration` (links an unresolved restoration that quotes exactly one compatible earlier incident). Both act through `REPROCESS_STORED` (no AI call). The executor also supports `JOIN_FAULT`/`SPLIT_FAULT` via a persisted `AutoRepairDirective`, checked by the linker with the same precedence as a human `LinkOverride` (the human decision always wins) - no generator emits these yet.
+- **Reviewed lessons**: `correction-lessons.js --import-existing` reads every existing `LinkOverride` (a person's JOIN/SPLIT correction) and stages it as a `CANDIDATE` `CorrectionLesson`, scoped to the exact source post. Promotion to `REVIEWED`/`ACTIVE` - and generalising its applicability beyond that one case - is always a separate, explicit operator step; nothing is auto-promoted.
+- **Release gates**: production `auto` mode stays disabled until the documented evidence gates in the design doc are met (≥200 independently reviewed eligible proposals per policy family, ≥99.5% correct, 14+ days, no critical misrepair). Until then every proposal, however correct, stays in `shadow`.
+- **Rollback**: every applied repair snapshots first (`api/data/backups/repair-*-self-correct.json`) and is journalled in `RepairAttempt`; `--recover --attempt=<id>` restores it under the pipeline lease.
 
 ### About the map
 

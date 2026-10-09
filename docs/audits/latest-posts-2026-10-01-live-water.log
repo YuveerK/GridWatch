@@ -1,0 +1,66 @@
+
+Johannesburg Water bootstrap report  (JHBWater from 2026-09-01T00:00:00.000Z)
+
+total posts                  638
+service WATER                638
+earliest                     2026-09-01T05:55:54.000Z
+latest                       2026-10-01T10:30:38.000Z
+posts with images            620
+unique posts                 638
+current water-2 succeeded    636
+current water-2 failed       0
+no current water-2 reading   2
+historical older-version succeeded 1
+historical older-version failed 3
+extraction rows succeeded    637
+extraction rows failed       3
+
+Incidents
+total water incidents        360
+active                       50
+partially_restored           0
+restored                     5
+stale                        263
+planned                      1
+cancelled                    0
+closed                       41
+
+Current fault decisions
+current final decisions      1402
+current NEW faults           389
+current LINKED faults        1013
+current NEEDS_REVIEW faults  0
+
+Current links
+current outage-post rows     1247
+current OPENED faults        230
+current UPDATE faults        992
+current RESTORATION faults   25
+posts that opened an incident 181
+posts that only updated incidents 328
+
+Infrastructure
+BOOSTER_STATION              5
+BULK_CONNECTION              1
+DIRECT_FEED                  67
+PRV                          4
+PUMP_STATION                 24
+RESERVOIR                    110
+TREATMENT_WORKS              3
+WATER_OTHER                  15
+WATER_PIPELINE               33
+WATER_SYSTEM                 9
+WATER_TOWER                  44
+relationships from posts     184
+locality links from posts    775
+
+Quality
+review items                 0
+processing errors            0
+cross-service errors         0
+false restorations           0
+suspicious giant incidents   0
+large explicit supply zones  1
+electricity-typed water nodes 0
+
+◇ injected env (0) from .env

@@ -1,3 +1,4 @@
+import { fingerprint } from '../review/contracts.js';
 import { assertLeaseInTx } from '../coordination/lease.js';
 import { refoldOutage } from '../outages/outage-state.js';
 import { decodeEdgeEvidenceRef } from '../../lib/evidence-edge.js';
@@ -15,7 +16,7 @@ const plain = (rows) => JSON.parse(JSON.stringify(rows, (_k, v) => (v instanceof
 const revive = (rows) => JSON.parse(JSON.stringify(rows), (_k, v) => (v && typeof v === 'object' && '$date' in v ? new Date(v.$date) : v));
 
 export async function snapshotForPosts(prisma, postIds, now = new Date()) {
-  const posts = await prisma.sourcePost.findMany({ where: { id: { in: postIds } }, select: { id: true, externalId: true, processingStatus: true } });
+  const posts = await prisma.sourcePost.findMany({ where: { id: { in: postIds } }, select: { id: true, externalId: true, processingStatus: true,processingStartedAt: true } });
   const outagePosts = await prisma.outagePost.findMany({ where: { postId: { in: postIds } } });
   const outageIds = [...new Set(outagePosts.map((o) => o.outageId))];
   const outages = await prisma.outage.findMany({ where: { id: { in: outageIds } } });
@@ -42,7 +43,10 @@ export async function snapshotForPosts(prisma, postIds, now = new Date()) {
   const extractions = await prisma.postExtraction.findMany({ where: { postId: { in: postIds } } });
   const summaries = await prisma.postSummary.findMany({ where: { postId: { in: postIds } } });
   const overrides = await prisma.linkOverride.findMany({ where: { OR: [{ postId: { in: postIds } }, { anchorPostId: { in: postIds } }] } });
-  return plain({ version: 1, takenAt: now, postIds, posts, outagePosts, outages, linkDecisions, evidence, nodes, edges, nodeLocalities, extractions, summaries, overrides });
+  const readingOverrides = await prisma.readingOverride.findMany({ where: { postId: { in: postIds } } });
+  const retries = await prisma.retryAttempt.findMany({ where: { postId: { in: postIds } } });
+  const reviewItems = await prisma.reviewItem.findMany({ where: { postId: { in: postIds } } });
+  return plain({ version: 2, takenAt: now, postIds, posts, outagePosts, outages, linkDecisions, evidence, nodes, edges, nodeLocalities, extractions, summaries, overrides, readingOverrides, retries, reviewItems });
 }
 
 const CONFIRM_AT = 2;
@@ -73,7 +77,7 @@ export async function restoreSnapshot({ prisma, snapshot: raw, ctx }) {
       // Undoing twice, or undoing something already undone, must change nothing (the counters are corrected by difference, so a repeat
       // would double-apply). That requires comparing everything this function actually restores, not just outage membership: a reading,
       // summary or override can change while the post stays in exactly the same outage with the same evidence counts.
-      const sig = (ops, ev, decisions, extractions, summaries, overrides, posts) =>
+      const sig = (ops, ev, decisions, extractions, summaries, overrides, posts, human = [], retries = [], reviews = []) =>
         JSON.stringify([
           ops.map((o) => `${o.outageId}|${o.postId}|${o.faultIndex}|${JSON.stringify(o.effect ?? null)}`).sort(),
           [...tally(ev)].sort(),
@@ -81,7 +85,9 @@ export async function restoreSnapshot({ prisma, snapshot: raw, ctx }) {
           extractions.map((x) => `${x.postId}|${x.promptVersion}|${x.status}|${JSON.stringify(x.result ?? null)}`).sort(),
           summaries.map((x) => `${x.postId}|${x.faultIndex}|${x.summary}`).sort(),
           overrides.map((o) => `${o.postId}|${o.faultIndex}|${o.action}|${o.anchorPostId ?? ''}|${o.anchorFaultIndex}|${o.note ?? ''}`).sort(),
-          posts.map((p) => `${p.id}|${p.processingStatus}`).sort(),
+          posts.map((p) => `${p.id}|${p.processingStatus}|${s.posts.some((p) => 'processingStartedAt' in p) ? p.processingStartedAt ? new Date(p.processingStartedAt).toISOString() : '' : ''}`).sort(),
+          human.map((r) => `${r.postId}|${r.revision}|${JSON.stringify(r.payload)}`).sort(),
+          retries.map((r) => fingerprint(r)).sort(),reviews.map((r) => fingerprint(r)).sort(),
         ]);
       const nowOps = await tx.outagePost.findMany({ where: { postId: { in: postIds } }, select: { outageId: true, postId: true, faultIndex: true, effect: true } });
       const nowEvidence = await tx.evidenceContribution.findMany({ where: { postId: { in: postIds } } });
@@ -89,10 +95,13 @@ export async function restoreSnapshot({ prisma, snapshot: raw, ctx }) {
       const nowExtractions = await tx.postExtraction.findMany({ where: { postId: { in: postIds } }, select: { postId: true, promptVersion: true, status: true, result: true } });
       const nowSummaries = await tx.postSummary.findMany({ where: { postId: { in: postIds } }, select: { postId: true, faultIndex: true, summary: true } });
       const nowOverrides = await tx.linkOverride.findMany({ where: { OR: [{ postId: { in: postIds } }, { anchorPostId: { in: postIds } }] }, select: { postId: true, faultIndex: true, action: true, anchorPostId: true, anchorFaultIndex: true, note: true } });
-      const nowPosts = await tx.sourcePost.findMany({ where: { id: { in: postIds } }, select: { id: true, processingStatus: true } });
+      const nowPosts = await tx.sourcePost.findMany({ where: { id: { in: postIds } }, select: { id: true, processingStatus: true,processingStartedAt: true } });
+      const nowHuman = s.readingOverrides ? await tx.readingOverride.findMany({ where: { postId: { in: postIds } } }) : [];
+      const nowRetries = s.retries ? await tx.retryAttempt.findMany({ where: { postId: { in: postIds } } }) : [];
+      const nowReviews = s.reviewItems ? await tx.reviewItem.findMany({ where: { postId: { in: postIds } } }) : [];
       if (
-        sig(nowOps, nowEvidence, nowDecisions, nowExtractions, nowSummaries, nowOverrides, nowPosts) ===
-        sig(s.outagePosts, s.evidence, s.linkDecisions, s.extractions, s.summaries, s.overrides, s.posts)
+        sig(nowOps, nowEvidence, nowDecisions, nowExtractions, nowSummaries, nowOverrides, nowPosts, nowHuman,nowRetries,nowReviews) ===
+        sig(s.outagePosts, s.evidence, s.linkDecisions, s.extractions, s.summaries, s.overrides, s.posts, s.readingOverrides ?? [],s.retries ?? [],s.reviewItems ?? [])
       ) {
         const stillThere = await tx.outage.count({ where: { id: { in: s.outages.map((o) => o.id) } } });
         if (stillThere === s.outages.length) return { posts: postIds.length, outages: 0, entries: 0, alreadyRestored: true };
@@ -122,8 +131,8 @@ export async function restoreSnapshot({ prisma, snapshot: raw, ctx }) {
           const evidenceCount = Math.max(0, cur.evidenceCount + delta);
           const data = { evidenceCount, lifecycle: evidenceCount >= CONFIRM_AT ? 'CONFIRMED' : cur.lifecycle === 'CONFIRMED' ? 'CANDIDATE' : cur.lifecycle };
           if (snap) {
-            if (snap.firstSeenAt < cur.firstSeenAt) data.firstSeenAt = snap.firstSeenAt;
-            if (snap.lastSeenAt > cur.lastSeenAt) data.lastSeenAt = snap.lastSeenAt;
+            if (new Date(snap.firstSeenAt) < cur.firstSeenAt) data.firstSeenAt = snap.firstSeenAt;
+            if (new Date(snap.lastSeenAt) > cur.lastSeenAt) data.lastSeenAt = snap.lastSeenAt;
           }
           await tx.infraNode.update({ where: { id: a }, data });
         } else {
@@ -148,6 +157,18 @@ export async function restoreSnapshot({ prisma, snapshot: raw, ctx }) {
       await tx.linkDecision.deleteMany({ where: { postId: { in: postIds } } });
       await tx.evidenceContribution.deleteMany({ where: { postId: { in: postIds } } });
       await tx.linkOverride.deleteMany({ where: { OR: [{ postId: { in: postIds } }, { anchorPostId: { in: postIds } }] } });
+      if (s.readingOverrides) {
+        await tx.readingOverride.deleteMany({ where: { postId: { in: postIds } } });
+        if (s.readingOverrides.length) await tx.readingOverride.createMany({ data: s.readingOverrides.map((r) => ({ ...r, createdAt: new Date(r.createdAt), updatedAt: new Date(r.updatedAt) })) });
+      }
+      if (s.retries) {
+        await tx.retryAttempt.deleteMany({ where: { postId: { in: postIds } } });
+        if (s.retries.length) await tx.retryAttempt.createMany({ data: s.retries.map((r) => ({ ...r, createdAt: new Date(r.createdAt), nextRetryAt: new Date(r.nextRetryAt) })) });
+      }
+      if (s.reviewItems) {
+        await tx.reviewItem.deleteMany({ where: { postId: { in: postIds } } });
+        if (s.reviewItems.length) await tx.reviewItem.createMany({ data: s.reviewItems.map((r) => ({ ...r, verifier: r.verifier ?? undefined, createdAt: new Date(r.createdAt), resolvedAt: r.resolvedAt ? new Date(r.resolvedAt) : null })) });
+      }
 
       // the readings and their summaries
       await tx.postSummary.deleteMany({ where: { postId: { in: postIds } } });
@@ -167,7 +188,7 @@ export async function restoreSnapshot({ prisma, snapshot: raw, ctx }) {
       if (s.linkDecisions.length) await tx.linkDecision.createMany({ data: s.linkDecisions.map(({ id, postId, faultIndex, outcome, outageId, topScore, usedLlm, reason, candidates, createdAt }) => ({ id, postId, faultIndex, outcome, outageId, topScore, usedLlm, reason, candidates: candidates ?? undefined, createdAt })), skipDuplicates: true });
       if (s.evidence.length) await tx.evidenceContribution.createMany({ data: s.evidence.map(({ postId, faultIndex, kind, refA, refB, createdAt }) => ({ postId, faultIndex, kind, refA, refB, createdAt })), skipDuplicates: true });
       if (s.overrides.length) await tx.linkOverride.createMany({ data: s.overrides.map(({ postId, faultIndex, action, anchorPostId, anchorFaultIndex, note, contrastPostId, createdAt }) => ({ postId, faultIndex, action, anchorPostId, anchorFaultIndex, note, contrastPostId, createdAt })), skipDuplicates: true });
-      for (const p of s.posts) await tx.sourcePost.update({ where: { id: p.id }, data: { processingStatus: p.processingStatus } });
+      for (const p of s.posts) await tx.sourcePost.update({ where: { id: p.id }, data: { processingStatus: p.processingStatus,...('processingStartedAt' in p ? { processingStartedAt: p.processingStartedAt } : {}) } });
 
       // every outage that was, or now is, touched is recomputed from its entries (an outage left with none is removed)
       for (const id of affected) await refoldOutage(tx, id);

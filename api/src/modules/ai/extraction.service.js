@@ -6,7 +6,7 @@ import { logger } from '../../lib/logger.js';
 import { knowledgeContext, sdcFromText, waterKnowledgeContext } from '../infrastructure/knowledge-context.js';
 import { generateJson } from './gemini.client.js';
 import { readerFor } from './reader-registry.js';
-import { classifyWaterNotice, waterFaultItems, waterNoticeSummary } from './readers/water.reader.js';
+import { classifyWaterNotice, isSummaryWorthyItem, waterFaultItems, waterNoticeSummary } from './readers/water.reader.js';
 
 const MAX_IMAGES = 4;
 
@@ -95,12 +95,16 @@ async function loadImages(post) {
   return { parts, failed, reasons };
 }
 
-export async function extractPost(postId, { force = false, signal } = {}) {
-  const post = await prisma.sourcePost.findUniqueOrThrow({ where: { id: postId }, include: { PostMedia: true } });
+export async function extractPost(postId, { force = false, signal, draftOnly = false, budget } = {}) {
+  const post = await prisma.sourcePost.findUniqueOrThrow({ where: { id: postId }, include: { PostMedia: true, readingOverride: true } });
   const serviceType = post.serviceType ?? 'ELECTRICITY';
   const reader = readerFor(serviceType);
   const promptVersion = reader.promptVersion ?? env.AI_PROMPT_VERSION;
   const existing = await prisma.postExtraction.findUnique({ where: { postId_promptVersion: { postId, promptVersion } } });
+  if (post.readingOverride && !draftOnly) {
+    const { effectiveExtraction } = await import('../review/effective-reading.js');
+    return effectiveExtraction(post, existing);
+  }
   if (existing && !force && serviceType === 'WATER' && existing.status === 'NEEDS_REVIEW' && existing.result) {
     const noticeClass = classifyWaterNotice(existing.result, postText(post));
     if (noticeClass) {
@@ -135,6 +139,7 @@ export async function extractPost(postId, { force = false, signal } = {}) {
         jsonSchema: reader.jsonSchema,
         hasImages: imageParts.length > 0,
         signal,
+        budget,
       });
       usage = { inputTokens: (usage.inputTokens ?? 0) + (out.inputTokens ?? 0), outputTokens: (usage.outputTokens ?? 0) + (out.outputTokens ?? 0) };
       rawJson = JSON.parse(out.text);
@@ -162,6 +167,7 @@ export async function extractPost(postId, { force = false, signal } = {}) {
     durationMs: Date.now() - started,
     error: error ?? (failed ? `${failed} image(s) could not be fetched (${imageFailures.join(', ')})` : null),
   };
+  if (draftOnly) return { postId, promptVersion, ...data, draft: true };
   // A forced re-read that fails, or that comes back uncertain (low confidence, a picture that would not download), must not replace a
   // reading that was accepted: the outage it built stays as it was, and the rejected attempt is logged and reported to the caller.
   if ((!result || needsReview) && existing?.status === 'SUCCEEDED') {
@@ -197,7 +203,7 @@ export async function ensureWaterSummaries(postId, result) {
   // so a sentence written at the AI's index lands on the wrong reservoir (Central and Midrand, 29 Sept).
   const items = waterFaultItems({ result, relevance: result.relevance });
   const rows = items
-    .filter((item) => !['GENERAL_NOTICE', 'IRRELEVANT'].includes(item.extraction.relevance))
+    .filter(isSummaryWorthyItem)
     .map((item) => ({ faultIndex: item.faultIndex, summary: waterNoticeSummary(item.extraction.result, item.extraction.result).trim() }))
     .filter((row) => row.summary);
   const existing = await prisma.postSummary.findMany({ where: { postId }, select: { faultIndex: true, summary: true } });

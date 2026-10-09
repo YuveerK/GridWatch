@@ -1,0 +1,25 @@
+1. READING    3036 of 3036 posts have an accepted reading (100.0%); 0 need review, 0 failed  (275 customer replies skipped)
+2. COVERAGE   4349 of 4349 expected faults have exactly one accepted disposition (100.0%)
+     ELECTRICITY CityPowerJhb: 2247/2247 accepted; 0 missing, 0 invalid, 0 unexpected fault indices; 0 affected posts
+     ELECTRICITY CityTshwane: 702/702 accepted; 0 missing, 0 invalid, 0 unexpected fault indices; 0 affected posts
+     WATER JHBWater: 1400/1400 accepted; 0 missing, 0 invalid, 0 unexpected fault indices; 0 affected posts
+     Structural coverage only; unexpected indices are separate consistency problems, not missing expected faults.
+3. GROUPING  (pairwise F1 against hand labels)
+     Stored assignments, including manual overrides; these scores do not measure unassisted replay or image-reading accuracy.
+     holdout    holdout-0910.json      69 posts  precision 95.3%  recall 96.8%  F1 96.1%
+     holdout    holdout-0911.json      71 posts  precision 94.5%  recall 98.6%  F1 96.5%
+     holdout    holdout-0912.json      37 posts  precision 100.0%  recall 100.0%  F1 100%
+     holdout    holdout-0914.json      56 posts  precision 96.6%  recall 100.0%  F1 98.2%
+     holdout    holdout-0915.json      43 posts  precision 100.0%  recall 100.0%  F1 100%
+                average                          F1 98.2%
+     tuning     links.json            105 posts  precision 94.5%  recall 96.3%  F1 95.4%
+                average                          F1 95.4%
+     regression cases-0921.json        42 posts  precision 100.0%  recall 100.0%  F1 100%
+     regression cases-1001.json         6 posts  precision 100.0%  recall 100.0%  F1 100%
+                average                          F1 100.0%
+4. CORRECTIONS 77 of 77 hold (stored database, including manual overrides; not an unassisted replay)
+WATER REVIEW REGRESSIONS
+     cases 3  passed 3  failed 0
+5. FINAL STATE 17 of 17 hold (statuses, kinds and planned windows)
+
+◇ injected env (6) from .env

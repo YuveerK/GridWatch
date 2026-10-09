@@ -14,6 +14,16 @@ See `README.md` for setup/run instructions and the **"Knowing the engine is righ
 
 This file is about **how to use those tools when asked to check the engine, how to investigate failures, and how to fix them safely**.
 
+## Guided operator review
+
+The everyday workflow is now at `/review`: **Fetch posts → read their meaning → separate faults → associate incidents → recompute timelines → check results → review exceptions.** The operator inbox covers both services and all active sources, independent of public map filters. It distinguishes blocked work from published results needing confirmation, and separates scheduled retries from decisions and engineering handoffs.
+
+Use source evidence ? guided decision ? preview ? apply ? verified result. `ReviewCase` stores workflow/history; current processing records determine whether a condition remains. Browsing and ordinary previews are read-only and provider-free. Human `ReadingOverride` and `LinkOverride` decisions take precedence during processing/replay; do not edit outage rows to imitate their result. Human reading conflicts and missing/cyclic anchors must remain visible.
+
+For complex cases use **Copy investigation brief**. Fix the general mechanism, add regression coverage, then recheck the case. Copying/exporting does not resolve a case or send it to another service. The web export never rewrites test files. Review exported fixtures against the existing golden-test workflow.
+
+See `docs/GUIDED_REVIEW.md` for rollout and commands. New deployments start with corrections disabled; this Windows workspace has completed rollout and enables them. Use root `Start-GridWatch.cmd` for a foreground-only local app at `http://localhost:4000/review`. Preserve the machine-local latest-post checkpoint behavior documented below: review-page visits, previews, repairs and explicit-window investigations do not advance it. When asked to **check the latest posts**, continue to run the checkpoint batch check first; use the inbox for resolving the resulting exceptions.
+
 Repo layout:
 
 - `api/` — Node 22 ESM, Express, Prisma/PostgreSQL, Gemini extraction, ingestion/linking/quality engine
@@ -1084,6 +1094,29 @@ silence a quality check instead of fixing its semantics
 ```
 
 unless there is a documented, source-specific reason and a regression test that proves the intended behaviour.
+
+---
+
+# Self-correction engine
+
+A bounded, evidence-based self-correction engine exists at `api/src/modules/self-correction/` (design: `docs/CLAUDE_SELF_CORRECTING_ENGINE_IMPLEMENTATION.md`; the baseline it was built against: `docs/audits/self-correction-phase0-baseline-2026-09-30.md`). It detects specific, narrow pipeline defects, proposes a typed repair, and — only for explicitly allowlisted policies in `auto` mode — applies it reversibly under the pipeline lease, with a snapshot and postcondition checks.
+
+It is **off by default** (`SELF_CORRECTION_MODE=off`) and must stay off in the real `.env` unless the user explicitly asks to turn it on. Do not change `SELF_CORRECTION_MODE` or `SELF_CORRECTION_POLICIES`, and do not run `self-correct.js --apply` or `--shadow` against production data, without the user's explicit authorization for that run — applying is a real, though reversible and lease-fenced, live mutation.
+
+When checking the latest posts or investigating a flagged post, before hand-writing a one-off fix, check whether the engine already covers it:
+
+```bash
+node scripts/self-correct.js --preview --post=<externalId>   # read-only, provider-free; shows what it would propose, if anything
+```
+
+Two deterministic, no-AI policies currently exist:
+
+- `disposition-layout-repair` — a stored decision no longer matches the current reading.
+- `quote-restoration` — an unresolved restoration that quotes exactly one compatible earlier incident.
+
+If `--preview` shows a proposal matching the case under investigation, prefer it over a hand-written correction (same "prefer a general mechanism fix" rule as the rest of this file) — but only apply it with the user's authorization, following the normal shadow-then-apply flow in `README.md`. Everything else in the action union (`JOIN_FAULT`, `SPLIT_FAULT`, reading revisions, lesson-based continuations) stays proposal/review-only in this release; it does not yet apply automatically, so continue following the "fixing an engine bug" / "fixing bad data" workflow above for those.
+
+`node scripts/correction-lessons.js --import-existing` (preview by default; needs `--apply` to write) reads every existing `LinkOverride` as a candidate reusable lesson. Nothing is promoted to `ACTIVE` without a separate, explicit `--promote` step, and nothing here is ever auto-promoted.
 
 ---
 

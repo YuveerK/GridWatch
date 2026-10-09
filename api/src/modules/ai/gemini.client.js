@@ -11,10 +11,12 @@ const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 // Every call is counted, so a run can say exactly what it cost.
 export const aiUsage = { calls: 0, inputTokens: 0, outputTokens: 0 };
 
-export async function generateJson({ systemInstruction, parts, jsonSchema, hasImages, signal, purpose = 'extraction' }) {
+export async function generateJson({ systemInstruction, parts, jsonSchema, hasImages, signal, purpose = 'extraction', budget }) {
   if (process.env.GRIDWATCH_NO_AI === '1') throw new Error('AI calls are disabled (GRIDWATCH_NO_AI=1)');
   if (process.env.GRIDWATCH_AI_ONLY && process.env.GRIDWATCH_AI_ONLY !== purpose) throw new Error(`AI calls for ${purpose} are not allowed in this run (GRIDWATCH_AI_ONLY=${process.env.GRIDWATCH_AI_ONLY})`);
   if (process.env.GRIDWATCH_AI_MAX_CALLS && aiUsage.calls >= Number(process.env.GRIDWATCH_AI_MAX_CALLS)) throw new Error('AI call limit reached for this run');
+  if (budget && (budget.calls >= budget.maxCalls || budget.purpose && budget.purpose !== purpose)) throw new Error('AI request budget exhausted or purpose not allowed');
+  if (budget) budget.calls++;
   aiUsage.calls += 1;
   // every call has a deadline (AI_TIMEOUT_MS) and stops early when the caller's signal aborts (lease lost, shutdown)
   const abortSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(env.AI_TIMEOUT_MS)]) : AbortSignal.timeout(env.AI_TIMEOUT_MS);

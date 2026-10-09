@@ -6,11 +6,12 @@ import { loadReductionFaults, mergeSameStationFaults } from '../ai/readers/elect
 import { isUnsplitWaterBoard, waterFaultItems } from '../ai/readers/water.reader.js';
 import { unsupportedService } from '../ai/service-fit.js';
 import { LeaseLostError, assertLeaseInTx, exclusive, recoverStaleWork } from '../coordination/lease.js';
-import { learnFromExtraction, qualifyExtensionLocalities, removeContributions } from '../infrastructure/infrastructure.service.js';
+import { correctBareAreaHeadings, learnFromExtraction, qualifyExtensionLocalities, removeContributions } from '../infrastructure/infrastructure.service.js';
 import { readingRevision } from '../../lib/reading-revision.js';
 import { MAX_RETRY_ATTEMPTS, nextRetryAt } from '../../lib/retry.js';
 import { linkPost, markQuietOutagesStale, recordDecision } from '../outages/linker.service.js';
 import { refoldOutage } from '../outages/outage-state.js';
+import { humanFaultItems } from '../review/effective-reading.js';
 import { markRestoredPlaces } from '../../lib/restored-places.js';
 
 const STATUS_BY_RELEVANCE = {
@@ -72,6 +73,8 @@ function asFaultItem(extraction, fault, faultIndex) {
 }
 
 export function faultItems(extraction) {
+  const human = humanFaultItems(extraction);
+  if (human) return human;
   const reduction = loadReductionFaults(extraction.result);
   if (reduction) return reduction.map((fault, faultIndex) => asFaultItem(extraction, fault, faultIndex));
   const only = extraction.result.faults?.length === 1 ? extraction.result.faults[0] : null;
@@ -85,7 +88,7 @@ export function faultItems(extraction) {
 }
 
 /** Everything the post ends up as, from its per-fault decisions: review work is never hidden behind a linked sibling. */
-function finalStatus(items, decisions, extraction) {
+export function finalStatus(items, decisions, extraction) {
   // a single item carries the post's effective relevance (a water status board with nothing wrong is a notice, whatever the reading said)
   if (items.length === 1) extraction = items[0].extraction;
   const byIndex = new Map(decisions.map((d) => [d.faultIndex, d]));
@@ -94,6 +97,7 @@ function finalStatus(items, decisions, extraction) {
   const harmless = items.length === 1 && /no infrastructure or locality/.test(byIndex.get(0)?.reason ?? '') && ['PLANNED_OUTAGE', 'UPDATE', 'RESTORATION'].includes(extraction.relevance);
   if (harmless) return 'GENERAL_NOTICE';
   if (review.length) return 'NEEDS_REVIEW';
+  if (items.length > 1 && items.every((i) => ['GENERAL_NOTICE','IRRELEVANT'].includes(i.extraction.relevance))) return items.some((i) => i.extraction.relevance === 'GENERAL_NOTICE') ? 'GENERAL_NOTICE' : 'IRRELEVANT';
   return items.length > 1 ? 'RELEVANT' : STATUS_BY_RELEVANCE[extraction.relevance];
 }
 
@@ -101,13 +105,13 @@ async function decisionsOf(postId) {
   return prisma.linkDecision.findMany({ where: { postId }, orderBy: { faultIndex: 'asc' } });
 }
 
-async function processLocked(postId, ctx, { force = false, repairOutageIds = [], reading = null } = {}) {
+async function processLocked(postId, ctx, { force = false, repairOutageIds = [], reading = null, onlyFaultIndices = null } = {}) {
   ctx?.assertHeld();
-  const postRow = await prisma.sourcePost.findUniqueOrThrow({ where: { id: postId } });
+  const postRow = await prisma.sourcePost.findUniqueOrThrow({ where: { id: postId },include: { readingOverride: true, PostMedia: true } });
   await prisma.sourcePost.update({ where: { id: postId }, data: { processingStatus: 'PROCESSING', processingStartedAt: new Date() } });
   try {
     // Replies to individual customers ("@user Hi, ...") carry no outage identity of their own.
-    if (/^\s*@\w+/.test(postRow.noteTweetText || postRow.text)) {
+    if (!postRow.readingOverride && /^\s*@\w+/.test(postRow.noteTweetText || postRow.text)) {
       await recordDecision(ctx, { id: postId, faultIndex: 0 }, { outcome: 'NEW', reason: 'customer reply, skipped' });
       await setStatus(postId, 'IRRELEVANT');
       return { postId, outcome: 'SKIPPED_REPLY' };
@@ -117,7 +121,7 @@ async function processLocked(postId, ctx, { force = false, repairOutageIds = [],
     // which reading this is (taken from what was stored, before the free corrections below), recorded on every effect built from it
     const revision = readingRevision(extraction.result);
     // "restored to X" in the post's own words settles X, whatever the reading listed (free, deterministic)
-    if (extraction.result) extraction.result = markRestoredPlaces(extraction.result, postRow.noteTweetText || postRow.text);
+    if (extraction.result && !extraction.human) extraction.result = markRestoredPlaces(extraction.result, postRow.noteTweetText || postRow.text);
     if (extraction.status !== 'SUCCEEDED') {
       await setStatus(postId, extraction.status === 'FAILED' ? 'PROCESSING_ERROR' : 'NEEDS_REVIEW');
       return { postId, outcome: extraction.status };
@@ -125,26 +129,29 @@ async function processLocked(postId, ctx, { force = false, repairOutageIds = [],
     const account = await accountFor(postRow.sourceAccount);
     const municipalityId = account.municipalityId ?? null;
     const serviceType = postRow.serviceType ?? account.serviceType ?? 'ELECTRICITY';
-    if (serviceType === 'ELECTRICITY') extraction.result = await qualifyExtensionLocalities(extraction.result, postRow.noteTweetText || postRow.text, municipalityId);
-    if (serviceType === 'WATER') await ensureWaterSummaries(postId, extraction.result);
+    if (serviceType === 'ELECTRICITY' && !extraction.human) {
+      extraction.result = await qualifyExtensionLocalities(extraction.result, postRow.noteTweetText || postRow.text, municipalityId);
+      extraction.result = await correctBareAreaHeadings(extraction.result, municipalityId);
+    }
+    if (serviceType === 'WATER' && !extraction.human) await ensureWaterSummaries(postId, extraction.result);
     // a reply in a thread is judged with the thread's first post (Tshwane's "1/3 #WaterSupplyUpdate..." then "2/3 ...")
     const head = postRow.conversationId && postRow.conversationId !== postRow.externalId
       ? await prisma.sourcePost.findFirst({ where: { externalId: postRow.conversationId, sourceAccount: postRow.sourceAccount }, select: { text: true, noteTweetText: true } })
       : null;
     const other = unsupportedService({ serviceType, text: postRow.noteTweetText || postRow.text, result: extraction.result, threadText: head ? head.noteTweetText || head.text : null });
-    if (other) {
+    if (other && !extraction.human) {
       await recordDecision(ctx, { id: postId, faultIndex: 0 }, { outcome: 'NEW', reason: `unsupported service: ${other} content on an ${serviceType} account` });
       await setStatus(postId, 'IRRELEVANT');
       return { postId, outcome: 'UNSUPPORTED_SERVICE' };
     }
-    if (serviceType === 'WATER' && isUnsplitWaterBoard(extraction.result)) {
+    if (serviceType === 'WATER' && !extraction.human && isUnsplitWaterBoard(extraction.result)) {
       await recordDecision(ctx, { id: postId, faultIndex: 0 }, { outcome: 'NEW', reason: 'system status board: several assets without per-asset faults' });
       await setStatus(postId, 'GENERAL_NOTICE');
       return { postId, outcome: 'SYSTEM_STATUS_BOARD' };
     }
     const items = serviceType === 'WATER' ? waterFaultItems(extraction) : faultItems(extraction);
     const have = new Set((await decisionsOf(postId)).map((d) => d.faultIndex));
-    const todo = items.filter((it) => !have.has(it.faultIndex));
+    const todo = items.filter((it) => !have.has(it.faultIndex) && (!onlyFaultIndices || onlyFaultIndices.includes(it.faultIndex)));
     if (!todo.length) {
       await setStatus(postId, finalStatus(items, await decisionsOf(postId), extraction));
       return { postId, outcome: 'ALREADY_LINKED' };
@@ -286,9 +293,10 @@ export async function processPending({ limit, onPost, onStart, from, to, ctx, sw
     }
     // `remaining` keeps its old meaning (every post still pending, held-back or not); `held` breaks out how much of that is
     // deliberately paused for ordering rather than actually stuck.
+    const deferred = take === 0 ? { tried: 0,fixed: 0 } : await retryHumanAnchors({ ctx: held,limit: Math.min(take ?? 20,20),heldAccounts,sourceAccount,serviceType,from,to });
     const remaining = await prisma.sourcePost.count({ where: baseWhere });
     const heldCount = heldAccounts.length ? await prisma.sourcePost.count({ where: { AND: [baseWhere, { sourceAccount: { in: heldAccounts } }] } }) : 0;
-    return { total: posts.length, attempted: done, tally, remaining, held: heldCount };
+    return { total: posts.length, attempted: done, tally, remaining, held: heldCount,deferred };
   });
   return outcome.acquired ? outcome.value : { skipped: true, total: 0, attempted: 0, tally: {}, remaining: null, held: null };
 }
@@ -387,7 +395,9 @@ export async function reprocessPost(postId, { ctx, reextract = false } = {}) {
     const repairOutageIds = Object.entries(touched).filter(([, v]) => v !== 'deleted').map(([id]) => id);
     const res = await processLocked(postId, held, { force: false, repairOutageIds, reading });
     const { reconcileReviewItems } = await import('../review/review.service.js');
+    const { reconcileCases } = await import('../review/cases.js');
     const review = await reconcileReviewItems({ prisma, postIds: [postId] });
+    await reconcileCases({ prisma }).catch((err) => logger.warn({ err: err.message },'case indexing failed; live fallback remains visible'));
     return { ...res, reprocessed: true, outagesRecomputed: Object.keys(touched).length, outagesDeleted: Object.values(touched).filter((v) => v === 'deleted').length, reviewResolved: review.resolved };
   });
   return outcome.acquired ? outcome.value : { postId, outcome: 'BUSY' };
@@ -398,11 +408,13 @@ export async function reprocessPost(postId, { ctx, reextract = false } = {}) {
 async function adoptLegacyEvidence(postId, ctx) {
   if (await prisma.evidenceContribution.findFirst({ where: { postId }, select: { postId: true } })) return;
   if (!(await prisma.linkDecision.findFirst({ where: { postId }, select: { id: true } }))) return;
-  const [row, extraction] = await Promise.all([
-    prisma.sourcePost.findUniqueOrThrow({ where: { id: postId }, select: { publishedAt: true, sourceAccount: true, serviceType: true } }),
-    prisma.postExtraction.findFirst({ where: { postId, status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' } }),
+  const [row] = await Promise.all([
+    prisma.sourcePost.findUniqueOrThrow({ where: { id: postId }, include: { readingOverride: true, PostMedia: true,extractions: { orderBy: { createdAt: 'desc' } } } }),
+    Promise.resolve(null),
   ]);
-  if (!extraction) return;
+  const { acceptedExtraction } = await import('./quality.js');
+  const extraction = acceptedExtraction(row);
+  if (!extraction?.result) return;
   const account = await accountFor(row.sourceAccount);
   const serviceType = row.serviceType ?? account.serviceType ?? 'ELECTRICITY';
   const items = serviceType === 'WATER' ? waterFaultItems(extraction) : faultItems(extraction);
@@ -434,4 +446,26 @@ export async function resetLearnedState({ ctx } = {}) {
     }),
   );
   if (!outcome.acquired) throw new Error('another worker holds the pipeline lease; try again when it has finished');
+}
+
+/** Provider-free completion of a human join whose later chronological anchor has now appeared. */
+export async function retryHumanAnchors({ ctx,limit = 20,heldAccounts = [],sourceAccount,serviceType,from,to } = {}) {
+  const outcome = await exclusive(ctx,async (lease) => {
+    const overrides = await prisma.linkOverride.findMany({ where: { action: 'JOIN',post: { processingStatus: 'NEEDS_REVIEW',...(sourceAccount ? { sourceAccount } : {}),...(serviceType ? { serviceType } : {}),...(from || to ? { publishedAt: { ...(from ? { gte: from } : {}),...(to ? { lt: to } : {}) } } : {}) } },take: limit,include: { post: { include: { readingOverride: true, PostMedia: true,extractions: { orderBy: { createdAt: 'desc' } } } } } });
+    const { acceptedExtraction } = await import('./quality.js');
+    const { resolveOverride } = await import('../outages/overrides.js');
+    let tried = 0,fixed = 0;
+    for (const o of overrides) {
+      if (heldAccounts.includes(o.post.sourceAccount)) continue;
+      const d = await prisma.linkDecision.findUnique({ where: { postId_faultIndex: { postId: o.postId,faultIndex: o.faultIndex } } });
+      const e = acceptedExtraction(o.post);
+      if (d?.outcome !== 'NEEDS_REVIEW' || !/human join anchor/.test(d.reason ?? '') || !e?.result || (await resolveOverride(o.postId,o.faultIndex)).action !== 'JOIN') continue;
+      await prisma.$transaction(async (tx) => { await assertLeaseInTx(tx,lease);await tx.linkDecision.delete({ where: { postId_faultIndex: { postId: o.postId,faultIndex: o.faultIndex } } }); });
+      tried++;
+      const r = await processLocked(o.postId,lease,{ reading: e,onlyFaultIndices: [o.faultIndex] });
+      if (r.outcome !== 'ERROR' && (await prisma.linkDecision.findUnique({ where: { postId_faultIndex: { postId: o.postId,faultIndex: o.faultIndex } } }))?.outageId) fixed++;
+    }
+    return { tried,fixed };
+  });
+  return outcome.acquired ? outcome.value : { tried: 0,fixed: 0,skipped: true };
 }

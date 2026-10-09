@@ -10,6 +10,8 @@ import { EmptyState } from './components/ui.jsx';
 import { useTheme } from './lib/hooks.js';
 import { useMunicipality, useUtility } from './lib/municipality.jsx';
 import { useRefresh } from './lib/refresh.js';
+import { useApi } from './lib/api.js';
+import Review from './views/Review.jsx';
 import About from './views/About.jsx';
 import Activity from './views/Activity.jsx';
 import Insights from './views/Insights.jsx';
@@ -32,12 +34,12 @@ const NAV = [
 ];
 
 /** A main-menu link. Planned work is a tab of the incident list, so "Outages" stays highlighted on /planned too. */
-function NavItem({ to, label, icon, end, water }) {
+function NavItem({ to, label, icon, end, water, count }) {
   const { pathname } = useLocation();
   const alsoActive = to === '/outages' && pathname === '/planned';
   return (
     <NavLink to={to} end={end} className={({ isActive }) => (isActive || alsoActive ? 'active' : undefined)}>
-      <Icon name={icon} />{to === '/outages' && water ? 'Incidents' : label}
+      <Icon name={icon} />{to === '/outages' && water ? 'Incidents' : label}{count != null && <span className="review-nav-count" aria-label={`${count} actionable issues`}>{count}</span>}
     </NavLink>
   );
 }
@@ -80,11 +82,15 @@ function SearchOverlay({ onClose }) {
 }
 
 export default function Root() {
+  const operatorSession = useRefresh();
+  const reviewSummary = useApi(operatorSession.operator ? '/admin/review-cases/summary' : null,{ refreshMs: 60000, keepPrevious: false });
+  const navigation = operatorSession.operator ? [...NAV,['/review','Needs review','alert']] : NAV;
   const { dark, toggle } = useTheme();
   const { accounts } = useUtility();
   const { service } = useMunicipality();
   const [searching, setSearching] = useState(false);
   const { pathname } = useLocation();
+  const reviewing = pathname === '/review' || pathname.startsWith('/review/');
 
   useEffect(() => {
     const onKey = (e) => {
@@ -111,7 +117,7 @@ export default function Root() {
             <span className="wordmark">GridWatch<i aria-hidden="true" /></span>
           </Link>
           <nav className="nav" aria-label="Main">
-            {NAV.map(([to, label, icon, end]) => <NavItem key={to} to={to} label={label} icon={icon} end={end} water={service === 'WATER'} />)}
+            {navigation.map(([to, label, icon, end]) => <NavItem key={to} to={to} label={label} icon={icon} end={end} water={service === 'WATER'} count={to === '/review' ? reviewSummary.data?.actionable ?? (reviewSummary.data ? reviewSummary.data.counts.decision+reviewSummary.data.counts.engineering : null) : null} />)}
           </nav>
           <div className="header-actions">
             <ServiceSwitcher />
@@ -128,8 +134,8 @@ export default function Root() {
       </header>
 
       <main id="main">
-        <ErrorBoundary resetKey={`${pathname}:${service}`}>
-        <Routes key={service}>
+        <ErrorBoundary resetKey={`${pathname}:${reviewing ? 'review' : service}`}>
+        <Routes key={reviewing ? 'review' : service}>
           <Route path="/" element={<Overview />} />
           <Route path="/outages" element={<Outages />} />
           <Route path="/outages/:id" element={<OutageDetail />} />
@@ -141,6 +147,8 @@ export default function Root() {
           <Route path="/network" element={<Network />} />
           <Route path="/network/:id" element={<NodeDetail />} />
           <Route path="/about" element={<About />} />
+          <Route path="/review" element={<Review />} />
+          <Route path="/review/:caseId" element={<Review />} />
           <Route path="*" element={<div className="container page"><EmptyState icon="search" title="Page not found" action={<Link to="/" className="btn primary">Back to the overview</Link>}>That page doesn't exist.</EmptyState></div>} />
         </Routes>
         </ErrorBoundary>
@@ -159,8 +167,8 @@ export default function Root() {
         </div>
       </footer>
 
-      <nav className="mobile-nav" aria-label="Main">
-        {NAV.map(([to, label, icon, end]) => <NavItem key={to} to={to} label={label} icon={icon} end={end} water={service === 'WATER'} />)}
+      <nav className="mobile-nav" aria-label="Main" style={operatorSession.operator ? { gridTemplateColumns: 'repeat(6,minmax(0,1fr))' } : undefined}>
+        {navigation.map(([to, label, icon, end]) => <NavItem key={to} to={to} label={label} icon={icon} end={end} water={service === 'WATER'} count={to === '/review' ? reviewSummary.data?.actionable ?? (reviewSummary.data ? reviewSummary.data.counts.decision+reviewSummary.data.counts.engineering : null) : null} />)}
       </nav>
 
       {searching && <SearchOverlay onClose={() => setSearching(false)} />}

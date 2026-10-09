@@ -7,6 +7,23 @@ const SPECIFIC = new Set(['DISTRIBUTOR', 'FEEDER', 'MINI_SUBSTATION']);
 const PARENT = new Set(['SUBSTATION', 'SWITCHING_STATION']);
 const tokensOf = (name) => String(name ?? '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 
+/** Exact named customer sites are evidence even when they are not suburbs.
+ * Old effects did not keep names: use the stored reading of that specific fault,
+ * never another fault of a mixed graphic, nor future news. */
+export function customerSitesOnIncident(post, candidate, normalize) {
+  const wanted = post.customerSites ?? new Set();
+  const found = new Set();
+  for (const entry of candidate.raw?.posts ?? []) {
+    if (entry.postId === post.id || new Date(entry.postedAt) > post.postedAt) continue;
+    const reading = entry.post?.extractions?.[0]?.result;
+    const fault = entry.effect?.splitFault ? reading?.faults?.[entry.faultIndex ?? 0] : reading;
+    const named = (entry.effect?.headlineLocalities ?? []).filter((l) => l.name);
+    const names = (named.length ? named : fault?.localities ?? []).map((l) => l.name).filter(Boolean);
+    for (const site of wanted) if (names.some((name) => normalize(name) === site)) found.add(site);
+  }
+  return found;
+}
+
 /** "Northcliff" on a morning graphic is the overnight "Northcliff Ring Main Unit", not a second distributor. */
 function looserSpecificName(post, outage) {
   const specific = (nodes) => (nodes ?? []).filter((n) => SPECIFIC.has(n.type) && n.name);
@@ -112,6 +129,12 @@ export function scoreCandidate(post, outage) {
   }
 
   const ageH = Math.max(0, (post.postedAt - outage.lastUpdateAt) / HOUR);
+  const sharedSites = intersect(post.customerSites ?? new Set(), outage.customerSites ?? new Set());
+  if (sharedSites.length && sharedNodes.length && !separated && !outage.digest &&
+      ['UPDATE', 'RESTORATION'].includes(post.relevance) && ageH <= 18) {
+    score += 0.4;
+    reasons.push('same named customer site and equipment');
+  }
   // An update that names no equipment, and whose suburbs are exactly the live incident's suburbs, is that incident
   // continuing. The reverse is a restoration that names the station for an incident opened with suburbs only.
   // One suburb is enough when the open incident named no equipment: "aware of an outage in Eagle Canyon",
@@ -127,6 +150,23 @@ export function scoreCandidate(post, outage) {
   const continuesBareArea = post.nodeIds.size === 0 && outage.nodeIds.size === 0 && outage.localityIds.size >= 1 && sharedLocalities.length === outage.localityIds.size && extraSuburbs >= 1 && extraSuburbs <= 2;
   const differentSdc = post.sdcName && outage.sdcName && squash(post.sdcName) !== squash(outage.sdcName);
   const restorationOfSameSuburbs = post.relevance === 'RESTORATION' && outage.nodeIds.size === 0 && sameSuburbSet && ageH <= 12;
+
+  // An area-only investigation later identifies its distributor: Corlett Gardens
+  // and Lyndhurst, then "Lyndhurst distributor, 98% restored, Corlett Gardens".
+  // Require both independent area clues, a same-SDC partial/full restoration,
+  // and a short interval. Equipment names are scoring evidence, never impact.
+  const identifiedAreas = new Set([...post.localityIds, ...(post.equipmentLocalityIds ?? [])]);
+  const areaFaultIdentified = outage.nodeIds.size === 0 && !outage.digest && !post.fromDigest &&
+    outage.status === 'ACTIVE' && outage.localityIds.size >= 2 && outage.localityIds.size <= 3 &&
+    sharedLocalities.length > 0 && intersect(post.equipmentLocalityIds ?? new Set(), outage.localityIds).length > 0 &&
+    [...outage.localityIds].every((id) => identifiedAreas.has(id)) &&
+    post.sdcName && outage.sdcName && !differentSdc && ageH <= 6 &&
+    post.postedAt >= outage.lastUpdateAt && ['UPDATE', 'RESTORATION'].includes(post.relevance) &&
+    ['PARTIALLY_RESTORED', 'RESTORED'].includes(post.status);
+  if (areaFaultIdentified) {
+    score += 0.4;
+    reasons.push('restoration identifies the area-only fault by distributor and suburb');
+  }
 
   if (post.sdcName && outage.sdcName && squash(post.sdcName) === squash(outage.sdcName)) score += 0.05;
   else if (differentSdc && !sharedNodes.length && !restorationOfSameSuburbs) {

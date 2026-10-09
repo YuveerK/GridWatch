@@ -2,6 +2,7 @@ import { readingRevision } from '../../lib/reading-revision.js';
 import { env } from '../../config/env.js';
 import { readerFor } from '../ai/reader-registry.js';
 import { waterFaultItems } from '../ai/readers/water.reader.js';
+import { effectiveExtraction } from '../review/effective-reading.js';
 
 // Checks that say whether the engine's WORK is complete and consistent, not just that it ran. Pure functions over rows already read
 // from the database, so each rule can be tested on its own and the scripts (npm run batch, npm run audit) stay thin.
@@ -84,7 +85,7 @@ export function effectReadingMismatch(effect, currentResult) {
 /** Each service stores accepted readings under its own prompt version and fault layout. */
 export function acceptedExtraction(post, electricityVersion = env.AI_PROMPT_VERSION) {
   const version = readerFor(post.serviceType ?? 'ELECTRICITY').promptVersion ?? electricityVersion;
-  return post.extractions?.find((e) => e.promptVersion === version && e.status === 'SUCCEEDED') ?? null;
+  return effectiveExtraction(post, post.extractions?.find((e) => e.promptVersion === version && e.status === 'SUCCEEDED') ?? null);
 }
 
 export function readingFaultItems(post, extraction, electricityFaultItems) {
@@ -171,15 +172,15 @@ export async function failCycleQuality({ prisma, qualityId, error, stage, now = 
   return { id: qualityId, status: 'FAILED', summary, problems: [] };
 }
 
-export async function assessCycle({ prisma, faultItems, promptVersion, trigger, startedAt, qualityId = null, ingestionRunId = null, ingestion = null, tally = {}, backlog = 0, incomplete = [], error = null, now = new Date() }) {
+export async function assessCycle({ prisma, faultItems, promptVersion, trigger, startedAt, qualityId = null, ingestionRunId = null, ingestion = null, tally = {}, backlog = 0, incomplete = [], error = null, now = new Date(), selfCorrection = null, postIds = null, sourceChecks = null }) {
   const problems = [];
-  const coveredIds = await coveredPostIds(prisma, { startedAt, ingestionRunId });
+  const coveredIds = postIds ?? await coveredPostIds(prisma, { startedAt, ingestionRunId });
 
   const rows = await prisma.sourcePost.findMany({
     where: { id: { in: coveredIds } },
     orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }],
     select: {
-      id: true, externalId: true, serviceType: true, processingStatus: true, text: true, noteTweetText: true,
+      id: true, externalId: true, sourceAccount: true, serviceType: true, processingStatus: true, text: true, noteTweetText: true, readingOverride: true, PostMedia: true,
       extractions: { where: { status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' } },
       linkDecisions: { select: { faultIndex: true, outcome: true, outageId: true, reason: true } },
       outagePosts: { select: { faultIndex: true, outageId: true, effect: true } },
@@ -204,7 +205,7 @@ export async function assessCycle({ prisma, faultItems, promptVersion, trigger, 
     if (e?.result) for (const op of x.outagePosts) if (effectReadingMismatch(op.effect, e.result)) problems.push({ kind: 'STALE_EFFECT', postId: x.id, externalId: x.externalId, message: `the outage entry for fault ${op.faultIndex} was built from a different reading than the current one` });
     if (['NEEDS_REVIEW', 'PROCESSING_ERROR', 'UNPROCESSED'].includes(x.processingStatus)) problems.push({ kind: 'POST_STATE', postId: x.id, externalId: x.externalId, message: `the post is ${x.processingStatus}` });
     posts.push({
-      postId: x.id, externalId: x.externalId, status: x.processingStatus,
+      postId: x.id, externalId: x.externalId, sourceAccount: x.sourceAccount, status: x.processingStatus,
       revision: e?.result ? readingRevision(e.result) : null, // which reading the dispositions below were made from
       faults: expectedIndices.map((i) => ({ faultIndex: i, outcome: x.linkDecisions.find((d) => d.faultIndex === i)?.outcome ?? null, outageId: x.linkDecisions.find((d) => d.faultIndex === i)?.outageId ?? null })),
     });
@@ -227,11 +228,11 @@ export async function assessCycle({ prisma, faultItems, promptVersion, trigger, 
   const ingestionIncomplete = Boolean(ingestion?.incomplete) || ingestion?.status === 'RATE_LIMITED' || ingestion?.status === 'FAILED';
   const status = decideStatus({ error, incomplete, backlog, ingestionIncomplete, stuck: stuck.length, problems: problems.length, needsReview, reviewOpen });
   const summary = {
-    posts: rows.length, expectedFaults, faultsWithDisposition: disposed, outagesChanged: changedOutageIds.length,
+    posts: rows.length, expectedFaults, faultsWithDisposition: disposed, outagesChanged: postIds ? 0 : changedOutageIds.length, ...(postIds ? { outagesChecked: changedOutageIds.length } : {}),
     problems: problems.length, needsReview, reviewOpen, reviewSampled, backlog, stuck: stuck.length, incomplete, ingestionIncomplete,
-    tally, ...(error ? { error: String(error).slice(0, 300) } : {}),
+    tally, ...(sourceChecks ? { sourceChecks,checkMode: 'stored-evidence' } : {}), ...(selfCorrection ? { selfCorrection } : {}), ...(error ? { error: String(error).slice(0, 300) } : {}),
   };
-  const data = { trigger, status, startedAt, finishedAt: now, ingestionRunId, summary, problems: problems.slice(0, 200), posts, changedOutageIds };
+  const data = { trigger, status, startedAt, finishedAt: now, ingestionRunId, summary, problems: problems.slice(0, 200), posts, changedOutageIds: postIds ? [] : changedOutageIds };
   const saved = qualityId ? await prisma.cycleQuality.update({ where: { id: qualityId }, data }) : await prisma.cycleQuality.create({ data });
   return { id: saved.id, status, summary, problems };
 }

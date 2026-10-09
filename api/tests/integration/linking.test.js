@@ -71,6 +71,74 @@ beforeEach(async () => {
   n = 0;
 });
 
+describe('latest-post evidence regressions (1 October 2026)', () => {
+  it('identifies a recent area-only investigation when partial restoration names its distributor and remaining suburb', async () => {
+    const sdc = { sdc: 'Alexandra' };
+    await processPost(await addPost(0, 'A separate fault at Gresswold', reading('OUTAGE', 'INVESTIGATING', ['Gresswold'], { ...sdc, localities: [{ name: 'Kew', state: 'AFFECTED' }] })));
+    const main = await processPost(await addPost(30, 'Unplanned interruption in Corlett Gardens and Lyndhurst; operators investigating', reading('OUTAGE', 'INVESTIGATING', [], { ...sdc, localities: ['Corlett Gardens', 'Lyndhurst'].map((name) => ({ name, state: 'AFFECTED' })) })));
+    const partial = reading('UPDATE', 'PARTIALLY_RESTORED', [], { ...sdc, restoration_percent: 98,
+      entities: [{ name: 'Gresswold', type: 'SUBSTATION' }, { name: 'Lyndhurst', type: 'DISTRIBUTOR', parent_name: 'Gresswold' }],
+      localities: ['Corlett Gardens', 'Link', 'Drome'].map((name) => ({ name, state: 'AFFECTED' })),
+    });
+    const text = 'Gresswold Substation, Lyndhurst Distributor: Power supply restored to 98%. Repairs continue in Corlett Gardens, including Link and Drome streets.';
+    const update = await processPost(await addPost(186, text, partial));
+    const duplicate = await processPost(await addPost(187, text, partial));
+    expect(update).toMatchObject({ outcome: 'LINKED', outageId: main.outageId });
+    expect(duplicate).toMatchObject({ outcome: 'LINKED', outageId: main.outageId });
+    expect(await prisma.outage.count()).toBe(2);
+    expect(tieBreaks.calls).toBe(0);
+  });
+  it('retains a nine-station explicit cascade as one outage despite the depot heading', async () => {
+    const parent = 'Waltloo 132kV';
+    const entities = [{ type: 'SUBSTATION', name: 'Njala', parent_name: null }, { type: 'SUBSTATION', name: parent, parent_name: null },
+      ...['Brandwag', 'Propshaft', 'Nellmapius', 'Eersterust', 'Sigma (Ford)', 'Sefatanaga (Ford SEZ)', 'Feltex'].map((name) => ({ type: 'SUBSTATION', name, parent_name: parent }))];
+    const id = await addPost(0, '#PowerAlert: Region 6\nNjala Substation\nWaltloo 132kV Sub off affecting the following secondary substations:', reading('OUTAGE', 'INVESTIGATING', [], { entities }), { sourceAccount: 'CityTshwane' });
+    expect((await processPost(id)).outcome).toBe('NEW');
+    const rows = await outages();
+    expect(rows).toHaveLength(1);
+    expect(await prisma.outageNode.count({ where: { outageId: rows[0].id } })).toBe(9);
+    expect(await prisma.infraEdge.count({ where: { parent: { name: parent } } })).toBe(7);
+    expect(await prisma.linkDecision.count({ where: { outcome: 'NEEDS_REVIEW' } })).toBe(0);
+  });
+
+  it('keeps named-site repairs on their incident and never shares a generic faulty cable between stations', async () => {
+    const first = await addPost(0, 'Soweto Substation: double faults affecting UJ Soweto Campus.', reading('OUTAGE', 'REPAIRING', ['Soweto'], { localities: [{ name: 'UJ Soweto Campus', state: 'AFFECTED' }] }));
+    await processPost(first);
+    const other = await addPost(30, 'Allandale Substation: repairs to a faulty cable.', reading('OUTAGE', 'REPAIRING', [], { entities: [{ name: 'Allandale', type: 'SUBSTATION' }, { name: 'faulty cable', type: 'CABLE', parent_name: 'Allandale' }] }));
+    await processPost(other);
+    const pimville = await addPost(60, 'Soweto Substation: termination failure affecting Pimville Zone 9.', reading('OUTAGE', 'INVESTIGATING', ['Soweto']));
+    // Build the genuinely different same-station incident explicitly, rather
+    // than letting the mocked model collapse this test's setup.
+    await prisma.linkOverride.create({ data: { postId: pimville, faultIndex: 0, action: 'SPLIT', note: 'separate termination fault' } });
+    await processPost(pimville);
+    const update = await addPost(120, 'Soweto Substation: Repairs on the faulty cable affecting UJ Soweto Campus are underway.', reading('UPDATE', 'REPAIRING', [], { entities: [{ name: 'Soweto', type: 'SUBSTATION' }, { name: 'faulty cable', type: 'CABLE', parent_name: 'Soweto' }], localities: [{ name: 'UJ Soweto Campus', state: 'AFFECTED' }] }));
+    await processPost(update);
+    expect(await prisma.infraNode.count({ where: { name: 'faulty cable' } })).toBe(0);
+    const a = await prisma.outagePost.findFirst({ where: { postId: first } });
+    const b = await prisma.outagePost.findFirst({ where: { postId: update } });
+    expect(b.outageId).toBe(a.outageId);
+    expect((await outages())).toHaveLength(3);
+    expect(tieBreaks.calls).toBe(0);
+    expect(b.effect.headlineLocalities[0].name).toBe('UJ Soweto Campus');
+  });
+
+  it('corrects a known bare area heading before it can block its station-naming restoration', async () => {
+    await prisma.locality.create({ data: { id: 'freedom', canonicalName: 'Freedom Park South', normalizedName: 'freedom park south', active: true, updatedAt: T0 } });
+    resetLocalityIndex();
+    const first = await addPost(0, 'An outage affects Freedom Park South.', reading('OUTAGE', 'INVESTIGATING', [], { localities: [{ name: 'Freedom Park South', state: 'AFFECTED' }] }));
+    await processPost(first);
+    const digest = await addPost(360, 'SDC outage update.', reading('SDC_SUMMARY', 'REPAIRING', [], { image_text: 'ACTIVE OUTAGES:\n- Freedom Park South: Customers are affected by faulty jumpers.', faults: [fault('REPAIRING', ['Freedom Park South'], { cause: 'faulty jumpers', summary: 'Repairs have been conducted for faulty jumpers.' })] }));
+    await processPost(digest);
+    const restored = await addPost(420, 'Goldev Substation: Power is restored to customers in Freedom Park South.', reading('RESTORATION', 'RESTORED', ['Goldev'], { localities: [{ name: 'Freedom Park South', state: 'RESTORED' }], restoration_percent: 100 }));
+    await processPost(restored);
+    const rows = await outages();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe('RESTORED');
+    expect(rows[0].posts).toHaveLength(3);
+    expect(await prisma.infraNode.count({ where: { name: 'Freedom Park South' } })).toBe(0);
+  });
+});
+
 describe('A04: the decision commits with the change', () => {
   it('uses an explicit locality heading to attach a restoration of bare extension names', async () => {
     await prisma.locality.createMany({ data: ['Lenasia', 'Lenasia Extensions 3', 'Lenasia Extensions 5'].map((name, i) => ({ id: `len${i}`, canonicalName: name, normalizedName: name.toLowerCase().replace('extensions', 'ext'), active: true, updatedAt: T0 })) });

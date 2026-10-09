@@ -566,6 +566,46 @@
       "fb": 1,
       "same": true,
       "why": "restoration of the same Noordwyk investigation"
+    },
+    {
+      "a": "2105358537270382940",
+      "fa": 2,
+      "b": "2105349364520509654",
+      "fb": 0,
+      "same": true,
+      "why": "Midrand System Update thread - same 28 Sept Rand Water Palmiet cascading event as faults 0/1 of this same post"
+    },
+    {
+      "a": "2106389770712625295",
+      "fa": 0,
+      "b": "2106256758616551573",
+      "fb": 0,
+      "same": true,
+      "why": "Same Soshanguve IA/K/L 33/11kV trip (30 Sept - 3 Oct); restoration named the substations as bare IA/K/L with no shared InfraNode to the earlier Soshanguve/33kv-transformer-2 nodes, so it scored just under threshold (0.349) and opened a phantom separate record"
+    },
+    {
+      "a": "2106339379845464463",
+      "fa": 0,
+      "b": "2106256956260553206",
+      "fb": 0,
+      "same": true,
+      "why": "Quotes the original Northwold/Randburg burst-pipe notice explicitly (referenced_tweets), but this post's own text names no locality/asset, so it had nothing to link on. Only 1 example of this shape (no-info OUTAGE/UPDATE quoting a single resolvable post) exists in the whole history so far; the existing quote-fallback in linker.service.js is deliberately left RESTORATION-only until more examples justify widening it."
+    },
+    {
+      "a": "2106483324097093957",
+      "fa": 0,
+      "b": "2106446129067941948",
+      "fb": 0,
+      "same": true,
+      "why": "Same Reuven SDC fault: the Turffontein/Robertsons Deep outage opened 2h earlier with no equipment name; this post names the equipment (Wemmer) and continues the same still-open fault, but scored low because its own reading spelled the locality 'Robinsons Deep' against the anchor's 'Robertsons Deep' (two separate Locality rows for the same real place)"
+    },
+    {
+      "a": "2106661785398816832",
+      "fa": 0,
+      "b": "2106771230548476246",
+      "fb": 0,
+      "same": true,
+      "why": "Explicit press-release update on the already-known Central/Kazerne restoration (interconnected, same ETA Monday 5 Oct); the many named distributors (own sub-lines of this one incident) made it structurally look like an unrelated multi-fault digest, so the blanket digest rule discarded it before any tie-break could run. Only 1 example of this shape so far - correcting the data, not the digest rule."
     }
   ]
 }

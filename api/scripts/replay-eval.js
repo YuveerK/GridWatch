@@ -1,8 +1,8 @@
 // Replay the whole pipeline on a THROW-AWAY database and score it against the golden sets. Safe by construction:
 //   - the source database (DATABASE_URL) is only READ: posts, stored readings and geography are copied out of it;
 //   - everything else happens in a new database `gridwatch_replay_<time>` that is dropped at the end (--keep to inspect it);
-//   - GRIDWATCH_NO_AI=1 in the child processes: stored readings and cached tie-break verdicts are used, nothing is ever sent to the AI provider,
-//     and a tie-break that is not in the cache becomes NEEDS_REVIEW (counted in the report, not guessed);
+//   - by default GRIDWATCH_NO_AI=1: stored readings and cached verdicts only; an uncached tie-break becomes NEEDS_REVIEW;
+//     --tiebreaks explicitly enables capped provider calls for linking questions, never fresh post readings;
 //   - X is never contacted (no ingestion runs).
 //   node scripts/replay-eval.js [--keep]
 import { spawnSync } from 'node:child_process';
@@ -16,7 +16,7 @@ const require = createRequire(import.meta.url);
 const { PrismaClient } = require('@prisma/client');
 const API = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const keep = process.argv.includes('--keep');
-// --tiebreaks lets the replay pay for the small "same fault or not?" questions it has no cached answer for (never post readings; at most 80 calls).
+// --tiebreaks enables uncached linking questions, never post readings; default cap 80, configurable with GRIDWATCH_AI_MAX_CALLS.
 const tiebreaks = process.argv.includes('--tiebreaks');
 const source = process.env.DATABASE_URL;
 if (!source) throw new Error('DATABASE_URL is not set');
@@ -57,6 +57,10 @@ try {
   await copy('posts', await src.sourcePost.findMany({ orderBy: { publishedAt: 'asc' } }), (data) => dst.sourcePost.createMany({ data: data.map((p) => ({ ...p, processingStatus: 'UNPROCESSED', processingStartedAt: null, publicMetrics: p.publicMetrics ?? undefined, attachments: p.attachments ?? undefined, rawPayload: p.rawPayload ?? undefined })) }));
   await copy('post media', await src.postMedia.findMany(), (data) => dst.postMedia.createMany({ data }));
   await copy('stored readings', await src.postExtraction.findMany(), (data) => dst.postExtraction.createMany({ data: data.map((r) => ({ ...r, result: r.result ?? undefined })) }));
+  if (process.argv.includes('--with-human-decisions')) {
+    await copy('human reading overrides', await src.readingOverride.findMany(), (data) => dst.readingOverride.createMany({ data }));
+    await copy('human link overrides', await src.linkOverride.findMany(), (data) => dst.linkOverride.createMany({ data }));
+  }
   await src.$disconnect();
   await dst.$disconnect();
 
@@ -72,13 +76,17 @@ try {
   console.log('outages:', await db.outage.count());
   await db.$disconnect();
 
-  for (const file of ['links.json', 'holdout-0910.json', 'holdout-0911.json', 'holdout-0912.json', 'holdout-0914.json', 'holdout-0915.json', 'cases-0921.json']) {
+  for (const file of ['links.json', 'holdout-0910.json', 'holdout-0911.json', 'holdout-0912.json', 'holdout-0914.json', 'holdout-0915.json', 'cases-0921.json', 'cases-1001.json']) {
     const ev = run(['scripts/eval.js', `--file=${file}`]);
     console.log(`\n=== ${file} ===\n${ev.stdout.trim()}${ev.status ? `\n(exit ${ev.status}) ${ev.stderr.slice(0, 300)}` : ''}`);
   }
   // The stored manual corrections and final-state expectations, WITHOUT the manual overrides (a replay never copies them): what the engine gets right on its own.
   const pairs = run(['scripts/eval-pairs.js']);
-  console.log(`\n=== corrections and final state, without manual help ===\n${pairs.stdout.trim()}`);
+  console.log(`\n=== corrections and final state, ${process.argv.includes('--with-human-decisions') ? 'with saved human decisions' : 'without manual help'} ===\n${pairs.stdout.trim()}`);
+  const coverage = run(['scripts/eval-all.js']);
+  if (coverage.status !== 0) throw new Error(`coverage evaluation failed: ${coverage.stderr.slice(0, 500)}`);
+  const coverageLines = coverage.stdout.split('\n').filter((line) => /^(?:1\. READING|2\. COVERAGE|     (?:ELECTRICITY|WATER|Structural|DISPOSITION PROBLEMS))/.test(line));
+  console.log(`\n=== reading and disposition coverage ===\n${coverageLines.join('\n')}`);
 } finally {
   if (keep) console.log(`\nkept database ${name}`);
   else {

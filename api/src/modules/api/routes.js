@@ -121,17 +121,21 @@ async function decorate(outages) {
   if (!outages.length) return outages;
   await withLikelyAreas(outages);
   const ids = outages.map((o) => o.id);
-  const rows = await prisma.$queryRaw`
+  const [rows, counts] = await Promise.all([prisma.$queryRaw`
     SELECT DISTINCT ON (op."outageId") op."outageId" AS "outageId", op."postedAt" AS "postedAt", sp."createdAt" AS "ingestedAt", sp."externalId" AS "externalId", sp."sourceAccount" AS "account", ps."summary" AS "summary"
     FROM "OutagePost" op
     JOIN "SourcePost" sp ON sp."id" = op."postId"
     LEFT JOIN "PostSummary" ps ON ps."postId" = op."postId" AND ps."faultIndex" = op."faultIndex"
     WHERE op."outageId" IN (${Prisma.join(ids)})
-    ORDER BY op."outageId", op."postedAt" DESC`;
+    ORDER BY op."outageId", op."postedAt" DESC, op."postId", op."faultIndex"`,
+    prisma.$queryRaw`SELECT "outageId", COUNT(DISTINCT "postId")::int AS "count" FROM "OutagePost" WHERE "outageId" IN (${Prisma.join(ids)}) GROUP BY "outageId"`,
+  ]);
   const latest = new Map(rows.map((r) => [r.outageId, r]));
+  const postCounts = new Map(counts.map((r) => [r.outageId,r.count]));
 
   for (const o of outages) {
     const l = latest.get(o.id);
+    o.postCount = postCounts.get(o.id) ?? 0;
     o.latest = l ? { summary: l.summary, at: l.postedAt, ingestedAt: l.ingestedAt, url: postUrl(l.account, l.externalId) } : null;
     o.scheduled = scheduleView(o);
   }
@@ -154,7 +158,7 @@ const shapeOutage = (o) => ({
   restoredAt: o.restoredAt,
   retroactive: o.retroactive,
   municipality: o.Municipality ?? null,
-  postCount: o._count?.posts ?? null,
+  postCount: o.postCount ?? o._count?.posts ?? null,
   latest: o.latest ?? null,
   scheduled: o.scheduled ?? null,
   infrastructure: o.nodes?.map((n) => n.node),
@@ -231,9 +235,11 @@ router.get('/v1/outages/:id', wrap(async (req, res) => {
   res.json({
     ...shapeOutage(outage),
     sdcNode,
-    timeline: outage.posts.map((p) => ({
+    postCount: new Set(outage.posts.map((p) => p.postId)).size,
+    timeline: [...Map.groupBy(outage.posts,(p) => p.postId).values()].map((sections) => { const p = sections[0];return ({
       role: p.role,
-      summary: summaries.get(`${p.postId}|${p.faultIndex}`) ?? null,
+      summary: sections.map((p) => summaries.get(`${p.postId}|${p.faultIndex}`)).filter(Boolean).join(' ') || null,
+      sections: sections.map((p) => ({ faultIndex: p.faultIndex,role: p.role,summary: summaries.get(`${p.postId}|${p.faultIndex}`) ?? null,effect: p.effect })),
       postedAt: p.postedAt,
       score: p.score,
       reasons: p.reasons,
@@ -241,7 +247,7 @@ router.get('/v1/outages/:id', wrap(async (req, res) => {
       text: p.post.noteTweetText || p.post.text,
       imageText: p.post.extractions[0]?.imageText ?? null,
       images: p.post.PostMedia.map((m) => m.url),
-    })),
+    }); }),
   });
 }));
 
@@ -711,7 +717,7 @@ router.get('/v1/changes', wrap(async (req, res) => {
     FROM "LinkDecision" ld
     JOIN "Outage" o ON o."id" = ld."outageId"
     JOIN "SourcePost" sp ON sp."id" = ld."postId"
-    LEFT JOIN "OutagePost" op ON op."outageId" = ld."outageId" AND op."postId" = ld."postId"
+    LEFT JOIN "OutagePost" op ON op."outageId" = ld."outageId" AND op."postId" = ld."postId" AND op."faultIndex" = ld."faultIndex"
     LEFT JOIN "PostSummary" ps ON ps."postId" = ld."postId" AND ps."faultIndex" = ld."faultIndex"
     WHERE ld."createdAt" >= ${since.toISOString()}::timestamp AND ld."outageId" IS NOT NULL AND ${outageInMunicipalitySql(query.municipality)} AND ${outageInServiceSql(query.service)}
     ORDER BY sp."publishedAt" ASC, sp."externalId" ASC, ld."faultIndex" ASC

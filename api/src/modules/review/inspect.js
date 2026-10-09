@@ -17,6 +17,10 @@ export function formatReviewInspection(d) {
   say(`source text    ${d.text || '(none)'}`);
   say(`image text     ${d.imageText || '(none)'}`);
   say('');
+  if (d.missingSelectedFault) say('selected fault  missing from the accepted current reading');
+  for (const m of d.media ?? []) say(`source media   ${m.url}`);
+  for (const r of d.retries ?? []) say(`retry          ${r.kind}: ${r.attempts} attempts; next ${r.nextRetryAt}`);
+  for (const o of d.overrides ?? []) say(`human link     fault ${o.faultIndex}: ${o.action} ${o.anchorPostId ?? ''}`);
   const r = d.reading ?? {};
   say(`reading        ${r.relevance ?? '-'} / ${r.status ?? '-'}`);
   say(`fault index    ${d.faultIndex}`);

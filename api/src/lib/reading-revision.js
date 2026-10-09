@@ -43,6 +43,7 @@ export function readingRevision(result, { legacyWater = false } = {}) {
     localities: list(result.localities, place),
     faults: (result.faults ?? []).map((f) => fault(f, legacyWater)), // order matters: a fault's number is part of its identity
   };
+  if (result.__humanFaults) parts.humanFaults = result.__humanFaults.map((f) => ({ index: f.faultIndex, relevance: norm(f.relevance), ...fault({ ...f, equipment: f.entities }, legacyWater) }));
   if (!legacyWater && (result.water_state !== undefined || result.customer_supply !== undefined)) {
     parts.water = {
       state: norm(result.water_state), customerSupply: norm(result.customer_supply),

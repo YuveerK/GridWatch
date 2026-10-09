@@ -1,0 +1,165 @@
+{
+  "snapshot": "data/backups/repair-2026-10-01T15-19-12-736Z-latest-posts-20261001.json",
+  "changes": [
+    {
+      "externalId": "2105177888706162752",
+      "was": [
+        {
+          "faultIndex": 0,
+          "outageId": "cmumaeqj60018iyvwz0eq1urv",
+          "label": "Bushkoppies, Eldorado Park Extension 1 [PARTIALLY_RESTORED]"
+        },
+        {
+          "faultIndex": 1,
+          "outageId": "cmumpsvpl008biy8c0crh3dqs",
+          "label": "Soweto (UJ Soweto Campus) [ACTIVE]"
+        },
+        {
+          "faultIndex": 2,
+          "outageId": "cmunoyr45002tiyeoa1g1gz1o",
+          "label": "Lawley 2 [PARTIALLY_RESTORED]"
+        },
+        {
+          "faultIndex": 3,
+          "outageId": "cmumigqt4009ciyvwgwf4hojz",
+          "label": "Pimville Zone 9, Kliptown Golf course [ACTIVE]"
+        },
+        {
+          "faultIndex": 4,
+          "outageId": "cmunos4fz002miyeoe3wiceza",
+          "label": "Freedom Park South [ACTIVE]"
+        }
+      ],
+      "is": [
+        {
+          "faultIndex": 4,
+          "outageId": "cmunos4fz002miyeoe3wiceza",
+          "label": "Freedom Park South [RESTORED] (4 posts)"
+        },
+        {
+          "faultIndex": 0,
+          "outageId": "cmumaeqj60018iyvwz0eq1urv",
+          "label": "Bushkoppies, Eldorado Park Extension 1 [PARTIALLY_RESTORED] (13 posts)"
+        },
+        {
+          "faultIndex": 1,
+          "outageId": "cmumpsvpl008biy8c0crh3dqs",
+          "label": "Soweto (UJ Soweto Campus) [ACTIVE] (9 posts)"
+        },
+        {
+          "faultIndex": 2,
+          "outageId": "cmunoyr45002tiyeoa1g1gz1o",
+          "label": "Lawley 2 [PARTIALLY_RESTORED] (3 posts)"
+        },
+        {
+          "faultIndex": 3,
+          "outageId": "cmumigqt4009ciyvwgwf4hojz",
+          "label": "Pimville Zone 9, Kliptown Golf course [ACTIVE] (7 posts)"
+        }
+      ],
+      "changed": false
+    },
+    {
+      "externalId": "2105400598094922147",
+      "was": [
+        {
+          "faultIndex": 0,
+          "outageId": "cmuol4um80004iy7wl7c1bvrh",
+          "label": "Goldev (Freedom Park South) [RESTORED]"
+        }
+      ],
+      "is": [
+        {
+          "faultIndex": 0,
+          "outageId": "cmunos4fz002miyeoe3wiceza",
+          "label": "Freedom Park South [RESTORED] (4 posts)"
+        }
+      ],
+      "changed": true
+    },
+    {
+      "externalId": "2105302753501151468",
+      "was": [
+        {
+          "faultIndex": 0,
+          "outageId": "cmumaeqj60018iyvwz0eq1urv",
+          "label": "Bushkoppies, Eldorado Park Extension 1 [PARTIALLY_RESTORED]"
+        },
+        {
+          "faultIndex": 1,
+          "outageId": "cmumpsvpl008biy8c0crh3dqs",
+          "label": "Soweto (UJ Soweto Campus) [ACTIVE]"
+        },
+        {
+          "faultIndex": 2,
+          "outageId": "cmunoyr45002tiyeoa1g1gz1o",
+          "label": "Lawley 2 [PARTIALLY_RESTORED]"
+        },
+        {
+          "faultIndex": 3,
+          "outageId": "cmunos4fz002miyeoe3wiceza",
+          "label": "Freedom Park South [ACTIVE]"
+        }
+      ],
+      "is": [
+        {
+          "faultIndex": 0,
+          "outageId": "cmumaeqj60018iyvwz0eq1urv",
+          "label": "Bushkoppies, Eldorado Park Extension 1 [PARTIALLY_RESTORED] (13 posts)"
+        },
+        {
+          "faultIndex": 1,
+          "outageId": "cmumpsvpl008biy8c0crh3dqs",
+          "label": "Soweto (UJ Soweto Campus) [ACTIVE] (9 posts)"
+        },
+        {
+          "faultIndex": 2,
+          "outageId": "cmunoyr45002tiyeoa1g1gz1o",
+          "label": "Lawley 2 [PARTIALLY_RESTORED] (3 posts)"
+        },
+        {
+          "faultIndex": 3,
+          "outageId": "cmunos4fz002miyeoe3wiceza",
+          "label": "Freedom Park South [RESTORED] (4 posts)"
+        }
+      ],
+      "changed": false
+    },
+    {
+      "externalId": "2105578867507278264",
+      "was": [
+        {
+          "faultIndex": 0,
+          "outageId": "cmupadjup00asiy7wfpq4jk43",
+          "label": "Soweto (UJ Soweto Campus) [ACTIVE]"
+        }
+      ],
+      "is": [
+        {
+          "faultIndex": 0,
+          "outageId": "cmumpsvpl008biy8c0crh3dqs",
+          "label": "Soweto (UJ Soweto Campus) [ACTIVE] (9 posts)"
+        }
+      ],
+      "changed": true
+    },
+    {
+      "externalId": "2105591084688736699",
+      "was": [],
+      "is": [
+        {
+          "faultIndex": 0,
+          "outageId": "cmupojlo6000niyb4pblktato",
+          "label": "N4 Gateway Business Park, Part Nellmapius Ext 4 (Mavuso… [ACTIVE] (1 posts)"
+        }
+      ],
+      "changed": true
+    }
+  ],
+  "lifecycleChanges": {
+    "ELECTRICITY RESTORED -> CLOSED": 7,
+    "WATER ACTIVE -> STALE": 6,
+    "WATER RESTORED -> CLOSED": 1,
+    "ELECTRICITY ACTIVE -> STALE": 2
+  }
+}

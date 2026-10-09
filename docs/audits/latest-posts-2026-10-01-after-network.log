@@ -1,0 +1,135 @@
+copied 2 municipalities
+copied 3 source accounts
+copied 14 regions
+copied 2208 suburbs
+copied 18651 suburb aliases
+copied 3311 posts
+copied 3428 post media
+copied 3572 stored readings
+
+replay finished (exit 0):
+  held: 0
+} 0 fresh Gemini reads, 8.2 min
+AI CALLS 141 (in 118554 / out 10821 tokens)
+stderr: ◇ injected env (0) from .env
+
+link decisions: { NEEDS_REVIEW: 1, LINKED: 2617, NEW: 2006 } | needs review: 1 (uncached tie-breaks: 0)
+outages: 756
+
+=== links.json ===
+posts labelled: 105 (+0 non-outage), missing in DB: none
+pairwise precision 96.3%  recall 98.1%  F1 97.2%
+non-outage posts wrongly attached to an outage: 0/0
+
+WRONGLY MERGED (truth groups sharing an outage):
+  2× ennerdale_ext6_maint ~ lehae_phase1
+  2× northcliff_ext4 ~ roosevelt_risidale
+
+WRONGLY SPLIT (same truth, different outages):
+  1× vanbeek ~ vanbeek
+  1× constantia ~ constantia
+
+=== holdout-0910.json ===
+posts labelled: 69 (+0 non-outage), missing in DB: none
+pairwise precision 93.8%  recall 95.2%  F1 94.5%
+non-outage posts wrongly attached to an outage: 0/0
+
+WRONGLY MERGED (truth groups sharing an outage):
+  4× roosevelt_fairlands ~ roosevelt_northcliff_south
+
+WRONGLY SPLIT (same truth, different outages):
+  2× central_fire ~ central_fire
+  1× roosevelt_fairlands ~ roosevelt_fairlands
+
+=== holdout-0911.json ===
+posts labelled: 71 (+0 non-outage), missing in DB: none
+pairwise precision 95.8%  recall 98.6%  F1 97.2%
+non-outage posts wrongly attached to an outage: 0/0
+
+WRONGLY MERGED (truth groups sharing an outage):
+  3× lufhereng_am ~ lufhereng_pm
+
+WRONGLY SPLIT (same truth, different outages):
+  1× mulbarton_isolation ~ mulbarton_isolation
+
+=== holdout-0912.json ===
+posts labelled: 37 (+0 non-outage), missing in DB: none
+pairwise precision 100.0%  recall 88.5%  F1 93.9%
+non-outage posts wrongly attached to an outage: 0/0
+
+WRONGLY MERGED (truth groups sharing an outage):
+
+WRONGLY SPLIT (same truth, different outages):
+  3× central ~ central
+
+=== holdout-0914.json ===
+posts labelled: 56 (+0 non-outage), missing in DB: none
+pairwise precision 100.0%  recall 100.0%  F1 100.0%
+non-outage posts wrongly attached to an outage: 0/0
+
+WRONGLY MERGED (truth groups sharing an outage):
+
+WRONGLY SPLIT (same truth, different outages):
+
+=== holdout-0915.json ===
+posts labelled: 43 (+0 non-outage), missing in DB: none
+pairwise precision 100.0%  recall 100.0%  F1 100.0%
+non-outage posts wrongly attached to an outage: 0/0
+
+WRONGLY MERGED (truth groups sharing an outage):
+
+WRONGLY SPLIT (same truth, different outages):
+
+=== cases-0921.json ===
+posts labelled: 42 (+0 non-outage), missing in DB: none
+pairwise precision 100.0%  recall 99.1%  F1 99.5%
+non-outage posts wrongly attached to an outage: 0/0
+
+WRONGLY MERGED (truth groups sharing an outage):
+
+WRONGLY SPLIT (same truth, different outages):
+  1× dale_lace_vandalism ~ dale_lace_vandalism
+
+=== cases-1001.json ===
+posts labelled: 6 (+0 non-outage), missing in DB: none
+pairwise precision 100.0%  recall 100.0%  F1 100.0%
+non-outage posts wrongly attached to an outage: 0/0
+
+WRONGLY MERGED (truth groups sharing an outage):
+
+WRONGLY SPLIT (same truth, different outages):
+
+=== corrections and final state, without manual help ===
+CORRECTIONS: 50 of 77 hold
+  FAIL different 84243877 / 51707735: must be in different outages but share one  (Bree Street cable fault, separate from the John Ware fault)
+  FAIL same 38599210 / 26535305: should be in the same outage but are in different ones  (Central substation fire, partial restoration: same fault as the 11 Sept Central posts)
+  FAIL same 68840731 / 85512712: should be in the same outage but are in different ones  (Same Dale Lace Avenue vandalised mini-substation fault as 16 Sept, still waiting on procurement)
+  FAIL same 82242143 / 85512712: should be in the same outage but are in different ones  (Dale Lace Avenue vandalised mini-substation: the new unit has been delivered (same fault; the post names the street in its text))
+  FAIL different 84243877 / 51707735: must be in different outages but share one  (Bree Street cable fault, separate from the John Ware fault)
+  FAIL same 38599210 / 26535305: should be in the same outage but are in different ones  (Central substation fire, partial restoration: same fault as the 11 Sept Central posts)
+  FAIL same 68840731 / 85512712: should be in the same outage but are in different ones  (Same Dale Lace Avenue vandalised mini-substation fault as 16 Sept, still waiting on procurement)
+  FAIL same 82242143 / 85512712: should be in the same outage but are in different ones  (Dale Lace Avenue vandalised mini-substation: the new unit has been delivered (same fault; the post names the street in its text))
+  FAIL same 49210656 / 98352998: should be in the same outage but are in different ones  (13:26 Gresswold 'investigating loss of supply in Wynberg, parts of Kew' is the same new event as the 12:21 Wynberg interruption, not the 22 Sep Kew mini-substation fault (which was awaiting a replacement unit))
+  FAIL same 43472310 / 80194032: should be in the same outage but are in different ones  (98% restoration of the Lyndhurst distributor is the result of the Corlett Gardens and Lyndhurst investigation opened two hours earlier)
+  FAIL same 37416334 / 80194032: should be in the same outage but are in different ones  (duplicate of the Lyndhurst 98% post a minute earlier; same fault as the Corlett Gardens investigation)
+  FAIL same 86756353 / 67231706: should be in the same outage but are in different ones  (morning graphic line is the same Fleurhof outage crews could not attend overnight; the suburb was read as Fluerhof)
+  FAIL same 04418553 / 88629965: should be in the same outage but are in different ones  (Cottesmore distributor is not the Standard Bank No 2 distributor; they only share Khanyisa.)
+  FAIL same 40268353 / 47022691: should be in the same outage but are in different ones  (Ferndale 23 Sept: the Hurley/Surrey full restoration repeats the Bond Street/Pine Avenue third-party cable damage report (one suburb shared; the report named no equipment))
+  FAIL same 98204016 / 45690302: should be in the same outage but are in different ones  (Booysens Reserve 22 Sept: the Robertsham/Frampton Standby restoration closes the 10:26 investigation of the Booysens Reserve outage (same SDC, 2.5 h later; Ophirton is a different fault))
+  FAIL same 25122543 / 76281839: should be in the same outage but are in different ones  (Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same)
+  FAIL same 66877563 / 76281839: should be in the same outage but are in different ones  (Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same)
+  FAIL same 44196342 / 76281839: should be in the same outage but are in different ones  (Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same)
+  FAIL same 56746544 / 76281839: should be in the same outage but are in different ones  (Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same)
+  FAIL same 23056710 / 76281839: should be in the same outage but are in different ones  (Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same)
+  FAIL same 39114882 / 76281839: should be in the same outage but are in different ones  (Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same)
+  FAIL same 56585580 / 76281839: should be in the same outage but are in different ones  (Klipfontein View, 22-23 Sept: one substation trip reported on the evening of 22 Sept (80% then 98% restored, transformer tests), posted as Klipfontein View, Klipfontein and Klipfotein; the labelled sets treat Klipfontein substation and Klipfontein View as the same)
+  FAIL same 99982985 / 80698338: 2078737661099982985 is in no outage  (Lynnwood, 18-19 July: one medium-voltage cable fault on Alpine Way (a Lynnwood street, per OpenStreetMap): the 18 July alert, the 19 July 'remain off until the faults are fixed' and the cable-jointing update)
+  FAIL same 90877887 / 80698338: should be in the same outage but are in different ones  (Lynnwood, 18-19 July: one medium-voltage cable fault on Alpine Way (a Lynnwood street, per OpenStreetMap): the 18 July alert, the 19 July 'remain off until the faults are fixed' and the cable-jointing update)
+  FAIL same 80076300 / 34317546: should be in the same outage but are in different ones  (same Noordwyk investigation, named more precisely in the follow-up)
+  FAIL same 68247164 / 34317546: should be in the same outage but are in different ones  (restoration of the same Noordwyk investigation)
+  FAIL same 70382940 / 20509654: should be in the same outage but are in different ones  (Midrand System Update thread - same 28 Sept Rand Water Palmiet cascading event as faults 0/1 of this same post)
+FINAL STATE: 17 of 17 hold
+
+dropped gridwatch_replay_1790866431839_c96560
+
+◇ injected env (0) from .env

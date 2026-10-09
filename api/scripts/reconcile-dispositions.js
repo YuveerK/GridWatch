@@ -20,7 +20,7 @@ async function plan() {
   const posts = await prisma.sourcePost.findMany({
     where: externalId ? { externalId } : {},
     orderBy: [{ publishedAt: 'asc' }, { externalId: 'asc' }],
-    include: { extractions: true, linkDecisions: true, outagePosts: true },
+    include: { readingOverride: true, PostMedia: true, extractions: true, linkDecisions: true, outagePosts: true },
   });
   const overrides = await prisma.linkOverride.findMany();
   const rows = [];

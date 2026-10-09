@@ -3,14 +3,14 @@ import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { logger } from '../../lib/logger.js';
 import { generateJson } from '../ai/gemini.client.js';
-import { tailPlace } from '../../lib/normalize.js';
+import { baseNormalize, infraKey, isGenericElectricalAsset, localityKey, tailPlace } from '../../lib/normalize.js';
 import { parseSchedule, scheduleWindow } from '../../lib/schedule.js';
 import { assertLeaseInTx, exclusive } from '../coordination/lease.js';
 import { buildEffect, initialStatus, refoldOutage, statusFor, suburbRestored } from './outage-state.js';
 import { headlineNode, pickHeadlineMatch } from './headline.js';
 import { isTransientAiError, nextRetryAt, retryTransient } from '../../lib/retry.js';
-import { resolveOverride } from './overrides.js';
-import { applyRevivalRule, boardLineOnLiveAssets, sameDayWaterUpdate, scoreCandidate, soleHashtagIncident } from './scoring.js';
+import { resolveDecision } from './overrides.js';
+import { applyRevivalRule, boardLineOnLiveAssets, customerSitesOnIncident, sameDayWaterUpdate, scoreCandidate, soleHashtagIncident } from './scoring.js';
 import { cachedVerdict, storeVerdict } from './tiebreak-cache.js';
 
 const LINKABLE = new Set(['OUTAGE', 'PLANNED_OUTAGE', 'RESTORATION', 'UPDATE']);
@@ -19,7 +19,26 @@ const PLANNED_WINDOW_HOURS = 240;
 const DIGEST_ROOTS = 2;
 // An umbrella graphic naming many independent pieces of equipment. A fault already split out of a graphic (fromDigest) is one fault, whatever
 // equipment it names, and must never be discarded as a digest.
-export const isDigest = (facts) => !facts.fromDigest && (facts.rootCount >= 3 || (facts.rootCount >= DIGEST_ROOTS && facts.nodes.length >= 4));
+export const isDigest = (facts) => !facts.fromDigest && !facts.singleCascade && (facts.rootCount >= 3 || (facts.rootCount >= DIGEST_ROOTS && facts.nodes.length >= 4));
+
+/** A source explicitly says one infeed is off and names its secondary stations.
+ * A depot/region heading can be another root, but is not another failing asset.
+ * Require one parent, its children and at most one context station; count alone
+ * and multiple fault readings remain insufficient. */
+export function explicitStationCascade(result, text) {
+  if (result?.relevance !== 'OUTAGE' || (result.faults?.length ?? 0) >= 2) return false;
+  const entities = (result.entities ?? []).filter((e) => e.type !== 'SDC');
+  if (!entities.length || entities.some((e) => !['SUBSTATION', 'SWITCHING_STATION'].includes(e.type))) return false;
+  const children = entities.filter((e) => e.parent_name);
+  const parents = new Set(children.map((e) => infraKey(e.parent_name)));
+  if (children.length < 2 || parents.size !== 1) return false;
+  const [parent] = parents;
+  const roots = entities.filter((e) => !e.parent_name);
+  if (roots.length > 2 || !roots.some((e) => infraKey(e.name) === parent)) return false;
+  const root = roots.find((e) => infraKey(e.name) === parent);
+  const escaped = baseNormalize(root.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b(?: sub(?:station)?)? (?:is |has )?(?:off|tripped|trip) (?:and )?affecting (?:the following )?secondary substations\\b`, 'i').test(baseNormalize(text));
+}
 
 /** A fresh report while the best match is only partly restored: the remaining fault, or a new one? Not for a score alone to say. */
 export const mayBeNewFault = (post, top) =>
@@ -109,7 +128,8 @@ async function suburbsNamedLikeStations(keys) {
   return out;
 }
 
-async function loadCandidates(post, repairOutageIds = []) {
+/** Exported for the self-correction engine's evidence envelope (a candidate-state fingerprint, never a mutation). */
+export async function loadCandidates(post, repairOutageIds = []) {
   const since = new Date(post.postedAt.getTime() - env.OUTAGE_WINDOW_HOURS * HOUR);
   const revivalSince = new Date(post.postedAt.getTime() - env.STALE_REVIVAL_HOURS * HOUR);
   const outages = await prisma.outage.findMany({
@@ -142,9 +162,14 @@ async function loadCandidates(post, repairOutageIds = []) {
     include: {
       nodes: { include: { node: { select: { name: true, type: true, normalizedKey: true } } } },
       localities: { include: { locality: { select: { canonicalName: true } } } },
-      posts: { orderBy: { postedAt: 'asc' }, include: { post: { select: { conversationId: true, externalId: true, text: true, noteTweetText: true } } } },
+      posts: { orderBy: { postedAt: 'asc' }, include: { post: { select: { conversationId: true, externalId: true, text: true, noteTweetText: true,
+        ...(post.customerSites?.size ? { extractions: { where: { status: 'SUCCEEDED' }, orderBy: { createdAt: 'desc' }, take: 1, select: { result: true } } } : {}),
+      } } } },
     },
   });
+  // Legacy descriptive nodes must not continue providing shared-equipment or
+  // graph evidence while historical records are repaired selectively.
+  for (const o of outages) if (o.serviceType === 'ELECTRICITY') o.nodes = o.nodes.filter((n) => !isGenericElectricalAsset(n.node.name));
   const named = await suburbsNamedLikeStations(outages.flatMap((o) => o.nodes.map((n) => n.node.normalizedKey)));
   return outages.map((o) => ({
     raw: o,
@@ -164,6 +189,7 @@ async function loadCandidates(post, repairOutageIds = []) {
     restoredAt: o.restoredAt,
     scheduledStart: o.scheduledStart,
     scheduledEnd: o.scheduledEnd,
+    customerSites: customerSitesOnIncident(post, { raw: o }, localityKey),
   }));
 }
 
@@ -193,7 +219,7 @@ async function askLlm(post, extraction, ranked, { fromDigest = false } = {}) {
       status: c.status,
       cause: c.raw.cause,
       equipment: c.raw.nodes.map((n) => `${n.node.type.toLowerCase()} ${n.node.name}`).sort().slice(0, 8), // sorted: the database's row order must not change the question (and so the cached answer)
-      suburbs: c.raw.localities.map((l) => l.locality.canonicalName).sort().slice(0, 8),
+      suburbs: [...c.raw.localities.map((l) => l.locality.canonicalName), ...(c.customerSites ?? [])].sort().slice(0, 8),
       posts_so_far: c.raw.posts.length,
       first_post: clip(first?.noteTweetText || first?.text),
       latest_post: last === first ? undefined : clip(last?.noteTweetText || last?.text),
@@ -389,6 +415,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
   if (existing) return existing;
 
   const text = facts.fromDigest ? '' : postRow.noteTweetText || postRow.text;
+  if (facts.serviceType === 'ELECTRICITY' && !facts.fromDigest && explicitStationCascade(extraction.result, text)) facts = { ...facts, singleCascade: true };
   const postKind = isPlanned(extraction, text) ? 'PLANNED' : 'UNPLANNED';
   const post = {
     id: postRow.id,
@@ -405,6 +432,7 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     nodeIds: new Set(facts.nodes.map((n) => n.id)),
     nodes: facts.nodes.map((n) => ({ id: n.id, type: n.type, name: n.name })),
     localityIds: new Set(facts.localityIds),
+    customerSites: new Set((extraction.result.localities ?? []).filter((l) => /\b(hospital|clinic|school|university|campus|stadium|mall|shopping (?:centre|center)|golf course)\b/i.test(l.name)).map((l) => localityKey(l.name))),
     // "[AMENDED UPDATE]" / "*Amended*" in the opening words: a correction of an earlier post (not judged for one fault inside a graphic)
     amended: !facts.fromDigest && AMENDED.test((postRow.noteTweetText || postRow.text || '').slice(0, 90)),
     fromDigest: Boolean(facts.fromDigest),
@@ -413,6 +441,9 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
   };
   post.relatedNodeIds = await relatedNodeIds(post.nodeIds);
   const namedLikeNodes = await suburbsNamedLikeStations(facts.nodes.map((n) => n.normalizedKey));
+  post.equipmentLocalityIds = new Set(facts.nodes
+    .filter((n) => ['DISTRIBUTOR', 'FEEDER', 'MINI_SUBSTATION'].includes(n.type))
+    .flatMap((n) => namedLikeNodes.get(n.normalizedKey) ?? []));
   // only when the post names no suburb at all (otherwise the suburbs it does name are better evidence); for scoring only, what is stored is unchanged
   if (!facts.localityIds.length) {
     for (const n of facts.nodes) for (const id of namedLikeNodes.get(n.normalizedKey) ?? []) post.localityIds.add(id);
@@ -436,8 +467,16 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
   let outageId = null;
   let usedLlm = false;
   let reason;
-  // a person's correction (scripts/correct-link.js) beats every rule
-  const manual = await resolveOverride(post.id, faultIndex);
+  // a person's correction (scripts/correct-link.js) beats every rule; an active automatic repair directive is
+  // checked next, with equal precedence to (never instead of) a human decision - see overrides.js resolveDecision
+  const manual = await resolveDecision(post.id, faultIndex);
+  if (manual?.action === 'BLOCKED') return decide({ outcome: 'NEEDS_REVIEW', reason: manual.note, candidates: summary });
+  if (manual?.action === 'JOIN') {
+    const target = await prisma.outage.findUnique({ where: { id: manual.outageId }, select: { serviceType: true, municipalityId: true } });
+    if (!target || target.serviceType !== post.serviceType || (target.municipalityId && post.municipalityId && target.municipalityId !== post.municipalityId)) {
+      return decide({ outcome: 'NEEDS_REVIEW', reason: 'The saved human join target is incompatible with this source.', candidates: summary });
+    }
+  }
   // A fresh "outage reported / investigating" post while the best match is only PARTLY restored is either the fault that is still
   // being fixed or a NEW fault in the same streets (Newtown, 15 Sept: a Bree cable fault while the John Ware one sat at 98%).
   // A high score alone cannot tell them apart, so the tie-break decides (unless it is the same conversation thread).
@@ -453,7 +492,8 @@ export async function linkPost({ postRow, extraction, facts, faultIndex = 0, ctx
     : null;
   if (manual) {
     outageId = manual.action === 'JOIN' ? manual.outageId : null;
-    reason = `manual: ${manual.action === 'JOIN' ? 'joined the outage of the anchor post' : 'kept as its own outage'}${manual.note ? ` (${manual.note})` : ''}`;
+    const label = manual.source === 'human' ? 'manual' : 'auto-repair';
+    reason = `${label}: ${manual.action === 'JOIN' ? 'joined the outage of the anchor post' : 'kept as its own outage'}${manual.note ? ` (${manual.note})` : ''}`;
   } else if (top && top.score >= env.LINK_HIGH_SCORE && !maybeNewFault && !tooClose) {
     outageId = top.id;
     reason = top.reasons.join(', ');

@@ -16,6 +16,8 @@
     { "post": "2101312836492202191", "expect": { "statusIn": ["RESTORED", "CLOSED"], "minPosts": 4 }, "why": "Weltevredenpark 18-19 Sept: ends with the JG Strydom full restoration" },
     { "post": "2101624677646901571", "expect": { "statusIn": ["RESTORED", "CLOSED"], "minPosts": 3 }, "why": "Weltevredenpark 20 Sept: a second, separate incident" },
     { "post": "2099516703675658716", "expect": { "kind": "PLANNED", "minPosts": 8 }, "why": "Glenanda emergency isolation: one programme, from its first post to 'fully restored'" },
-    { "post": "2098606552496156830", "expect": { "statusIn": ["RESTORED", "CLOSED"], "minPosts": 8 }, "why": "Willowbrook (Van Dalen): the ten-post outage that started this project" }
+    { "post": "2098606552496156830", "expect": { "statusIn": ["RESTORED", "CLOSED"], "minPosts": 8 }, "why": "Willowbrook (Van Dalen): the ten-post outage that started this project" },
+    { "post": "2105400598094922147", "expect": { "statusIn": ["RESTORED", "CLOSED"], "kind": "UNPLANNED", "minPosts": 2 }, "why": "Goldev restores the existing Freedom Park South faulty-jumper incident, rather than opening a standalone restoration" },
+    { "post": "2105591084688736699", "expect": { "kind": "UNPLANNED", "minPosts": 1 }, "why": "One Waltloo 132kV infeed outage with seven explicitly named secondary substations is a linked incident, not an ambiguous digest" }
   ]
 }
